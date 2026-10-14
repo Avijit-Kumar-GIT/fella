@@ -2,22 +2,16 @@
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isDesktop, win } from '$lib/ipc';
-	import EnvironmentSwitcher from './EnvironmentSwitcher.svelte';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
 	let {
 		onpalette,
-		onenvironmentselect,
-		onnewenvironment,
-		oncomposeenvironment,
-		oncloseenvironment
+		onworkspaceselect
 	}: {
 		onpalette: () => void;
-		onenvironmentselect: (id: string) => void | Promise<void>;
-		onnewenvironment: () => void;
-		oncomposeenvironment: (name: string, workspaceIds: (string | null)[]) => void;
-		oncloseenvironment: (id: string) => void | Promise<void>;
+		onworkspaceselect: (id: string) => void | Promise<void>;
 	} = $props();
 
 	let folder = $derived.by(() => {
@@ -28,9 +22,6 @@
 	});
 
 	let displayTitle = $derived.by(() => {
-		if (session.workspaceView === 'board') {
-			return session.activeEnvironment ? session.environmentLabel(session.activeEnvironment) : 'Workspace overview';
-		}
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
 		if (session.workspaceView === 'settings') return 'Fella';
 		return folder ? 'Fella' : 'Focus';
@@ -74,12 +65,9 @@
 		<span class="id"><span class="folder" title={displayTitle}>{displayTitle}</span></span>
 		<span class="spacer"></span>
 		{#if session.sidebarCollapsed}
-			<EnvironmentSwitcher
+			<WorkspaceSwitcher
 				compact
-				onselect={onenvironmentselect}
-				onnew={onnewenvironment}
-				oncompose={oncomposeenvironment}
-				onclose={oncloseenvironment}
+				onselect={onworkspaceselect}
 			/>
 		{/if}
 

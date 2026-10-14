@@ -14,12 +14,11 @@
 	)));
 	let isWorkspaceView = $derived(
 		session.workspaceView === 'ask' ||
-		session.workspaceView === 'board' ||
 		session.workspaceView === 'workspace'
 	);
 </script>
 
-{#if workspacePath && isWorkspaceView && session.workspaceView !== 'board'}
+{#if workspacePath && isWorkspaceView}
 	<div class="workspace-context-bar">
 		<div class="workspace-identity" role="group" aria-label={`Workspace: ${workspaceName}`}>
 			<Icon name="folder" size={16} />

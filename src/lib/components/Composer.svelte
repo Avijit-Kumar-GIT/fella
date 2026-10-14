@@ -44,7 +44,7 @@
 	let unavailableWorkspaceName = $derived(
 		unavailableWorkspacePath?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
-	let boardComposerTarget = $derived(
+	let composerScopeTarget = $derived(
 		unavailableWorkspacePath
 			? `${unavailableWorkspaceName} (unavailable)`
 			: folderName || 'General (unbound)'
@@ -512,10 +512,10 @@
 		{/if}
 		{#if !pendingInput}
 			<div class="context-row">
-				{#if session.workspaceView === 'board' || session.workspaceView === 'ask' || (session.workspaceView === 'workspace' && session.workspaceLayoutPreset === 'workbench')}
-					<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${boardComposerTarget}`}>
+				{#if session.workspaceView === 'ask' || session.workspaceView === 'workspace'}
+					<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${composerScopeTarget}`}>
 						<span>Message target</span>
-						<strong>{boardComposerTarget}</strong>
+						<strong>{composerScopeTarget}</strong>
 					</div>
 				{/if}
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}

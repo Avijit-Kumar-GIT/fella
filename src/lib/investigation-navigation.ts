@@ -1,4 +1,4 @@
-import { session, type WorkspaceLayoutPreset } from '$lib/session.svelte';
+import { session } from '$lib/session.svelte';
 import { ipc } from '$lib/ipc';
 import type { ConversationSummary, Investigation, Message } from '$lib/types';
 
@@ -6,7 +6,7 @@ import type { ConversationSummary, Investigation, Message } from '$lib/types';
  *  may need their source message resolved to a conversation first. */
 export async function focusInvestigationConversation(
 	item: Investigation,
-	layout: WorkspaceLayoutPreset | 'preserve' = 'preserve',
+	toolsPane: 'closed' | 'open' | 'preserve' = 'preserve',
 	focusTurnId?: string,
 	isCurrent: () => boolean = () => true
 ): Promise<Investigation | null> {
@@ -78,8 +78,8 @@ export async function focusInvestigationConversation(
 	if (!session.focusWorkspace(item.workspace_id, conversationId)) {
 		throw new Error('Fella could not focus the linked conversation.');
 	}
-	if (layout === 'focus') session.setWorkspacePaneOpen(false);
-	else if (layout === 'investigation' || layout === 'workbench') session.setWorkspacePane('investigation');
+	if (toolsPane === 'closed') session.setWorkspacePaneOpen(false);
+	else if (toolsPane === 'open') session.setWorkspacePane('investigation');
 	session.setActiveInvestigation(linkedInvestigation.id);
 	if (focusTurnId) session.focusConversationAnalysis(conversationId, focusTurnId);
 	return linkedInvestigation;

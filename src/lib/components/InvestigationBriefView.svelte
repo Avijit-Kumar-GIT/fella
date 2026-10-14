@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onDestroy, tick } from 'svelte';
-	import { firstActualQuestion, session, type WorkspaceLayoutPreset } from '$lib/session.svelte';
+	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Dialog } from '$lib/components/ui/dialog';
@@ -598,7 +598,7 @@
 
 	async function openSelectedConversation(
 		focusTurnId?: string,
-		layout: WorkspaceLayoutPreset | 'preserve' = 'preserve'
+		toolsPane: 'closed' | 'open' | 'preserve' = 'preserve'
 	): Promise<Investigation | null> {
 		const item = selected;
 		if (!item || openingConversation || !isDesktop()) return null;
@@ -609,7 +609,7 @@
 		try {
 			const linked = await focusInvestigationConversation(
 				item,
-				layout,
+				toolsPane,
 				focusTurnId,
 				() => selectedId === item.id &&
 					session.catalog.workspace === item.workspace_id &&
@@ -1366,7 +1366,7 @@
 			}
 			if (questionsDirty && !(await saveQuestions())) return;
 			if (definitionsDirty && !(await saveDefinitions())) return;
-			const linkedInvestigation = await openSelectedConversation(undefined, 'workbench');
+			const linkedInvestigation = await openSelectedConversation(undefined, 'open');
 			if (!linkedInvestigation) return;
 			pendingAnalysisQuestionId = null;
 			await analyzeInvestigationQuestion(linkedInvestigation, questionId);

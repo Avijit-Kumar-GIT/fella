@@ -8,24 +8,18 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
-	import EnvironmentSwitcher from './EnvironmentSwitcher.svelte';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
 	let {
 		onsearch,
 		onnewproject,
-		onenvironmentselect,
-		onnewenvironment,
-		oncomposeenvironment,
-		oncloseenvironment
+		onworkspaceselect
 	}: {
 		onsearch?: () => void;
 		onnewproject?: (workspace?: string | null) => void;
-		onenvironmentselect: (id: string) => void | Promise<void>;
-		onnewenvironment: () => void;
-		oncomposeenvironment: (name: string, workspaceIds: (string | null)[]) => void;
-		oncloseenvironment: (id: string) => void | Promise<void>;
+		onworkspaceselect: (id: string) => void | Promise<void>;
 	} = $props();
 
 	type Repository = {
@@ -123,8 +117,8 @@
 			.map((group) => {
 				const key = repositoryKey(group.path);
 				const active = group.path
-					? session.activePane?.workspaceId === group.path || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
-					: session.activePane?.workspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView !== 'settings';
+					? session.activeWorkspaceId === group.path || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
+					: session.activeWorkspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView !== 'settings';
 				return {
 					key,
 					path: group.path,
@@ -292,12 +286,7 @@
 			</Button>
 		</div>
 	</div>
-	<EnvironmentSwitcher
-		onselect={onenvironmentselect}
-		onnew={onnewenvironment}
-		oncompose={oncomposeenvironment}
-		onclose={oncloseenvironment}
-	/>
+	<WorkspaceSwitcher onselect={onworkspaceselect} />
 	<nav class="nav-section" aria-label="Conversation">
 		<Button
 			variant="ghost"

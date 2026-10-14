@@ -11,16 +11,13 @@
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
-	import WorkspaceBoard from '$lib/components/WorkspaceBoard.svelte';
 	import WorkspaceContextBar from '$lib/components/WorkspaceContextBar.svelte';
-	import WorkbenchPaneSplitter from '$lib/components/WorkbenchPaneSplitter.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
-	import { session } from '$lib/session.svelte';
-	import { workbenchLayout } from '$lib/workbench-layout.svelte';
+	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
@@ -114,42 +111,18 @@
 		composer?.focus();
 	}
 
-	function createEnvironment(): void {
-		session.createEnvironment();
-		composer?.focus();
-	}
-
-	async function composeEnvironment(name: string, workspaceIds: (string | null)[]): Promise<void> {
-		if (!session.createWorkspaceEnvironment(name, workspaceIds)) return;
-		await activateEnvironment(session.activeEnvironmentId);
-	}
-
-	async function activateEnvironment(id: string): Promise<void> {
-		if (!session.activateEnvironment(id)) return;
-		for (const path of [...session.pendingWorkspacePaths]) {
-			const pane = session.paneForWorkspace(path);
-			if (session.historyOnlyRepositoryPaths.includes(path)) {
-				session.openHistoryOnlyWorkspace(path, pane?.conversationId ?? '');
-				continue;
-			}
-			if (!(await openRepository(path))) {
-				session.openHistoryOnlyWorkspace(path, pane?.conversationId ?? '');
-			}
-		}
-		session.restoreActiveEnvironment();
-		composer?.focus();
-	}
-
-	async function closeEnvironment(id: string): Promise<void> {
-		const previousActive = session.activeEnvironmentId;
-		if (!(await session.closeEnvironment(id))) {
-			if (session.environments.find((environment) => environment.id === id)?.panes.some((pane) => session.conversations.find((item) => item.id === pane.conversationId)?.busy)) {
-				session.addSystem('Stop the running analysis before closing this environment.');
-			}
+	async function selectWorkspace(id: string): Promise<void> {
+		if (id === GENERAL_WORKSPACE_ID) {
+			session.focusWorkspace(GENERAL_WORKSPACE_ID);
 			return;
 		}
-		if (session.activeEnvironmentId !== previousActive) {
-			await activateEnvironment(session.activeEnvironmentId);
+		if (session.workspaceAt(id) && !session.workspaceAt(id)?.historyOnly) {
+			session.focusWorkspace(id);
+			return;
+		}
+		const opened = await openRepository(id);
+		if (!opened && session.historyOnlyRepositoryPaths.includes(id)) {
+			session.openHistoryOnlyWorkspace(id);
 		}
 	}
 
@@ -173,22 +146,25 @@
 			return;
 		}
 		if (paletteOpen) return;
-		if (commandKey && key === 't') {
+		if (commandKey && (key === '[' || key === ']')) {
 			e.preventDefault();
-			createEnvironment();
-		} else if (commandKey && key === 'w') {
-			e.preventDefault();
-			if (session.activeEnvironment) void closeEnvironment(session.activeEnvironment.id);
-		} else if (commandKey && (key === '[' || key === ']')) {
-			e.preventDefault();
-			const count = session.environments.length;
+			const workspaces = [
+				GENERAL_WORKSPACE_ID,
+				...session.repositoryPaths.filter((path) => !session.hiddenRepositoryPaths.includes(path))
+			];
+			const count = workspaces.length;
 			const direction = key === ']' ? 1 : -1;
-			const index = session.environments.findIndex((environment) => environment.id === session.activeEnvironmentId);
-			void activateEnvironment(session.environments[(index + direction + count) % count].id);
+			const current = session.activeWorkspaceId ?? GENERAL_WORKSPACE_ID;
+			const index = workspaces.indexOf(current);
+			void selectWorkspace(workspaces[(Math.max(0, index) + direction + count) % count]);
 		} else if (commandKey && /^[1-9]$/.test(key)) {
 			e.preventDefault();
-			const environment = session.environments[Number(key) - 1];
-			if (environment) void activateEnvironment(environment.id);
+			const workspaces = [
+				GENERAL_WORKSPACE_ID,
+				...session.repositoryPaths.filter((path) => !session.hiddenRepositoryPaths.includes(path))
+			];
+			const workspace = workspaces[Number(key) - 1];
+			if (workspace) void selectWorkspace(workspace);
 		} else if (commandKey && e.shiftKey && key === 'a') {
 			e.preventDefault();
 			startConversation();
@@ -226,9 +202,7 @@
 	}
 
 	function onDragOver(e: DragEvent): void {
-		const workspaceDrag = e.dataTransfer?.types.includes('application/x-fella-workspace');
-		if (workspaceDrag && document.querySelector('[aria-label="Workspace board"]')) return;
-		if (e.dataTransfer?.types.includes('Files') || workspaceDrag) {
+		if (e.dataTransfer?.types.includes('Files')) {
 			e.preventDefault();
 			dragging = true;
 		}
@@ -241,11 +215,6 @@
 	function onDrop(e: DragEvent): void {
 		e.preventDefault();
 		dragging = false;
-		const workspacePath = e.dataTransfer?.getData('application/x-fella-workspace');
-		if (workspacePath) {
-			void openRepository(workspacePath);
-			return;
-		}
 		const file = e.dataTransfer?.files?.[0];
 		if (!file) return;
 		const path = window.fella?.pathForFile(file) ?? (file as File & { path?: string }).path;
@@ -325,19 +294,13 @@
 			<Sidebar
 				onsearch={() => (paletteOpen = true)}
 				onnewproject={openProjectDialog}
-				onenvironmentselect={activateEnvironment}
-				onnewenvironment={createEnvironment}
-				oncomposeenvironment={composeEnvironment}
-				oncloseenvironment={closeEnvironment}
+				onworkspaceselect={selectWorkspace}
 			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar
 			onpalette={() => (paletteOpen = true)}
-			onenvironmentselect={activateEnvironment}
-			onnewenvironment={createEnvironment}
-			oncomposeenvironment={composeEnvironment}
-			oncloseenvironment={closeEnvironment}
+			onworkspaceselect={selectWorkspace}
 		/>
 		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
@@ -357,9 +320,7 @@
 			<main>
 				<WorkspaceContextBar />
 				<div class="main-row">
-					{#if activeView === 'board'}
-						<WorkspaceBoard bind:transcript />
-					{:else if activeView === 'project'}
+					{#if activeView === 'project'}
 						<ProjectView />
 					{:else if activeView === 'settings'}
 						<SettingsView />
@@ -368,7 +329,6 @@
 							class="workspace-chat-layout"
 							data-workspace-pane-open={session.workspacePaneOpen}
 							data-has-companion={Boolean(session.activeChat.companionPane)}
-							style={`--workspace-chat-share:${workbenchLayout.conversationShare}%;`}
 						>
 							<section class="workspace-conversation-pane" aria-label="Conversation">
 								<div class="conversation-workspace">
@@ -376,12 +336,6 @@
 									<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
 								</div>
 							</section>
-							{#if showRightPane}
-								<WorkbenchPaneSplitter
-									bind:value={workbenchLayout.conversationShare}
-									oncommit={(value) => workbenchLayout.setConversationShare(value)}
-								/>
-							{/if}
 							<aside
 								class="workspace-tools-pane"
 								id="workspace-tools-pane"
@@ -524,9 +478,8 @@
 		grid-row: 1;
 	}
 	.workspace-tools-pane {
-		grid-column: 3;
+		grid-column: 2;
 		grid-row: 1;
-		border-left: 1px solid var(--border);
 		background: var(--workspace-canvas);
 	}
 	.workspace-tools-pane[hidden] { display: none !important; }
@@ -547,7 +500,11 @@
 	.workspace-tools-content[hidden] { display: none !important; }
 	.workspace-chat-layout[data-workspace-pane-open='true'],
 	.workspace-chat-layout[data-has-companion='true'] {
-		grid-template-columns: minmax(320px, var(--workspace-chat-share)) 10px minmax(280px, 1fr);
+		grid-template-columns: minmax(320px, 62fr) minmax(280px, 38fr);
+	}
+	.workspace-chat-layout[data-workspace-pane-open='true'] .workspace-tools-pane,
+	.workspace-chat-layout[data-has-companion='true'] .workspace-tools-pane {
+		border-left: 1px solid var(--border);
 	}
 	.conversation-workspace {
 		display: flex;
@@ -567,9 +524,6 @@
 		.workspace-chat-layout[data-has-companion='true'] {
 			grid-template-columns: minmax(0, 1fr);
 			grid-template-rows: minmax(0, 1fr) minmax(220px, 0.72fr);
-		}
-		.workspace-chat-layout :global(.workbench-pane-splitter) {
-			display: none;
 		}
 		.workspace-tools-pane {
 			grid-column: 1;

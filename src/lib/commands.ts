@@ -212,7 +212,7 @@ export async function openFolder(
 		if (session.focusWorkspace(alreadyOpen.id)) {
 			if (options.focusAfterOpen) {
 				session.setWorkspaceView('ask');
-				session.setWorkspaceLayoutPreset('focus');
+				session.setWorkspacePaneOpen(false);
 			}
 			return true;
 		}
@@ -235,7 +235,7 @@ export async function openFolder(
 		}
 		if (options.focusAfterOpen) {
 			session.setWorkspaceView('ask');
-			session.setWorkspaceLayoutPreset('focus');
+			session.setWorkspacePaneOpen(false);
 		}
 		session.addSystem(summarizeCatalog());
 		return true;
@@ -315,7 +315,7 @@ export async function loadStartupCatalog(): Promise<void> {
 	for (const path of paths) {
 		await openRepository(path);
 	}
-	session.restoreActiveEnvironment();
+	session.restoreActiveWorkspace();
 }
 
 /** Select an archived conversation inside its owning workspace. */
@@ -350,7 +350,7 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 		// Opening a saved conversation is an explicit navigation action. Do not
 		// restore the workspace's previous Investigation/Workbench pane here: the
 		// user expects to land on the conversation they selected.
-		session.setWorkspaceLayoutPreset('focus');
+		session.setWorkspacePaneOpen(false);
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);

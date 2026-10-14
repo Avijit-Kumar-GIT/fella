@@ -1,6 +1,6 @@
 // Shared reactive session state (Svelte 5 runes in a .svelte.ts module).
 //
-// `Session` owns app-level navigation and up to four open workspace windows.
+// `Session` owns app-level navigation and one active workspace context.
 // Conversation tabs retain their own scope; the conversation objects remain in
 // a local live cache so in-flight work can finish safely while focus moves.
 
@@ -21,7 +21,6 @@ import type {
 	WorkspaceProgress
 } from './types';
 import { isRenderableChartEvidence, parseCompanionPane, type CompanionPane } from './workbench';
-import type { WorkspaceTilePreference } from './workspace-layout';
 import { analystStepForTool, progressStepForState } from './run-progress';
 
 
@@ -90,7 +89,8 @@ const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
 const HISTORY_ONLY_REPOSITORIES_KEY = 'fella:history-only-repositories';
 const PROJECTS_KEY = 'fella:projects';
 const OPEN_WORKSPACES_KEY = 'fella:open-workspaces';
-const ENVIRONMENTS_KEY = 'fella:environments';
+const WORKSPACE_CONTEXTS_KEY = 'fella:workspace-contexts';
+const LEGACY_ENVIRONMENTS_KEY = 'fella:environments';
 export const GENERAL_WORKSPACE_ID = 'general';
 
 export interface WorkspaceWindow {
@@ -106,16 +106,12 @@ export interface WorkspaceWindow {
 interface SavedWorkspaceState {
 	ids: string[];
 	active: string | null;
-	layout: WorkspaceTilePreference;
 }
 
-export interface EnvironmentPane {
-	id: string;
+export interface WorkspaceContext {
 	/** Null is the unbound General workspace; repository IDs are resolved paths. */
 	workspaceId: string | null;
 	conversationId: string;
-	/** Last analytical presentation for this pane; absent on legacy saved layouts. */
-	layoutPreset?: WorkspaceLayoutPreset;
 	workspacePane?: WorkspacePane;
 	/** Whether the optional workspace tools pane is open beside the conversation. */
 	workspacePaneOpen?: boolean;
@@ -134,170 +130,186 @@ export interface WorkspaceToolTab {
 	conversationId?: string | null;
 }
 
-export interface WorkspaceEnvironment {
-	id: string;
-	/** Optional user-given name for a composed workspace environment. */
-	name?: string;
-	panes: EnvironmentPane[];
-	activePaneId: string;
-	layout: WorkspaceTilePreference;
-}
-
-interface SavedEnvironmentState {
-	environments: WorkspaceEnvironment[];
-	active: string;
+interface SavedWorkspaceContextState {
+	contexts: WorkspaceContext[];
+	activeWorkspaceId: string | null;
 }
 
 function readWorkspaceState(): SavedWorkspaceState {
 	try {
 		const raw = localStorage.getItem(OPEN_WORKSPACES_KEY);
-		if (raw === null) return { ids: [], active: null, layout: {} };
+		if (raw === null) return { ids: [], active: null };
 		const parsed: unknown = JSON.parse(raw);
-		if (!parsed || typeof parsed !== 'object') return { ids: [], active: null, layout: {} };
+		if (!parsed || typeof parsed !== 'object') return { ids: [], active: null };
 		const record = parsed as Record<string, unknown>;
 		const legacyPaths = Array.isArray(record.paths)
-			? [...new Set(record.paths.filter((path): path is string => typeof path === 'string' && path.trim().length > 0))].slice(0, 4)
+			? [...new Set(record.paths.filter((path): path is string => typeof path === 'string' && path.trim().length > 0))]
 			: [];
-		// General is a conversation group, not an automatically opened window.
-		// Keep old repository windows, but migrate the former implicit General tile
-		// out of the visible board.
+		// These paths are read only as migration input. The new app restores one
+		// active workspace instead of a multi-workspace board.
 		const ids = Array.isArray(record.ids)
-			? [...new Set(record.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id !== GENERAL_WORKSPACE_ID))].slice(0, 4)
+			? [...new Set(record.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id !== GENERAL_WORKSPACE_ID))]
 			: legacyPaths;
 		const normalizedIds = ids;
 		const active = typeof record.active === 'string' && normalizedIds.includes(record.active)
 			? record.active
 			: null;
-		const layoutRecord = record.layout && typeof record.layout === 'object'
-			? (record.layout as Record<string, unknown>)
-			: {};
-		const layout: WorkspaceTilePreference = {
-			two: layoutRecord.two === 'stacked' ? 'stacked' : 'side-by-side',
-			three: ['two-top-one-bottom', 'one-top-two-bottom', 'two-left-one-right', 'one-left-two-right'].includes(String(layoutRecord.three))
-				? (layoutRecord.three as WorkspaceTilePreference['three'])
-				: 'two-top-one-bottom'
-		};
-		return { ids: normalizedIds, active, layout };
+		return { ids: normalizedIds, active };
 	} catch {
-		return { ids: [], active: null, layout: {} };
+		return { ids: [], active: null };
 	}
 }
 
 const SAVED_WORKSPACE_STATE = readWorkspaceState();
 
-function readEnvironmentState(): SavedEnvironmentState {
-	const normalizeLayout = (value: unknown): WorkspaceTilePreference => {
-		const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
-		return {
-			two: record.two === 'stacked' ? 'stacked' : 'side-by-side',
-			three: ['two-top-one-bottom', 'one-top-two-bottom', 'two-left-one-right', 'one-left-two-right'].includes(String(record.three))
-				? record.three as WorkspaceTilePreference['three']
-				: 'two-top-one-bottom'
-		};
+function workspaceContextKey(workspaceId: string | null): string {
+	return workspaceId === null ? '\u0000general' : workspaceId;
+}
+
+function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
+	if (!value || typeof value !== 'object') return null;
+	const source = value as Record<string, unknown>;
+	if (source.workspaceId !== null && typeof source.workspaceId !== 'string') return null;
+	const workspaceId = source.workspaceId as string | null;
+	const legacyKind: WorkspacePane = source.workspacePane === 'context' ? 'context' : 'investigation';
+	const legacyInvestigationId = typeof source.investigationId === 'string' ? source.investigationId : null;
+	const savedTabs = Array.isArray(source.workspaceToolTabs)
+		? source.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
+			if (!rawTab || typeof rawTab !== 'object') return [];
+			const tab = rawTab as Record<string, unknown>;
+			if (typeof tab.id !== 'string' || !tab.id || (tab.kind !== 'context' && tab.kind !== 'investigation')) return [];
+			return [{
+				id: tab.id,
+				kind: tab.kind,
+				investigationId: typeof tab.investigationId === 'string' ? tab.investigationId : null,
+				conversationId: typeof tab.conversationId === 'string' ? tab.conversationId : null
+			}];
+		}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
+		: [];
+	// Upgrade old single-selection state. Keep a closed pane closed; if it was
+	// open, retain its selected tool as a tab in the new workspace context.
+	if (!savedTabs.length && (
+		source.workspacePaneOpen === true ||
+		(legacyKind === 'investigation' && legacyInvestigationId !== null)
+	)) {
+		savedTabs.push({
+			id: legacyKind === 'context' ? 'context' : `investigation:${legacyInvestigationId ?? String(source.conversationId ?? 'legacy')}`,
+			kind: legacyKind,
+			investigationId: legacyKind === 'investigation' ? legacyInvestigationId : null,
+			conversationId: legacyKind === 'investigation' && typeof source.conversationId === 'string' ? source.conversationId : null
+		});
+	}
+	const savedActiveId = typeof source.activeWorkspaceToolTabId === 'string' ? source.activeWorkspaceToolTabId : null;
+	const activeTabId = savedTabs.some((tab) => tab.id === savedActiveId) ? savedActiveId : savedTabs[0]?.id ?? null;
+	return {
+		workspaceId,
+		conversationId: typeof source.conversationId === 'string' ? source.conversationId : '',
+		workspacePane: savedTabs.find((tab) => tab.id === activeTabId)?.kind ?? legacyKind,
+		workspacePaneOpen: source.workspacePaneOpen === true,
+		investigationId: typeof source.investigationId === 'string' ? source.investigationId : null,
+		workspaceToolTabs: savedTabs,
+		activeWorkspaceToolTabId: activeTabId
 	};
+}
+
+function readWorkspaceContextState(): SavedWorkspaceContextState {
 	try {
-		const raw = localStorage.getItem(ENVIRONMENTS_KEY);
+		const currentRaw = localStorage.getItem(WORKSPACE_CONTEXTS_KEY);
+		if (currentRaw) {
+			const parsed: unknown = JSON.parse(currentRaw);
+			if (parsed && typeof parsed === 'object') {
+				const record = parsed as Record<string, unknown>;
+				const contexts = Array.isArray(record.contexts)
+					? record.contexts.flatMap((item): WorkspaceContext[] => {
+						const context = normalizeWorkspaceContext(item);
+						return context ? [context] : [];
+					}).filter((context, index, all) => all.findIndex((item) => workspaceContextKey(item.workspaceId) === workspaceContextKey(context.workspaceId)) === index)
+					: [];
+				if (contexts.length) {
+					const activeWorkspaceId = record.activeWorkspaceId === null || typeof record.activeWorkspaceId === 'string'
+						? record.activeWorkspaceId as string | null
+						: null;
+					if (!contexts.some((context) => context.workspaceId === activeWorkspaceId)) {
+						contexts.unshift(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
+					}
+					return { contexts, activeWorkspaceId };
+				}
+			}
+		}
+
+		// One-time migration from environment compositions. The active environment
+		// wins when older copies contain different state for the same workspace;
+		// tool tabs from other copies are retained when they have distinct owners.
+		const raw = localStorage.getItem(LEGACY_ENVIRONMENTS_KEY);
 		if (raw) {
 			const parsed: unknown = JSON.parse(raw);
 			if (parsed && typeof parsed === 'object') {
 				const record = parsed as Record<string, unknown>;
 				if (Array.isArray(record.environments)) {
-					const environments = record.environments.flatMap((value, index): WorkspaceEnvironment[] => {
-						if (!value || typeof value !== 'object') return [];
-						const env = value as Record<string, unknown>;
-						if (typeof env.id !== 'string' || !Array.isArray(env.panes)) return [];
-						const panes = env.panes.flatMap((item, paneIndex): EnvironmentPane[] => {
-							if (!item || typeof item !== 'object') return [];
-							const pane = item as Record<string, unknown>;
-							if (pane.workspaceId !== null && typeof pane.workspaceId !== 'string') return [];
-							const legacyKind: WorkspacePane = pane.workspacePane === 'context' ? 'context' : 'investigation';
-							const legacyInvestigationId = typeof pane.investigationId === 'string' ? pane.investigationId : null;
-							const savedTabs = Array.isArray(pane.workspaceToolTabs)
-								? pane.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
-									if (!rawTab || typeof rawTab !== 'object') return [];
-									const tab = rawTab as Record<string, unknown>;
-									if (typeof tab.id !== 'string' || !tab.id || (tab.kind !== 'context' && tab.kind !== 'investigation')) return [];
-									return [{
-										id: tab.id,
-										kind: tab.kind,
-										investigationId: typeof tab.investigationId === 'string' ? tab.investigationId : null,
-										conversationId: typeof tab.conversationId === 'string' ? tab.conversationId : null
-									}];
-								}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
-								: [];
-							// Upgrade workspaces saved by the old single-selection pane. A closed
-							// legacy pane had no open tool tab, so its first Tools click should
-							// begin at the chooser instead of silently restoring that selection.
-							if (!savedTabs.length && (
-								pane.workspacePaneOpen === true ||
-								(legacyKind === 'investigation' && legacyInvestigationId !== null)
-							)) {
-								savedTabs.push({
-									id: legacyKind === 'context' ? 'context' : `investigation:${legacyInvestigationId ?? String(pane.conversationId ?? paneIndex)}`,
-									kind: legacyKind,
-									investigationId: legacyKind === 'investigation' ? legacyInvestigationId : null,
-									conversationId: legacyKind === 'investigation' && typeof pane.conversationId === 'string' ? pane.conversationId : null
-								});
+					const environments = record.environments.filter((item): item is Record<string, unknown> =>
+						Boolean(item && typeof item === 'object' && Array.isArray((item as Record<string, unknown>).panes))
+					);
+					const activeEnvironment = environments.find((item) => item.id === record.active);
+					const ordered = [...(activeEnvironment ? [activeEnvironment] : []), ...environments.filter((item) => item !== activeEnvironment)];
+					const byWorkspace = new Map<string, WorkspaceContext>();
+					for (const environment of ordered) {
+						const panes = environment.panes as unknown[];
+						for (const rawPane of panes) {
+							const candidate = normalizeWorkspaceContext(rawPane);
+							if (!candidate) continue;
+							const key = workspaceContextKey(candidate.workspaceId);
+							const existing = byWorkspace.get(key);
+							if (!existing) {
+								byWorkspace.set(key, candidate);
+								continue;
 							}
-							const savedActiveId = typeof pane.activeWorkspaceToolTabId === 'string' ? pane.activeWorkspaceToolTabId : null;
-							const activeTabId = savedTabs.some((tab) => tab.id === savedActiveId) ? savedActiveId : savedTabs[0]?.id ?? null;
-							return [{
-								id: typeof pane.id === 'string' ? pane.id : `${env.id}:pane:${paneIndex}`,
-								workspaceId: pane.workspaceId as string | null,
-								conversationId: typeof pane.conversationId === 'string' ? pane.conversationId : '',
-								layoutPreset: pane.layoutPreset === 'focus' || pane.layoutPreset === 'investigation' || pane.layoutPreset === 'workbench'
-									? pane.layoutPreset
-									: undefined,
-								workspacePane: savedTabs.find((tab) => tab.id === activeTabId)?.kind ?? legacyKind,
-								workspacePaneOpen: pane.workspacePaneOpen === true,
-								investigationId: typeof pane.investigationId === 'string' ? pane.investigationId : null,
-								workspaceToolTabs: savedTabs,
-								activeWorkspaceToolTabId: activeTabId
-							}];
-						}).slice(0, 4);
-						if (!panes.length) panes.push({ id: `${env.id}:general`, workspaceId: null, conversationId: '' });
-						const activePaneId = typeof env.activePaneId === 'string' && panes.some((pane) => pane.id === env.activePaneId)
-							? env.activePaneId
-							: panes[0].id;
-						return [{
-							id: env.id,
-							name: typeof env.name === 'string' && env.name.trim() ? env.name.trim() : undefined,
-							panes,
-							activePaneId,
-							layout: normalizeLayout(env.layout)
-						}];
-					}).slice(0, 24);
-					if (environments.length) {
-						const active = typeof record.active === 'string' && environments.some((env) => env.id === record.active)
-							? record.active
-							: environments[0].id;
-						return { environments, active };
+							const knownTabs = new Set(existing.workspaceToolTabs?.map((tab) =>
+								tab.kind === 'context' ? 'context' : tab.investigationId ? `investigation:${tab.investigationId}` : tab.conversationId ? `conversation:${tab.conversationId}` : `id:${tab.id}`
+							));
+							const usedIds = new Set(existing.workspaceToolTabs?.map((tab) => tab.id));
+							for (const incoming of candidate.workspaceToolTabs ?? []) {
+								const identity = incoming.kind === 'context' ? 'context' : incoming.investigationId ? `investigation:${incoming.investigationId}` : incoming.conversationId ? `conversation:${incoming.conversationId}` : `id:${incoming.id}`;
+								if (knownTabs.has(identity)) continue;
+								let id = incoming.id;
+								let suffix = 2;
+								while (usedIds.has(id)) id = `${incoming.id}:migrated-${suffix++}`;
+								usedIds.add(id);
+								knownTabs.add(identity);
+								existing.workspaceToolTabs ??= [];
+								existing.workspaceToolTabs.push({ ...incoming, id });
+							}
+						}
 					}
+					const contexts = [...byWorkspace.values()];
+					if (!contexts.some((context) => context.workspaceId === null)) {
+						contexts.push(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
+					}
+					const activePane = activeEnvironment && Array.isArray(activeEnvironment.panes)
+						? (activeEnvironment.panes as unknown[]).find((item) => item && typeof item === 'object' && (item as Record<string, unknown>).id === activeEnvironment.activePaneId)
+						: null;
+					const activePaneRecord = activePane && typeof activePane === 'object' ? activePane as Record<string, unknown> : null;
+					const legacyActive = activePaneRecord && (activePaneRecord.workspaceId === null || typeof activePaneRecord.workspaceId === 'string')
+						? activePaneRecord.workspaceId as string | null
+						: SAVED_WORKSPACE_STATE.active;
+					const activeWorkspaceId = contexts.some((context) => context.workspaceId === legacyActive) ? legacyActive : null;
+					return { contexts, activeWorkspaceId };
 				}
 			}
 		}
 	} catch {
-		/* fall through to migration from the single-board layout */
+		/* fall through to the older workspace list */
 	}
-	const id = 'environment-1';
-	const panes: EnvironmentPane[] = SAVED_WORKSPACE_STATE.ids.map((workspaceId, index) => ({
-		id: `${id}:pane:${index + 1}`,
-		workspaceId,
-		conversationId: ''
-	}));
-	if (!panes.length) panes.push({ id: `${id}:general`, workspaceId: null, conversationId: '' });
+	const contexts = SAVED_WORKSPACE_STATE.ids.map((workspaceId) => normalizeWorkspaceContext({ workspaceId, conversationId: '' })!);
+	contexts.push(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
 	return {
-		environments: [{
-			id,
-			panes,
-			activePaneId: panes.find((pane) => pane.workspaceId === SAVED_WORKSPACE_STATE.active)?.id ?? panes[0].id,
-			layout: SAVED_WORKSPACE_STATE.layout
-		}],
-		active: id
+		contexts,
+		activeWorkspaceId: contexts.some((context) => context.workspaceId === SAVED_WORKSPACE_STATE.active)
+			? SAVED_WORKSPACE_STATE.active
+			: null
 	};
 }
 
-const SAVED_ENVIRONMENT_STATE = readEnvironmentState();
+const SAVED_WORKSPACE_CONTEXT_STATE = readWorkspaceContextState();
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -573,9 +585,8 @@ export class Conversation {
 }
 
 
-export type WorkspaceView = 'ask' | 'workspace' | 'board' | 'settings' | 'project';
+export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
-export type WorkspaceLayoutPreset = 'focus' | 'investigation' | 'workbench';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -593,14 +604,10 @@ class Session {
 	#pendingArchivesByWorkspace = new Map<string, Set<Promise<void>>>();
 
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
-	/** Live repository mounts shared by environments. Panes reference these IDs. */
+	/** Repository catalogs currently mounted by the analysis engine. */
 	workspaceWindows = $state<WorkspaceWindow[]>([]);
-	activeWorkspaceId = $state<string | null>(null);
-	environments = $state<WorkspaceEnvironment[]>(SAVED_ENVIRONMENT_STATE.environments);
-	activeEnvironmentId = $state<string>(SAVED_ENVIRONMENT_STATE.active);
-	workspaceLayout = $state<WorkspaceTilePreference>(
-		SAVED_ENVIRONMENT_STATE.environments.find((env) => env.id === SAVED_ENVIRONMENT_STATE.active)?.layout ?? {}
-	);
+	workspaceContexts = $state<WorkspaceContext[]>(SAVED_WORKSPACE_CONTEXT_STATE.contexts);
+	activeWorkspaceId = $state<string | null>(SAVED_WORKSPACE_CONTEXT_STATE.activeWorkspaceId);
 	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The app-level page; an unbound conversation is the initial destination. */
 	workspaceView = $state<WorkspaceView>('ask');
@@ -608,8 +615,6 @@ class Session {
 	workspacePane = $state<WorkspacePane>('investigation');
 	/** The tool chooser is a transient entry state, not a persisted workspace tool. */
 	workspaceToolChooserOpen = $state(false);
-	/** Arrangement of the same scoped conversation and Investigation surfaces. */
-	workspaceLayoutPreset = $state<WorkspaceLayoutPreset>('focus');
 	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
 	investigationNavigationTarget = $state<InvestigationNavigationTarget | null>(null);
 	conversationAnalysisFocus = $state<ConversationAnalysisFocus | null>(null);
@@ -618,7 +623,7 @@ class Session {
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);
-	/** Live conversations retain their scope; environments select them through panes. */
+	/** Live conversations retain their workspace scope. */
 	conversations = $state<Conversation[]>([new Conversation()]);
 	activeConversationIndex = $state<number>(0);
 	/** Focus mode: hide the shell header for a plain, single-conversation view. */
@@ -649,16 +654,15 @@ class Session {
 	activeProjectId = $state<string | null>(null);
 
 	constructor() {
-		// Every environment has an explicit General pane available, but it never
-		// implies a mounted folder. The first blank conversation belongs to that
-		// pane unless a saved repository pane is restored at startup.
-		const env = this.activeEnvironment;
-		const pane = env?.panes.find((item) => item.id === env.activePaneId) ?? env?.panes[0];
-		if (pane) {
-			pane.conversationId = this.conversations[0].id;
-			this.conversations[0].workspaceScope = pane.workspaceId;
-			this.activeWorkspaceId = pane.workspaceId;
+		// A workspace is the scope owner. General is always available without
+		// pretending that it is a mounted folder.
+		let context = this.workspaceContextFor(this.activeWorkspaceId);
+		if (!context) {
+			context = { workspaceId: this.activeWorkspaceId, conversationId: this.conversations[0].id };
+			this.workspaceContexts.push(context);
 		}
+		context.conversationId = this.conversations[0].id;
+		this.conversations[0].workspaceScope = context.workspaceId;
 	}
 
 	#writeStringList(key: string, values: string[]): void {
@@ -679,23 +683,21 @@ class Session {
 
 	#writeWorkspaceState(): void {
 		try {
-			localStorage.setItem(ENVIRONMENTS_KEY, JSON.stringify({
-				environments: this.environments,
-				active: this.activeEnvironmentId
+			localStorage.setItem(WORKSPACE_CONTEXTS_KEY, JSON.stringify({
+				contexts: this.workspaceContexts,
+				activeWorkspaceId: this.activeWorkspaceId
 			}));
-			const active = this.activeEnvironment;
-			localStorage.setItem(OPEN_WORKSPACES_KEY, JSON.stringify({
-				ids: active?.panes.map((pane) => pane.workspaceId).filter((id): id is string => !!id) ?? [],
-				active: this.activeWorkspaceId,
-				layout: this.workspaceLayout
-			}));
+			// Remove obsolete composition snapshots only after the new representation
+			// has been saved successfully.
+			localStorage.removeItem(OPEN_WORKSPACES_KEY);
+			localStorage.removeItem(LEGACY_ENVIRONMENTS_KEY);
 		} catch {
 			/* workspace state is a convenience; a full localStorage must not block analysis */
 		}
 	}
 
 	setActiveInvestigation(id: string | null): void {
-		const pane = this.activePane;
+		const pane = this.activeWorkspaceContext;
 		if (pane) {
 			const activeTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
 			if (id) {
@@ -749,7 +751,7 @@ class Session {
 	 *  unambiguous. Conversation ownership is the source of truth if an older
 	 *  stale selection overwrote the tab's Investigation ID. */
 	reconcileWorkspaceToolTabs(records: readonly { id: string; conversation_id?: string | null }[]): void {
-		const pane = this.activePane;
+		const pane = this.activeWorkspaceContext;
 		if (!pane?.workspaceToolTabs?.length) return;
 		const investigationByConversation = new Map<string, string | null>();
 		for (const record of records) {
@@ -782,71 +784,55 @@ class Session {
 	}
 
 	get pendingWorkspacePaths(): string[] {
-		return (this.activeEnvironment?.panes ?? [])
-			.map((pane) => pane.workspaceId)
-			.filter((id): id is string => !!id && !this.workspaceAt(id));
+		const id = this.activeWorkspaceId;
+		return id && !this.workspaceAt(id) ? [id] : [];
 	}
 
 	get savedActiveWorkspaceId(): string | null {
-		return this.activePane?.workspaceId ?? null;
+		return this.activeWorkspaceId;
 	}
 
-	get activeEnvironment(): WorkspaceEnvironment | null {
-		return this.environments.find((environment) => environment.id === this.activeEnvironmentId) ?? this.environments[0] ?? null;
+	get activeWorkspaceContext(): WorkspaceContext | null {
+		return this.workspaceContextFor(this.activeWorkspaceId);
 	}
 
-	get activeEnvironmentPanes(): EnvironmentPane[] {
-		return this.activeEnvironment?.panes ?? [];
+	workspaceContextFor(workspaceId: string | null): WorkspaceContext | null {
+		return this.workspaceContexts.find((context) => context.workspaceId === workspaceId) ?? null;
 	}
 
-	get activePane(): EnvironmentPane | null {
-		const environment = this.activeEnvironment;
-		return environment?.panes.find((pane) => pane.id === environment.activePaneId) ?? environment?.panes[0] ?? null;
-	}
-
-	paneAt(id: string): EnvironmentPane | null {
-		return this.activeEnvironment?.panes.find((pane) => pane.id === id) ?? null;
-	}
-
-	paneForWorkspace(workspaceId: string | null): EnvironmentPane | null {
-		return this.activeEnvironment?.panes.find((pane) => pane.workspaceId === workspaceId) ?? null;
+	#ensureWorkspaceContext(workspaceId: string | null): WorkspaceContext {
+		let context = this.workspaceContextFor(workspaceId);
+		if (context) return context;
+		const conversation = this.conversations.findLast((item) => item.workspaceScope === workspaceId);
+		context = {
+			workspaceId,
+			conversationId: conversation?.id ?? '',
+			workspacePane: 'investigation',
+			workspacePaneOpen: false,
+			workspaceToolTabs: [],
+			activeWorkspaceToolTabId: null
+		};
+		this.workspaceContexts.push(context);
+		return context;
 	}
 
 	get workspaceToolTabs(): WorkspaceToolTab[] {
-		return this.activePane?.workspaceToolTabs ?? [];
+		return this.activeWorkspaceContext?.workspaceToolTabs ?? [];
 	}
 
 	get activeWorkspaceToolTab(): WorkspaceToolTab | null {
-		const pane = this.activePane;
-		return pane?.workspaceToolTabs?.find((tab) => tab.id === pane.activeWorkspaceToolTabId) ?? null;
+		const context = this.activeWorkspaceContext;
+		return context?.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId) ?? null;
 	}
 
-	environmentLabel(environment: WorkspaceEnvironment): string {
-		if (environment.name?.trim()) return environment.name.trim();
-		const names = environment.panes.map((pane) => {
-			if (!pane.workspaceId) return 'General';
-			const workspace = this.workspaceAt(pane.workspaceId);
-			return (workspace?.path ?? pane.workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Workspace';
-		});
-		if (!names.length) return 'General';
-		if (names.length === 1) {
-			const sameName = this.environments.filter((item) => item.panes.length === 1 && this.environmentLabelBase(item) === names[0]);
-			const index = sameName.findIndex((item) => item.id === environment.id);
-			return sameName.length > 1 && index > 0 ? `${names[0]} ${index + 1}` : names[0];
-		}
-		return `${names[0]} +${names.length - 1}`;
-	}
-
-	private environmentLabelBase(environment: WorkspaceEnvironment): string {
-		const pane = environment.panes[0];
-		if (!pane?.workspaceId) return 'General';
-		const workspace = this.workspaceAt(pane.workspaceId);
-		return (workspace?.path ?? pane.workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Workspace';
+	workspaceLabel(workspaceId: string | null): string {
+		if (!workspaceId) return 'General';
+		const workspace = this.workspaceAt(workspaceId);
+		return (workspace?.path ?? workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Workspace';
 	}
 
 	get activeWorkspace(): WorkspaceWindow | null {
-		const workspaceId = this.activePane?.workspaceId;
-		return workspaceId ? this.workspaceAt(workspaceId) : null;
+		return this.activeWorkspaceId ? this.workspaceAt(this.activeWorkspaceId) : null;
 	}
 
 	/** The path to pass to the analytical runtime; General always maps to null. */
@@ -859,184 +845,13 @@ class Session {
 		return this.workspaceWindows.find((workspace) => workspace.id === id) ?? null;
 	}
 
-	setWorkspaceLayout(layout: WorkspaceTilePreference): void {
-		this.workspaceLayout = { ...layout };
-		if (this.activeEnvironment) this.activeEnvironment.layout = { ...layout };
-		this.#writeWorkspaceState();
+	selectWorkspace(id: string): boolean {
+		return this.focusWorkspace(id);
 	}
 
-	/** Place an environment pane in a fixed board slot; users never resize tiles. */
-	placeWorkspacePane(id: string, index: number): boolean {
-		const environment = this.activeEnvironment;
-		if (!environment) return false;
-		const currentIndex = environment.panes.findIndex((pane) => pane.id === id);
-		if (currentIndex < 0) return false;
-		const next = [...environment.panes];
-		const [pane] = next.splice(currentIndex, 1);
-		const targetIndex = Math.max(0, Math.min(Math.trunc(index), next.length));
-		next.splice(targetIndex, 0, pane);
-		environment.panes = next;
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	placeWorkspaceWindow(id: string, index: number): boolean {
-		const pane = this.paneForWorkspace(id);
-		return pane ? this.placeWorkspacePane(pane.id, index) : false;
-	}
-
-	createEnvironment(): boolean {
-		const id = `environment-${uid()}`;
-		const conversation = new Conversation();
-		conversation.model = this.model;
-		conversation.workspaceScope = null;
-		this.conversations.push(conversation);
-		const pane: EnvironmentPane = { id: `${id}:general`, workspaceId: null, conversationId: conversation.id };
-		const environment: WorkspaceEnvironment = { id, panes: [pane], activePaneId: pane.id, layout: {} };
-		this.environments = [...this.environments, environment];
-		this.activeEnvironmentId = id;
-		this.workspaceLayout = { ...environment.layout };
-		this.activeWorkspaceId = null;
-		this.activeConversationIndex = this.conversations.length - 1;
-		this.catalog = { workspace: null, sources: [] };
-		this.workspaceView = 'ask';
-		this.workspaceLayoutPreset = 'focus';
-		this.#writeIndex();
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	/** Create a named environment from an explicit set of workspace choices. */
-	createWorkspaceEnvironment(name: string, workspaceIds: (string | null)[]): boolean {
-		const cleanName = name.trim();
-		const workspaces = [...new Set(workspaceIds.map((id) => id === GENERAL_WORKSPACE_ID ? null : id))];
-		if (!cleanName || workspaces.length < 2 || workspaces.length > 4) return false;
-
-		const id = `environment-${uid()}`;
-		const panes = workspaces.map((workspaceId, index): EnvironmentPane => {
-			const scope = workspaceId;
-			const workspace = scope ? this.workspaceAt(scope) : null;
-			let conversation = this.conversations.find((item) => item.id === workspace?.conversationId && item.workspaceScope === scope)
-				?? this.conversations.findLast((item) => item.workspaceScope === scope);
-			if (!conversation) {
-				conversation = new Conversation();
-				conversation.model = this.model;
-				conversation.workspaceScope = scope;
-				this.conversations.push(conversation);
-			}
-			return {
-				id: `${id}:pane:${index + 1}`,
-				workspaceId: scope,
-				conversationId: conversation.id
-			};
-		});
-		const environment: WorkspaceEnvironment = {
-			id,
-			name: cleanName,
-			panes,
-			activePaneId: panes[0].id,
-			layout: {}
-		};
-		this.environments = [...this.environments, environment];
-		this.activeEnvironmentId = id;
-		this.workspaceLayout = {};
-		this.activeWorkspaceId = panes[0].workspaceId;
-		this.activeInvestigationId = panes[0].investigationId ?? null;
-		this.activeConversationIndex = this.conversations.findIndex((item) => item.id === panes[0].conversationId);
-		const workspace = this.activeWorkspaceId ? this.workspaceAt(this.activeWorkspaceId) : null;
-		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
-		this.workspacePane = 'investigation';
-		this.workspaceLayoutPreset = 'focus';
-		this.workspaceView = 'board';
-		this.#writeIndex();
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	activateEnvironment(id: string): boolean {
-		const environment = this.environments.find((item) => item.id === id);
-		if (!environment) return false;
-		this.activeEnvironmentId = id;
-		this.workspaceLayout = { ...environment.layout };
-		const pane = environment.panes.find((item) => item.id === environment.activePaneId) ?? environment.panes[0];
-		if (pane) this.focusEnvironmentPane(pane.id);
-		else {
-			this.workspaceView = 'ask';
-			this.workspaceLayoutPreset = 'focus';
-		}
-		if (environment.panes.length > 1) this.setWorkspaceView('board');
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	async closeEnvironment(id: string): Promise<boolean> {
-		if (this.environments.length <= 1) return false;
-		const closing = this.environments.find((item) => item.id === id);
-		if (!closing) return true;
-		if (closing.panes.some((pane) => this.conversations.find((item) => item.id === pane.conversationId)?.busy)) return false;
-		this.environments = this.environments.filter((item) => item.id !== id);
-		if (this.activeEnvironmentId === id) this.activateEnvironment(this.environments[Math.max(0, this.environments.length - 1)].id);
-		const used = new Set(this.environments.flatMap((environment) => environment.panes.map((pane) => pane.workspaceId).filter((path): path is string => !!path)));
-		const unused = this.workspaceWindows.filter((workspace) => !used.has(workspace.id));
-		this.workspaceWindows = this.workspaceWindows.filter((workspace) => used.has(workspace.id));
-		for (const workspace of unused) {
-			if (workspace.path && isDesktop()) {
-				try { await ipc.closeWorkspace(workspace.path); } catch (error) { console.warn('workspace close failed', error); }
-			}
-		}
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	/** Focus a pane in the current environment and restore its conversation scope. */
-	focusEnvironmentPane(paneId: string): boolean {
-		const environment = this.activeEnvironment;
-		const pane = environment?.panes.find((item) => item.id === paneId);
-		if (!environment || !pane) return false;
-		environment.activePaneId = pane.id;
-		const scope = pane.workspaceId;
-		const workspace = scope ? this.workspaceAt(scope) : null;
-		let conversationIndex = pane.conversationId
-			? this.conversations.findIndex((item) => item.id === pane.conversationId && item.workspaceScope === scope)
-			: -1;
-		if (conversationIndex < 0) {
-			const conversation = new Conversation();
-			conversation.model = this.model;
-			conversation.workspaceScope = scope;
-			this.conversations.push(conversation);
-			conversationIndex = this.conversations.length - 1;
-			this.#writeIndex();
-		}
-		pane.conversationId = this.conversations[conversationIndex].id;
-		if (workspace) workspace.conversationId = pane.conversationId;
-		this.activeConversationIndex = conversationIndex;
-		this.activeWorkspaceId = scope;
-		const activeToolTab = pane.workspaceToolTabs?.find((tab) => tab.id === pane.activeWorkspaceToolTabId) ?? null;
-		const conversationToolTab = activeToolTab?.kind === 'investigation' && activeToolTab.conversationId === pane.conversationId
-			? activeToolTab
-			: null;
-		this.activeInvestigationId = conversationToolTab?.investigationId ?? pane.investigationId ?? null;
-		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
-		const savedPreset = pane.layoutPreset;
-		const canRestoreWorkspaceView = Boolean(scope && workspace && !workspace.historyOnly);
-		this.workspaceLayoutPreset = canRestoreWorkspaceView ? savedPreset ?? 'focus' : 'focus';
-		this.workspacePane = activeToolTab?.kind ?? pane.workspacePane ?? 'investigation';
-		this.workspaceToolChooserOpen = pane.workspacePaneOpen === true && !activeToolTab;
-		// Legacy Focus / Investigation / Workbench layouts all restore into the
-		// same chat-first workspace. Only the explicit pane preference can open
-		// tools beside it.
-		this.workspaceView = 'ask';
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	/** Restore the persisted active pane after its mount has been re-established. */
-	restoreActiveEnvironment(): void {
-		const pane = this.activePane;
-		if (pane) {
-			this.focusEnvironmentPane(pane.id);
-			if (this.activeEnvironmentPanes.length > 1 && !pane.layoutPreset) this.workspaceView = 'board';
-		}
+	/** Restore the persisted workspace after its catalog has been mounted. */
+	restoreActiveWorkspace(): void {
+		this.focusWorkspace(this.activeWorkspaceId ?? GENERAL_WORKSPACE_ID);
 	}
 
 	/** Register a mounted catalog and focus its repository-owned conversation.
@@ -1073,63 +888,52 @@ class Session {
 		const scope = id === GENERAL_WORKSPACE_ID ? null : id;
 		const workspace = scope ? this.workspaceAt(scope) : null;
 		if (scope && !workspace) return false;
-		const activeEnvironment = this.activeEnvironment;
-		const paneInActiveEnvironment = activeEnvironment?.panes.find((item) => item.workspaceId === scope);
-		const targetEnvironment = paneInActiveEnvironment
-			? activeEnvironment
-			: this.environments.find((environment) => environment.panes.some((item) => item.workspaceId === scope));
-		const targetPane = targetEnvironment?.panes.find((item) => item.workspaceId === scope);
-		const targetConversationId = conversationId ?? targetPane?.conversationId;
-		let environment = targetEnvironment;
-		let pane = targetPane;
-		if (!environment || !pane) {
-			const conversation = this.conversations.find((item) => item.id === conversationId && item.workspaceScope === scope)
-				?? this.conversations.find((item) => item.id === workspace?.conversationId && item.workspaceScope === scope)
-				?? this.conversations.findLast((item) => item.workspaceScope === scope);
-			const nextConversation = conversation ?? new Conversation();
-			if (!conversation) {
-				nextConversation.model = this.model;
-				nextConversation.workspaceScope = scope;
-				this.conversations.push(nextConversation);
-				this.#writeIndex();
-			}
-			const environmentId = `environment-${uid()}`;
-			pane = {
-				id: `${environmentId}:pane:${uid()}`,
-				workspaceId: scope,
-				conversationId: nextConversation.id
-			};
-			environment = { id: environmentId, panes: [pane], activePaneId: pane.id, layout: {} };
-			this.environments = [...this.environments, environment];
-			this.activeEnvironmentId = environment.id;
-			this.workspaceLayout = {};
+		const context = this.#ensureWorkspaceContext(scope);
+		const requestedConversation = conversationId
+			? this.conversations.find((item) => item.id === conversationId && item.workspaceScope === scope)
+			: null;
+		let conversationIndex = requestedConversation
+			? this.conversations.indexOf(requestedConversation)
+			: this.conversations.findIndex((item) => item.id === context.conversationId && item.workspaceScope === scope);
+		if (conversationIndex < 0 && workspace?.conversationId) {
+			conversationIndex = this.conversations.findIndex((item) => item.id === workspace.conversationId && item.workspaceScope === scope);
 		}
-		if (conversationId && pane.conversationId !== conversationId) {
-			// A pane's selected Investigation belongs to its conversation. Clear the
-			// old selection during ordinary navigation; Investigation activation
-			// sets the new one after focusing its canonical conversation.
-			pane.investigationId = null;
+		if (conversationIndex < 0) conversationIndex = this.conversations.findLastIndex((item) => item.workspaceScope === scope);
+		if (conversationIndex < 0) {
+			const conversation = new Conversation();
+			conversation.model = this.model;
+			conversation.workspaceScope = scope;
+			this.conversations.push(conversation);
+			conversationIndex = this.conversations.length - 1;
+			this.#writeIndex();
 		}
-		if (environment.id !== this.activeEnvironmentId) {
-			this.activeEnvironmentId = environment.id;
-			this.workspaceLayout = { ...environment.layout };
-		}
-		if (conversationId && this.conversations.some((item) => item.id === conversationId && item.workspaceScope === scope)) {
-			pane.conversationId = conversationId;
-		}
-		if (conversationId) {
-			const activeToolTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
-			if (activeToolTab?.kind === 'investigation' && activeToolTab.conversationId !== conversationId) {
-				const matchingTab = pane.workspaceToolTabs?.find((item) =>
-					item.kind === 'investigation' && item.conversationId === conversationId
+		const conversation = this.conversations[conversationIndex];
+		if (conversationId && requestedConversation && context.conversationId !== requestedConversation.id) {
+			// Selecting another saved conversation must not leave a different
+			// Investigation's transcript selected in the Tools pane.
+			const activeTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId);
+			if (activeTab?.kind === 'investigation' && activeTab.conversationId !== requestedConversation.id) {
+				const matchingTab = context.workspaceToolTabs?.find((tab) =>
+					tab.kind === 'investigation' && tab.conversationId === requestedConversation.id
 				);
-				pane.activeWorkspaceToolTabId = matchingTab?.id ?? null;
+				context.activeWorkspaceToolTabId = matchingTab?.id ?? null;
 			}
+			context.investigationId = null;
 		}
-		const focused = this.focusEnvironmentPane(pane.id);
-		if (focused && environment.panes.length > 1) this.workspaceView = 'ask';
+		context.conversationId = conversation.id;
+		if (workspace) workspace.conversationId = conversation.id;
+		this.activeConversationIndex = conversationIndex;
+		this.activeWorkspaceId = scope;
+		const activeToolTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId) ?? null;
+		const conversationToolTab = activeToolTab?.kind === 'investigation' && activeToolTab.conversationId === conversation.id
+			? activeToolTab
+			: null;
+		this.activeInvestigationId = conversationToolTab?.investigationId ?? context.investigationId ?? null;
+		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
+		this.workspacePane = activeToolTab?.kind ?? context.workspacePane ?? 'investigation';
+		this.workspaceToolChooserOpen = context.workspacePaneOpen === true && !activeToolTab;
 		this.#writeWorkspaceState();
-		return focused;
+		return true;
 	}
 
 	focusWorkspaceConversation(id: string): void {
@@ -1140,39 +944,8 @@ class Session {
 		const workspace = this.workspaceAt(id);
 		if (!workspace) return;
 		workspace.conversationId = conversationId;
-		const pane = this.paneForWorkspace(id);
-		if (pane) pane.conversationId = conversationId;
-		this.#writeWorkspaceState();
-	}
-
-	async closeWorkspaceWindow(id: string): Promise<void> {
-		const environment = this.activeEnvironment;
-		if (!environment) return;
-		const pane = environment.panes.find((item) => item.id === id || item.workspaceId === id);
-		if (!pane) return;
-		const wasActive = environment.activePaneId === pane.id;
-		environment.panes = environment.panes.filter((item) => item.id !== pane.id);
-		if (!environment.panes.length) {
-			const conversation = new Conversation();
-			conversation.model = this.model;
-			conversation.workspaceScope = null;
-			this.conversations.push(conversation);
-			const general: EnvironmentPane = { id: `${environment.id}:general`, workspaceId: null, conversationId: conversation.id };
-			environment.panes = [general];
-			environment.activePaneId = general.id;
-		} else if (wasActive) {
-			environment.activePaneId = environment.panes[0].id;
-		}
-		if (wasActive) this.focusEnvironmentPane(environment.activePaneId);
-		const workspaceId = pane.workspaceId;
-		const stillUsed = workspaceId && this.environments.some((item) => item.panes.some((entry) => entry.workspaceId === workspaceId));
-		const workspace = workspaceId && !stillUsed ? this.workspaceAt(workspaceId) : null;
-		if (workspace) {
-			this.workspaceWindows = this.workspaceWindows.filter((item) => item.id !== workspaceId);
-			if (workspace.path && isDesktop()) {
-				try { await ipc.closeWorkspace(workspace.path); } catch (error) { console.warn('workspace close failed', error); }
-			}
-		}
+		const context = this.workspaceContextFor(id);
+		if (context) context.conversationId = conversationId;
 		this.#writeWorkspaceState();
 	}
 
@@ -1273,7 +1046,7 @@ class Session {
 		this.#deletingWorkspacePaths.delete(path);
 	}
 
-	/** Remove a workspace from Fella and clear every pane/conversation reference
+	/** Remove a workspace from Fella and clear its conversation/context references
 	 *  after its archived conversations have been deleted from the backend. */
 	async deleteWorkspaceAndConversations(path: string): Promise<void> {
 		this.#deletingWorkspacePaths.delete(path);
@@ -1284,55 +1057,10 @@ class Session {
 			if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
 		}
 		this.conversations = this.conversations.filter((conversation) => conversation.workspaceScope !== path);
-
-		const remainingPanes = this.environments.map((environment) => ({
-			environment,
-			panes: environment.panes.filter((pane) => pane.workspaceId !== path)
-		}));
-		const anyPanesRemain = remainingPanes.some(({ panes }) => panes.length > 0);
-		const fallbackEnvironmentId = anyPanesRemain
-			? null
-			: this.activeEnvironmentId ?? this.environments[0]?.id ?? null;
-		const environmentsAfterDeletion: WorkspaceEnvironment[] = [];
-		for (const { environment, panes } of remainingPanes) {
-			for (const pane of panes) {
-				if (!removedIds.has(pane.conversationId)) continue;
-				let replacement = this.conversations.findLast((conversation) => conversation.workspaceScope === pane.workspaceId);
-				if (!replacement) {
-					replacement = new Conversation();
-					replacement.model = this.model;
-					replacement.workspaceScope = pane.workspaceId;
-					this.conversations.push(replacement);
-				}
-				pane.conversationId = replacement.id;
-			}
-			if (!panes.length) {
-				// Remove environments made empty by workspace deletion. Keep a
-				// single General environment only if the deleted workspace was the
-				// last pane across the entire app.
-				if (environment.id !== fallbackEnvironmentId) continue;
-				let general = this.conversations.findLast((conversation) => conversation.workspaceScope === null);
-				if (!general) {
-					general = new Conversation();
-					general.model = this.model;
-					general.workspaceScope = null;
-					this.conversations.push(general);
-				}
-				const pane = { id: `${environment.id}:general`, workspaceId: null, conversationId: general.id };
-				panes.push(pane);
-			}
-			environment.panes = panes;
-			if (!panes.some((pane) => pane.id === environment.activePaneId)) environment.activePaneId = panes[0].id;
-			environmentsAfterDeletion.push(environment);
-		}
-		this.environments = environmentsAfterDeletion;
-		if (!this.environments.some((environment) => environment.id === this.activeEnvironmentId)) {
-			const fallback = this.environments[0];
-			if (fallback) {
-				this.activeEnvironmentId = fallback.id;
-				this.workspaceLayout = { ...fallback.layout };
-			}
-		}
+		this.workspaceContexts = this.workspaceContexts.filter((context) => context.workspaceId !== path);
+		const generalContext = this.#ensureWorkspaceContext(null);
+		if (removedIds.has(generalContext.conversationId)) generalContext.conversationId = '';
+		if (this.activeWorkspaceId === path) this.activeWorkspaceId = null;
 
 		this.workspaceWindows = this.workspaceWindows.filter((workspace) => workspace.id !== path);
 		this.repositoryPaths = this.repositoryPaths.filter((repository) => repository !== path);
@@ -1349,9 +1077,8 @@ class Session {
 		}
 		this.historyVersion++;
 		this.#writeIndex();
+		this.focusWorkspace(this.activeWorkspaceId ?? GENERAL_WORKSPACE_ID);
 		this.#writeWorkspaceState();
-		const activePane = this.activePane;
-		if (activePane) this.focusEnvironmentPane(activePane.id);
 		if (isDesktop()) {
 			try { await ipc.closeWorkspace(path); } catch (error) { console.warn('workspace close failed after deletion', error); }
 		}
@@ -1425,12 +1152,6 @@ class Session {
 		if (view !== 'ask') this.workspaceToolChooserOpen = false;
 		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
-			this.workspaceLayoutPreset = 'focus';
-			return;
-		}
-		if (view === 'board' && !this.activeEnvironmentPanes.length) {
-			this.workspaceView = 'ask';
-			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
 		if (view === 'workspace') {
@@ -1438,42 +1159,11 @@ class Session {
 			return;
 		}
 		this.workspaceView = view;
-		if (view === 'board') {
-			const pane = this.activePane;
-			if (pane) pane.layoutPreset = undefined;
-			this.#writeWorkspaceState();
-			return;
-		}
-		if (view === 'ask') this.workspaceLayoutPreset = 'focus';
-		if (view === 'ask') {
-			const pane = this.activePane;
-			if (pane) pane.layoutPreset = this.workspaceLayoutPreset;
-			this.#writeWorkspaceState();
-		}
-	}
-
-	setWorkspaceLayoutPreset(preset: WorkspaceLayoutPreset): void {
-		if (preset !== 'focus' && !this.catalog.workspace) return;
-		if (preset === 'focus') {
-			this.setWorkspacePaneOpen(false);
-		} else {
-			this.setWorkspacePane('investigation');
-		}
-		this.workspaceLayoutPreset = preset;
-		this.workspaceView = 'ask';
-		const pane = this.activePane;
-		if (pane) {
-			pane.layoutPreset = preset;
-			pane.workspacePane = this.workspacePane;
-			pane.workspacePaneOpen = preset !== 'focus';
-		}
-		this.#writeWorkspaceState();
 	}
 
 	setWorkspacePane(pane: WorkspacePane): void {
 		if (!this.catalog.workspace) {
 			this.workspaceView = 'ask';
-			this.workspaceLayoutPreset = 'focus';
 			return;
 		}
 		const tab = this.openWorkspaceToolTab(
@@ -1492,22 +1182,22 @@ class Session {
 		investigationId: string | null = null,
 		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null
 	): WorkspaceToolTab | null {
-		const pane = this.activePane;
-		if (!pane || !this.catalog.workspace) return null;
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
 		if (kind === 'investigation' && conversationId && conversationId !== this.activeChat.id) return null;
-		pane.workspaceToolTabs ??= [];
-		const activeTab = pane.workspaceToolTabs.find((item) => item.id === pane.activeWorkspaceToolTabId);
+		context.workspaceToolTabs ??= [];
+		const activeTab = context.workspaceToolTabs.find((item) => item.id === context.activeWorkspaceToolTabId);
 		const tabByInvestigation = investigationId
-			? pane.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.investigationId === investigationId)
+			? context.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.investigationId === investigationId)
 			: null;
 		const tabByConversation = conversationId
-			? pane.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.conversationId === conversationId)
+			? context.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.conversationId === conversationId)
 			: null;
 		// A blank Investigation tab may acquire its durable record from the chat.
 		// A tab already owned by a different Investigation is never a fallback.
 		let tab: WorkspaceToolTab | null | undefined;
 		if (kind === 'context') {
-			tab = pane.workspaceToolTabs.find((item) => item.kind === 'context');
+			tab = context.workspaceToolTabs.find((item) => item.kind === 'context');
 		} else {
 			tab = tabByInvestigation;
 			if (!tab && tabByConversation && (!investigationId || !tabByConversation.investigationId)) {
@@ -1528,37 +1218,33 @@ class Session {
 				investigationId: kind === 'investigation' ? investigationId : null,
 				conversationId: kind === 'investigation' ? conversationId : null
 			};
-			pane.workspaceToolTabs.push(tab);
+			context.workspaceToolTabs.push(tab);
 		}
 		if (kind === 'investigation') {
 			if (investigationId && !tab.investigationId) tab.investigationId = investigationId;
 			if (conversationId) tab.conversationId = conversationId;
 		}
-		pane.activeWorkspaceToolTabId = tab.id;
-		pane.workspacePane = kind;
-		pane.investigationId = kind === 'investigation' ? tab.investigationId ?? null : null;
-		pane.workspacePaneOpen = true;
-		pane.layoutPreset = 'workbench';
+		context.activeWorkspaceToolTabId = tab.id;
+		context.workspacePane = kind;
+		context.investigationId = kind === 'investigation' ? tab.investigationId ?? null : null;
+		context.workspacePaneOpen = true;
 		this.workspacePane = kind;
 		this.workspaceToolChooserOpen = false;
-		this.workspaceLayoutPreset = 'workbench';
 		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
 		return tab;
 	}
 
 	activateWorkspaceToolTab(tabId: string): boolean {
-		const pane = this.activePane;
-		const tab = pane?.workspaceToolTabs?.find((item) => item.id === tabId);
-		if (!pane || !tab) return false;
-		pane.activeWorkspaceToolTabId = tab.id;
-		pane.workspacePane = tab.kind;
-		pane.investigationId = tab.kind === 'investigation' ? tab.investigationId ?? null : null;
-		pane.workspacePaneOpen = true;
-		pane.layoutPreset = 'workbench';
+		const context = this.activeWorkspaceContext;
+		const tab = context?.workspaceToolTabs?.find((item) => item.id === tabId);
+		if (!context || !tab) return false;
+		context.activeWorkspaceToolTabId = tab.id;
+		context.workspacePane = tab.kind;
+		context.investigationId = tab.kind === 'investigation' ? tab.investigationId ?? null : null;
+		context.workspacePaneOpen = true;
 		this.workspacePane = tab.kind;
 		this.workspaceToolChooserOpen = false;
-		this.workspaceLayoutPreset = 'workbench';
 		this.workspaceView = 'ask';
 		if (tab.kind === 'investigation') this.activeInvestigationId = tab.investigationId ?? null;
 		this.#writeWorkspaceState();
@@ -1566,41 +1252,37 @@ class Session {
 	}
 
 	closeWorkspaceToolTab(tabId: string): boolean {
-		const pane = this.activePane;
-		if (!pane?.workspaceToolTabs) return false;
-		const index = pane.workspaceToolTabs.findIndex((item) => item.id === tabId);
+		const context = this.activeWorkspaceContext;
+		if (!context?.workspaceToolTabs) return false;
+		const index = context.workspaceToolTabs.findIndex((item) => item.id === tabId);
 		if (index < 0) return false;
-		const wasActive = pane.activeWorkspaceToolTabId === tabId;
-		pane.workspaceToolTabs.splice(index, 1);
+		const wasActive = context.activeWorkspaceToolTabId === tabId;
+		context.workspaceToolTabs.splice(index, 1);
 		if (wasActive) {
-			const next = pane.workspaceToolTabs[Math.min(index, pane.workspaceToolTabs.length - 1)] ?? null;
-			pane.activeWorkspaceToolTabId = next?.id ?? null;
-			pane.workspacePane = next?.kind ?? 'investigation';
-			pane.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
-			this.workspacePane = pane.workspacePane;
-			this.activeInvestigationId = pane.investigationId ?? null;
+			const next = context.workspaceToolTabs[Math.min(index, context.workspaceToolTabs.length - 1)] ?? null;
+			context.activeWorkspaceToolTabId = next?.id ?? null;
+			context.workspacePane = next?.kind ?? 'investigation';
+			context.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
+			this.workspacePane = context.workspacePane;
+			this.activeInvestigationId = context.investigationId ?? null;
 		}
-		pane.workspacePaneOpen = true;
-		pane.layoutPreset = 'workbench';
-		this.workspaceToolChooserOpen = pane.workspaceToolTabs.length === 0;
-		this.workspaceLayoutPreset = 'workbench';
+		context.workspacePaneOpen = true;
+		this.workspaceToolChooserOpen = context.workspaceToolTabs.length === 0;
 		this.#writeWorkspaceState();
 		return true;
 	}
 
 	openWorkspaceToolChooser(): void {
-		if (!this.catalog.workspace || !this.activePane) return;
+		if (!this.catalog.workspace || !this.activeWorkspaceContext) return;
 		this.setWorkspacePaneOpen(true);
 		this.workspaceToolChooserOpen = true;
 	}
 
 	setWorkspacePaneOpen(open: boolean): void {
 		if (open && !this.catalog.workspace) return;
-		const pane = this.activePane;
-		if (!pane) return;
-		pane.workspacePaneOpen = open;
-		pane.layoutPreset = open ? 'workbench' : 'focus';
-		this.workspaceLayoutPreset = open ? 'workbench' : 'focus';
+		const context = this.activeWorkspaceContext;
+		if (!context) return;
+		context.workspacePaneOpen = open;
 		this.workspaceView = 'ask';
 		this.workspaceToolChooserOpen = open && !this.activeWorkspaceToolTab;
 		this.#writeWorkspaceState();
@@ -1654,8 +1336,6 @@ class Session {
 			revision: this.catalog.revision ?? null
 		};
 		this.workspaceView = 'ask';
-		this.workspaceLayoutPreset = 'focus';
-		if (this.activePane) this.activePane.layoutPreset = 'focus';
 		this.#writeWorkspaceState();
 		this.persist();
 	}
@@ -1680,8 +1360,6 @@ class Session {
 			revision: message.answer?.workspace?.revision ?? null
 		};
 		this.workspaceView = 'ask';
-		this.workspaceLayoutPreset = 'focus';
-		if (this.activePane) this.activePane.layoutPreset = 'focus';
 		this.#writeWorkspaceState();
 		this.persist();
 	}
@@ -1691,7 +1369,7 @@ class Session {
 		this.persist();
 	}
 
-	/** Select a conversation inside the current environment, preserving its owner. */
+	/** Select a conversation inside its owning workspace. */
 	activateConversation(index: number): boolean {
 		const conversation = this.conversations[index];
 		if (!conversation) return false;
@@ -1728,7 +1406,7 @@ class Session {
 
 	/** The optional right-side tools pane belongs to the active workspace pane. */
 	get workspacePaneOpen(): boolean {
-		return this.activePane?.workspacePaneOpen === true;
+		return this.activeWorkspaceContext?.workspacePaneOpen === true;
 	}
 
 	/** The active conversation's model, or the saved default when unset. */
@@ -1780,32 +1458,24 @@ class Session {
 		return this.ensureChat().addSystem(text);
 	}
 
-	// --- conversation creation inside the focused environment pane ----------
+	// --- conversation creation inside the focused workspace -----------------
 	newConversation(workspaceId: string | null = this.activeWorkspaceId): boolean {
-		const workspace = workspaceId ? this.workspaceAt(workspaceId) : null;
-		if (workspaceId && !workspace) return false;
-		const scope = workspace?.path ?? null;
-		let environment = this.activeEnvironment;
-		let pane = environment?.panes.find((item) => item.workspaceId === scope);
-		if (!pane) {
-			if (!this.focusWorkspace(workspaceId ?? GENERAL_WORKSPACE_ID)) return false;
-			environment = this.activeEnvironment;
-			pane = environment?.panes.find((item) => item.workspaceId === scope);
-		}
-		if (!environment || !pane) return false;
+		const scope = workspaceId === GENERAL_WORKSPACE_ID ? null : workspaceId;
+		const workspace = scope ? this.workspaceAt(scope) : null;
+		if (scope && !workspace) return false;
+		const context = this.#ensureWorkspaceContext(scope);
 		const conversation = new Conversation();
 		conversation.model = this.model;
 		conversation.workspaceScope = scope;
 		this.conversations.push(conversation);
-		pane.conversationId = conversation.id;
-		pane.investigationId = null;
-		pane.activeWorkspaceToolTabId = null;
+		context.conversationId = conversation.id;
+		context.investigationId = null;
+		context.activeWorkspaceToolTabId = null;
 		this.activeInvestigationId = null;
 		// A deliberate New conversation action starts in chat with the optional
 		// workspace tools pane closed.
-		pane.layoutPreset = 'focus';
-		pane.workspacePaneOpen = false;
-		this.focusEnvironmentPane(pane.id);
+		context.workspacePaneOpen = false;
+		this.focusWorkspace(scope ?? GENERAL_WORKSPACE_ID, conversation.id);
 		this.#writeIndex();
 		this.#writeWorkspaceState();
 		return true;
@@ -1824,10 +1494,10 @@ class Session {
 			const conversation = this.conversations[existing];
 			if (conversation.workspaceScope === undefined) conversation.workspaceScope = workspace;
 			conversation.companionPane = parseCompanionPane(companionPane) ?? conversation.companionPane;
-			const pane = this.paneForWorkspace(workspace ?? null);
-			if (pane) {
-				if (pane.conversationId !== id) pane.investigationId = null;
-				pane.conversationId = id;
+			const context = this.#ensureWorkspaceContext(workspace ?? null);
+			if (context) {
+				if (context.conversationId !== id) context.investigationId = null;
+				context.conversationId = id;
 			}
 			const owner = workspace ? this.workspaceAt(workspace) : null;
 			if (owner) owner.conversationId = id;
@@ -1842,10 +1512,10 @@ class Session {
 		// A reloaded transcript never has a run in flight.
 		conversation.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
 		this.conversations.push(conversation);
-		const pane = this.paneForWorkspace(workspace ?? null);
-		if (pane) {
-			if (pane.conversationId !== id) pane.investigationId = null;
-			pane.conversationId = id;
+		const context = this.#ensureWorkspaceContext(workspace ?? null);
+		if (context) {
+			if (context.conversationId !== id) context.investigationId = null;
+			context.conversationId = id;
 		}
 		const owner = workspace ? this.workspaceAt(workspace) : null;
 		if (owner) owner.conversationId = id;
@@ -1883,17 +1553,15 @@ class Session {
 		if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
 		this.conversations.splice(i, 1);
 		const owner = ownerId ? this.workspaceAt(ownerId) : null;
-		for (const environment of this.environments) {
-			for (const pane of environment.panes) {
-				if (pane.conversationId !== id) continue;
-				const replacementIndex = this.conversations.findLastIndex((item) => item.workspaceScope === pane.workspaceId);
-				if (replacementIndex >= 0) pane.conversationId = this.conversations[replacementIndex].id;
-				else {
-					const replacement = new Conversation();
-					replacement.workspaceScope = pane.workspaceId;
-					this.conversations.push(replacement);
-					pane.conversationId = replacement.id;
-				}
+		for (const context of this.workspaceContexts) {
+			if (context.conversationId !== id) continue;
+			const replacementIndex = this.conversations.findLastIndex((item) => item.workspaceScope === context.workspaceId);
+			if (replacementIndex >= 0) context.conversationId = this.conversations[replacementIndex].id;
+			else {
+				const replacement = new Conversation();
+				replacement.workspaceScope = context.workspaceId;
+				this.conversations.push(replacement);
+				context.conversationId = replacement.id;
 			}
 		}
 		if (owner?.conversationId === id) {
@@ -1905,9 +1573,10 @@ class Session {
 			replacement.workspaceScope = ownerId;
 			this.conversations.push(replacement);
 			if (owner) owner.conversationId = replacement.id;
+			this.#ensureWorkspaceContext(ownerId).conversationId = replacement.id;
 		}
 		if (wasActive) {
-			this.activateConversation(this.conversations.findIndex((item) => item.id === (owner?.conversationId ?? this.activePane?.conversationId)));
+			this.activateConversation(this.conversations.findIndex((item) => item.id === (owner?.conversationId ?? this.activeWorkspaceContext?.conversationId)));
 		} else {
 			if (this.activeConversationIndex > i) this.activeConversationIndex -= 1;
 			this.activeConversationIndex = Math.min(this.activeConversationIndex, this.conversations.length - 1);
@@ -1925,14 +1594,14 @@ class Session {
 		this.conversations[this.activeConversationIndex] = replacement;
 		const workspace = conversation.workspaceScope ? this.workspaceAt(conversation.workspaceScope) : null;
 		if (workspace) workspace.conversationId = replacement.id;
-		if (this.activePane) this.activePane.conversationId = replacement.id;
+		if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
 		this.activateConversation(this.activeConversationIndex);
 		this.#writeIndex();
 	}
 
 	/** Called once on launch. Archives every transcript a previous run left
 	 *  behind (one blob per conversation, plus the legacy single blob) and starts
-	 *  each active environment pane with an empty conversation; transcripts are
+	 *  the active workspace context with an empty conversation; transcripts are
 	 *  loaded from history on demand. */
 	async rollOver(): Promise<void> {
 		let keys: string[];
@@ -1940,11 +1609,16 @@ class Session {
 			keys = Object.keys(localStorage).filter((k) => k === LEGACY_KEY || k.startsWith(PREFIX));
 		} catch {
 			const replacement = new Conversation();
-			replacement.workspaceScope = this.activePane?.workspaceId ?? null;
+			replacement.workspaceScope = this.activeWorkspaceContext?.workspaceId ?? null;
 			this.conversations = [replacement];
 			this.activeConversationIndex = 0;
-			for (const environment of this.environments) for (const pane of environment.panes) pane.conversationId = '';
-			if (this.activePane) this.activePane.conversationId = replacement.id;
+			for (const context of this.workspaceContexts) context.conversationId = '';
+			for (const workspace of this.workspaceWindows) workspace.conversationId = '';
+			if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
+			if (this.activeWorkspaceId) {
+				const workspace = this.workspaceAt(this.activeWorkspaceId);
+				if (workspace) workspace.conversationId = replacement.id;
+			}
 			return;
 		}
 		for (const k of keys) {
@@ -1970,13 +1644,14 @@ class Session {
 			/* ignore */
 		}
 		const replacement = new Conversation();
-		replacement.workspaceScope = this.activePane?.workspaceId ?? null;
+		replacement.workspaceScope = this.activeWorkspaceContext?.workspaceId ?? null;
 		this.conversations = [replacement];
 		this.activeConversationIndex = 0;
-		for (const environment of this.environments) for (const pane of environment.panes) pane.conversationId = '';
-		if (this.activePane) this.activePane.conversationId = replacement.id;
-		if (this.activePane?.workspaceId) {
-			const workspace = this.workspaceAt(this.activePane.workspaceId);
+		for (const context of this.workspaceContexts) context.conversationId = '';
+		for (const workspace of this.workspaceWindows) workspace.conversationId = '';
+		if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
+		if (this.activeWorkspaceContext?.workspaceId) {
+			const workspace = this.workspaceAt(this.activeWorkspaceContext.workspaceId);
 			if (workspace) workspace.conversationId = replacement.id;
 		}
 		this.historyVersion++;

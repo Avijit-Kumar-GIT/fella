@@ -108,41 +108,9 @@ async function expectSidebarConversationFocused(page, title, workspace = 'northw
 
 async function focusedWorkspaceConversationId(page, workspaceId) {
 	return page.evaluate((id) => {
-		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
-		const environment = state.environments?.find((item) => item.id === state.active);
-		return environment?.panes.find((pane) => pane.workspaceId === id)?.conversationId ?? null;
+		const state = JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}');
+		return state.contexts?.find((context) => context.workspaceId === id)?.conversationId ?? null;
 	}, workspaceId);
-}
-
-async function composeEnvironment(page, name, workspaceNames) {
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await switcher.click();
-	await page.getByRole('menuitem', { name: /Combine workspaces/ }).click();
-	const dialog = page.getByRole('dialog', { name: 'Combine workspaces' });
-	await dialog.getByRole('textbox', { name: 'Environment name' }).fill(name);
-	const desired = new Set(workspaceNames.map((workspace) => `Include ${workspace}`));
-	const checkboxes = dialog.getByRole('checkbox');
-	for (let index = 0; index < await checkboxes.count(); index += 1) {
-		const checkbox = checkboxes.nth(index);
-		const label = await checkbox.getAttribute('aria-label');
-		if (!desired.has(label) && (await checkbox.isChecked())) await checkbox.uncheck();
-	}
-	for (let index = 0; index < await checkboxes.count(); index += 1) {
-		const checkbox = checkboxes.nth(index);
-		if (desired.has(await checkbox.getAttribute('aria-label')) && !(await checkbox.isChecked())) await checkbox.check();
-	}
-	await expect(dialog.locator('input[type="checkbox"]:checked')).toHaveCount(workspaceNames.length);
-	await dialog.getByRole('button', { name: 'Create environment' }).click();
-	await expect(dialog).toHaveCount(0);
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-	return { switcher, board: page.getByRole('region', { name: 'Workspace board' }) };
-}
-
-async function openWorkspaceOverview(page) {
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await switcher.click();
-	await page.getByRole('menuitem', { name: 'Open workspace overview' }).click();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
 }
 
 async function openInvestigationSection(page, name) {
@@ -994,27 +962,6 @@ async function installDesktopMock(
 	}, { fixtureFolders, seedUnavailableConversation, seedDeletionConversations, replayStatus, replayStatusError, reindexedCatalog, chartEvidence, detailEvidence, directAnswerText, savedAnalysisTurn, projectInvestigationRecords, projectConversationArchives, projectAnalysisTurns, questionRunOutcomes, providerList, providerHealth, runLogEntries, sampleWorkspacePath, sampleCatalog });
 }
 
-async function dispatchWorkspaceDrag(page, type, workspacePath, { x = 0.5, y = 0.5, existing = false } = {}) {
-	await page.evaluate(({ eventType, path, targetX, targetY }) => {
-		const board = document.querySelector('[aria-label="Workspace board"]');
-		if (!board) throw new Error('The workspace board is not open');
-		const saved = JSON.parse(localStorage.getItem('fella:environments') || '{}');
-		const environment = saved.environments?.find((item) => item.id === saved.active);
-		const pane = environment?.panes.find((item) => item.workspaceId === path);
-		if (!pane) throw new Error(`No pane in the active environment for ${path}`);
-		const rect = board.getBoundingClientRect();
-		const dataTransfer = new DataTransfer();
-		dataTransfer.setData('application/x-fella-environment-pane', pane.id);
-		board.dispatchEvent(new DragEvent(eventType, {
-			bubbles: true,
-			cancelable: true,
-			clientX: rect.left + rect.width * targetX,
-			clientY: rect.top + rect.height * targetY,
-			dataTransfer
-		}));
-	}, { eventType: type, path: workspacePath, targetX: x, targetY: y });
-}
-
 function expectSameRenderedBox(actual, expected) {
 	expect(actual).not.toBeNull();
 	expect(expected).not.toBeNull();
@@ -1054,6 +1001,7 @@ test('first launch offers a clear folder or sample path and discloses provider d
 	await expect(page.getByText('draft.tmp', { exact: true })).toBeVisible();
 });
 
+
 test('New conversation keeps the same minimal hierarchy in General and a connected workspace', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1073,6 +1021,7 @@ test('New conversation keeps the same minimal hierarchy in General and a connect
 	await expect(page.locator('.workspace-conversation-pane .dock .wrap')).toBeVisible();
 });
 
+
 test('a question entered before folder selection remains targeted to the chosen workspace', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1090,63 +1039,44 @@ test('a question entered before folder selection remains targeted to the chosen 
 	expect(ask.investigationId).toBeTruthy();
 });
 
-test('workspace overview opens only from the environment dropdown and preserves workspace scope', async ({ page }) => {
+
+test('workspace dropdown switches the single active scope without merging conversation state', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
-	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
-	const board = page.getByRole('region', { name: 'Workspace board' });
-	await expect(board.getByRole('heading', { name: 'Workspace overview' })).toBeVisible();
-	await expect(board).toContainText('Choose a workspace to open it.');
-	await expect(page.locator('.sidebar .environment-switcher-trigger')).toContainText('2');
-	await expect(page.getByRole('article')).toHaveCount(2);
-
-	// Opening another folder from the sidebar switches to its own environment;
-	// it must not silently add that folder to the named environment above.
-	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await switcher.click();
-	const salesReviewOption = page.getByRole('menuitemradio').filter({ hasText: 'Sales review' });
-	await expect(salesReviewOption).toContainText('2 workspaces');
-	await salesReviewOption.click();
-	await expect(board).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(2);
-	await expect(page.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
-
-	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
-	const generalTile = page.getByRole('article', { name: 'General workspace' });
-	await salesTile.locator('.tile-focus').click();
-	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	const switcher = page.locator('.sidebar .workspace-switcher-trigger');
+	await expect(switcher).toContainText('northwind-sales');
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await expect(salesComposer).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
 
-	await page.evaluate(() => { window.__workspaceAskDelayMs = 1500; });
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
-	await openWorkspaceOverview(page);
-	await expect(salesTile.locator('.tile-investigation-summary')).toContainText(
-		'Analysis in progress · remains in this Workspace'
-	);
-
-	await generalTile.locator('.tile-focus').click();
-	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /General/ }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target General (unbound)');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toHaveCount(0);
-	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toHaveCount(0);
+	await page.getByRole('combobox', { name: 'Ask a question' }).fill('How should I compare two trend lines?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to general.', { exact: true })).toBeVisible();
+	const generalCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
+	expect(generalCall.workspaceId).toBeNull();
 
-	const call = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	expect(call.workspaceId).toBe(folders[0].path);
-	await openWorkspaceOverview(page);
-	await expect(salesTile.locator('.tile-preview')).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
-	await salesTile.locator('.tile-focus').click();
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /northwind-sales/ }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.getByTestId('composer-scope-target')).toHaveText('Message target northwind-sales');
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
+	const contexts = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}').contexts);
+	expect(contexts).toEqual(expect.arrayContaining([
+		expect.objectContaining({ workspaceId: null }),
+		expect.objectContaining({ workspaceId: folders[0].path })
+	]));
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
 });
+
 
 test('sidebar conversation links restore the selected conversation without hiding the tools pane', async ({ page }) => {
 	await installDesktopMock(page);
@@ -1184,6 +1114,7 @@ test('sidebar conversation links restore the selected conversation without hidin
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
 
+
 test('sidebar conversation links switch workspace and open its saved conversation in Focus', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1210,6 +1141,7 @@ test('sidebar conversation links switch workspace and open its saved conversatio
 	await expect(page.locator('.msg.user').filter({ hasText: healthQuestion })).toHaveCount(0);
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
+
 
 test('long Investigation content remains reachable by keyboard and pointer scrolling', async ({ page }) => {
 	const workspacePath = folders[0].path;
@@ -1317,166 +1249,60 @@ test('long Investigation content remains reachable by keyboard and pointer scrol
 	expect(await sourceList.getByText(finalSourceName, { exact: true }).evaluate((element) => getComputedStyle(element).whiteSpace)).not.toBe('nowrap');
 });
 
-test('environments compose General and repository panes while conversations retain their original scope', async ({ page }) => {
+
+test('workspace switching keeps one active scope and preserves each conversation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await expect(switcher).toBeVisible();
+	const switcher = page.locator('.sidebar .workspace-switcher-trigger');
 	await expect(switcher).toContainText('General');
-	await expect(page.locator('.titlebar .environment-switcher-trigger')).toHaveCount(0);
-	await switcher.click();
-	await expect(page.getByRole('menuitemradio')).toHaveCount(1);
-	await page.keyboard.press('Escape');
-	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
-	await expect(page.getByRole('article')).toHaveCount(0);
-	await expect(page.getByRole('button', { name: 'Mount a folder' })).toHaveCount(0);
-	const surfaceColors = await page.evaluate(() => {
-		const root = document.documentElement;
-		const previous = root.getAttribute('data-color-mode');
-		const measure = () => ({
-			main: getComputedStyle(document.querySelector('main')).backgroundColor,
-			dock: getComputedStyle(document.querySelector('.dock')).backgroundColor,
-			composer: getComputedStyle(document.querySelector('.field')).backgroundColor
-		});
-		root.setAttribute('data-color-mode', 'light');
-		const light = measure();
-		root.setAttribute('data-color-mode', 'dark');
-		const dark = measure();
-		if (previous === null) root.removeAttribute('data-color-mode');
-		else root.setAttribute('data-color-mode', previous);
-		return { light, dark };
-	});
-	for (const surfaces of [surfaceColors.light, surfaceColors.dark]) {
-		expect(surfaces.dock).toBe(surfaces.main);
-		expect(surfaces.composer).toBe(surfaces.main);
-	}
-
-	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What is a useful way to compare trends?');
-	const initialSend = page.getByRole('button', { name: 'Send' });
-	await expect(initialSend).toHaveAttribute('data-slot', 'button');
-	await initialSend.click();
-	await expect(page.getByText('Scoped to general.')).toBeVisible();
-	const unboundCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	expect(unboundCall.workspaceId).toBeNull();
-
-	await page.keyboard.press('Control+t');
-	await expect(switcher).toContainText('General 2');
-	await switcher.click();
-	await expect(page.getByRole('menuitemradio')).toHaveCount(2);
-	await expect(page.getByRole('menuitemradio').nth(1)).toHaveAttribute('aria-checked', 'true');
-	await page.keyboard.press('Escape');
-	await expect(page.getByRole('heading', { name: 'New conversation', level: 1 })).toBeVisible();
-	await page.getByRole('combobox', { name: 'Ask a question' }).fill('What does a seasonal pattern look like?');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.getByText('Scoped to general.')).toBeVisible();
-	const conversationsAfterQuestion = await page.evaluate(() => window.__workspaceAskCalls.length);
-	await page.keyboard.press('Control+[');
-	await expect(switcher).toContainText('General');
-	await expect(page.getByText('Scoped to general.')).toBeVisible();
-	await page.keyboard.press('Control+]');
-	await expect(switcher).toContainText('General 2');
-	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(conversationsAfterQuestion);
-	await page.keyboard.press('Control+1');
-	await expect(switcher).toContainText('General');
-
-	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
 	await addSalesWorkspace(page);
-	await expect(switcher).toContainText('northwind-sales');
-	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
-	const salesTile = page.getByRole('article', { name: 'northwind-sales workspace' });
-	await expect(page.getByRole('article')).toHaveCount(2);
-	await expect(switcher).toContainText('2');
-	await salesTile.locator('.tile-focus').click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
-	await expect(page.locator('.workspace-context-bar')).toContainText('northwind-sales');
-	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
-	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await openInvestigationSection(page, 'Data');
-	await expect(page.getByTestId('investigation-data-readiness').getByRole('button', { name: /sales\.csv/ })).toBeVisible();
-	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).hover();
-	await page.getByRole('button', { name: 'New conversation in northwind-sales' }).click();
-	await expect(switcher).toContainText('2');
+
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /General/ }).click();
+	const generalComposer = page.getByRole('combobox', { name: 'Ask a question' });
+	await generalComposer.fill('How should I compare two trend lines?');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to general.', { exact: true })).toBeVisible();
+	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
+
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /northwind-sales/ }).click();
 	const salesComposer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await salesComposer.fill('Summarize sales trends');
 	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
-	const salesCall = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	expect(salesCall.workspaceId).toBe(folders[0].path);
-	const automaticInvestigation = await page.evaluate(() => ({
-		calls: window.__workspaceInvestigationEnsureCalls,
-		records: window.__workspaceInvestigations()
-	}));
-	expect(automaticInvestigation.calls).toHaveLength(1);
-	expect(automaticInvestigation.calls[0].workspaceId).toBe(folders[0].path);
-	expect(automaticInvestigation.calls[0].conversationId).toBe(salesCall.conversationId);
-	expect(automaticInvestigation.calls[0].initialRequest).toBe('Summarize sales trends');
-	expect(automaticInvestigation.records[0].brief.goal).toBe('Summarize sales trends');
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true })).toBeVisible();
+	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBe(folders[0].path);
 
-	await workspaceNavigation.getByRole('button', { name: 'General', exact: true }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
-	await page.getByRole('combobox', { name: 'Ask a question' }).fill('How should I compare two trend lines?');
-	await page.getByRole('button', { name: 'Send' }).click();
-	await expect(page.getByRole('log', { name: 'conversation' }).locator('.msg.assistant').last().getByText('Scoped to general.', { exact: true })).toBeVisible();
-	expect((await page.evaluate(() => window.__workspaceAskCalls.at(-1))).workspaceId).toBeNull();
-	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls.length)).toBe(1);
-	await expect(switcher).toContainText('2');
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /General/ }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: 'How should I compare two trend lines?' })).toHaveCount(1);
+	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize sales trends' })).toHaveCount(0);
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /northwind-sales/ }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: 'Summarize sales trends' })).toHaveCount(1);
+	await expect(page.locator('.msg.user').filter({ hasText: 'How should I compare two trend lines?' })).toHaveCount(0);
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
+})
 
-	await workspaceNavigation.getByRole('button', { name: 'Open workspace northwind-sales' }).click();
-	await page.getByRole('button', { name: 'Create project for northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
-	await expect(page.getByLabel('Repository', { exact: true })).toHaveValue(folders[0].path);
-	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
-	await page.getByRole('button', { name: 'Create project', exact: true }).click();
-	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
-
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about weekly-budget' })).toBeVisible();
-	await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about travel-plans' })).toBeVisible();
-	await composeEnvironment(page, 'Quarterly review', ['General', 'northwind-sales', 'health-journal', 'weekly-budget']);
-	const fourWorkspaceTiles = page.getByRole('article');
-	await expect(fourWorkspaceTiles).toHaveCount(4);
-	const fourBoxes = await Promise.all([
-		page.getByRole('article', { name: 'General workspace' }),
-		page.getByRole('article', { name: 'northwind-sales workspace' }),
-		page.getByRole('article', { name: 'health-journal workspace' }),
-		page.getByRole('article', { name: 'weekly-budget workspace' })
-	].map((tile) => tile.boundingBox()));
-	expect(fourBoxes.every(Boolean)).toBe(true);
-	expect(new Set(fourBoxes.map((box) => Math.round(box.x))).size).toBe(2);
-	expect(new Set(fourBoxes.map((box) => Math.round(box.y))).size).toBe(2);
-	expect(new Set(fourBoxes.map((box) => `${Math.round(box.x)},${Math.round(box.y)}`)).size).toBe(4);
-
-	const salesInFour = page.getByRole('article', { name: 'northwind-sales workspace' });
-	await dispatchWorkspaceDrag(page, 'dragover', folders[0].path, { x: 0.1, y: 0.1 });
-	await expect(page.locator('.placement-preview .preview-slot')).toHaveCount(4);
-	const salesTargetBox = await page.locator('.placement-preview .preview-slot.target').boundingBox();
-	await dispatchWorkspaceDrag(page, 'drop', folders[0].path, { x: 0.1, y: 0.1 });
-	await openWorkspaceOverview(page);
-	const movedSalesBox = await salesInFour.boundingBox();
-	expectSameRenderedBox(movedSalesBox, salesTargetBox);
-});
-
-test('Workspace overview can be reopened from a conversation and restores after reload', async ({ page }) => {
+test('the selected workspace restores after reload without opening a board', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
-	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
-	await page.getByRole('article', { name: 'northwind-sales workspace' }).locator('.tile-focus').click();
-	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
-	await openWorkspaceOverview(page);
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-
+	const switcher = page.locator('.sidebar .workspace-switcher-trigger');
+	await expect(switcher).toContainText('northwind-sales');
 	await page.reload();
-	await expect(page.getByRole('region', { name: 'Workspace board' })).toBeVisible();
-});
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.locator('.sidebar .workspace-switcher-trigger')).toContainText('northwind-sales');
+	await expect(page.getByRole('region', { name: 'Workspace board' })).toHaveCount(0);
+})
 
 test('an Investigation opens its canonical workspace conversation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	await expect(page.getByRole('button', { name: /Switch environment/ })).toBeVisible();
+	await expect(page.getByRole('button', { name: /Switch workspace/ })).toBeVisible();
 	await addSalesWorkspace(page);
 	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
 	await composer.fill('Summarize cohort retention');
@@ -1505,6 +1331,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
+
 test('Investigation tool tabs keep their own conversations aligned when switching', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1515,9 +1342,8 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(1);
 	const first = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations()[0];
-		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
-		const environment = state.environments?.find((item) => item.id === state.active);
-		const pane = environment?.panes.find((item) => item.workspaceId === record.workspace_id);
+		const state = JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}');
+		const pane = state.contexts?.find((item) => item.workspaceId === record.workspace_id);
 		return { id: record.id, conversationId: record.conversation_id, activeConversationId: pane?.conversationId };
 	});
 	expect(first.conversationId).toBeTruthy();
@@ -1540,9 +1366,8 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(2);
 	const second = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2');
-		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
-		const environment = state.environments?.find((item) => item.id === state.active);
-		const pane = environment?.panes.find((item) => item.workspaceId === record.workspace_id);
+		const state = JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}');
+		const pane = state.contexts?.find((item) => item.workspaceId === record.workspace_id);
 		return { id: record.id, conversationId: record.conversation_id, activeConversationId: pane?.conversationId };
 	});
 	expect(second.conversationId).toBeTruthy();
@@ -1580,6 +1405,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
 });
+
 
 test('rapid Investigation tab switching preserves each tab identity', async ({ page }) => {
 	await installDesktopMock(page);
@@ -1622,9 +1448,8 @@ test('rapid Investigation tab switching preserves each tab identity', async ({ p
 	await expect(page.getByRole('tab', { name: 'New investigation', exact: true })).toHaveAttribute('aria-selected', 'true');
 	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
 	await expect.poll(() => page.evaluate((workspacePath) => {
-		const state = JSON.parse(localStorage.getItem('fella:environments') || '{}');
-		const environment = state.environments?.find((item) => item.id === state.active);
-		const pane = environment?.panes.find((item) => item.workspaceId === workspacePath);
+		const state = JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}');
+		const pane = state.contexts?.find((item) => item.workspaceId === workspacePath);
 		const records = new Map(window.__workspaceInvestigations().map((record) => [record.id, record]));
 		const tabs = (pane?.workspaceToolTabs ?? []).filter((tab) => tab.kind === 'investigation');
 		return {
@@ -1650,6 +1475,7 @@ test('rapid Investigation tab switching preserves each tab identity', async ({ p
 		]
 	});
 });
+
 
 test('switching Investigation tabs stays responsive while a previous conversation is restoring', async ({ page }) => {
 	const legacyConversationId = 'conversation-legacy-investigation';
@@ -1712,6 +1538,7 @@ test('switching Investigation tabs stays responsive while a previous conversatio
 	await expect(page.getByRole('tab', { name: 'New investigation 2', exact: true })).toHaveAttribute('aria-selected', 'false');
 });
 
+
 test('Investigation work plan keeps the brief concise and opens editing and history on demand', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1758,6 +1585,7 @@ test('Investigation work plan keeps the brief concise and opens editing and hist
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
+
 test('Investigation navigation opens one focused section at a time', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -1785,6 +1613,7 @@ test('Investigation navigation opens one focused section at a time', async ({ pa
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 });
 
+
 test('a saved answer opens its canonical run and returns to the same conversation result', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [{ answer_text: 'Weekly sales rose 12% in the saved analysis.' }]
@@ -1811,6 +1640,7 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	await expect(answer).toContainText('Weekly sales rose 12% in the saved analysis.');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(2);
 });
+
 
 test('refreshing a Question answer keeps the Investigation page mounted instead of showing a loading screen', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -1847,6 +1677,7 @@ test('refreshing a Question answer keeps the Investigation page mounted instead 
 	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
 	await page.evaluate(() => window.__investigationLoadingObserver.disconnect());
 });
+
 
 test('a Question runs in its linked conversation without merging sibling Questions into its request', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -1916,6 +1747,7 @@ test('a Question runs in its linked conversation without merging sibling Questio
 		questionId: question.id
 	});
 });
+
 
 test('an Investigation restores its canonical conversation and Analyze keeps chat visible beside the Investigation', async ({ page }) => {
 	const workspaceId = folders[0].path;
@@ -1993,6 +1825,7 @@ test('an Investigation restores its canonical conversation and Analyze keeps cha
 	await expect(page.locator('.msg.assistant').last()).toContainText('Weekly sales rose 12%.');
 });
 
+
 test('Investigation tool tabs resume the same completed record', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -2046,6 +1879,7 @@ test('Investigation tool tabs resume the same completed record', async ({ page }
 	expect(resumed.questions[0].text).toBe('First return-to-work question');
 	expect(resumed.questions[0].answer_status).toBe('answered');
 });
+
 
 test('the optional workspace tools pane preserves Investigation scope, Questions, transcript, and saved runs', async ({ page }) => {
 	await page.setViewportSize({ width: 1120, height: 900 });
@@ -2154,6 +1988,7 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 	expect(await readCanonicalWorkspaceRecords(page)).toEqual(recordsAfterRun);
 });
 
+
 test('Tools toggles the pane; empty panes and the add button show the tool chooser', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -2237,6 +2072,7 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(tools).toBeHidden();
 });
 
+
 test('Tools restores its saved active tab after reload without showing the chooser', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -2260,6 +2096,7 @@ test('Tools restores its saved active tab after reload without showing the choos
 	await expect(pane.getByRole('tabpanel', { name: 'Data & context' })).toBeVisible();
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 });
+
 
 test('workspace tools open beside the conversation and preserve the workspace Investigation', async ({ page }) => {
 	await installDesktopMock(page);
@@ -2300,7 +2137,8 @@ test('workspace tools open beside the conversation and preserve the workspace In
 	expect(await readCanonicalWorkspaceRecords(page)).toEqual(canonicalBeforePanelChanges);
 });
 
-test('conversation and tools panes resize accessibly and persist independently of analysis', async ({ page }) => {
+
+test('conversation and tools use a stable responsive layout without manual resizing', async ({ page }) => {
 	await page.setViewportSize({ width: 1720, height: 960 });
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -2317,49 +2155,35 @@ test('conversation and tools panes resize accessibly and persist independently o
 		mode: 'selected_sources',
 		included_paths: ['sales.csv']
 	});
-	const canonicalBeforeResize = await readCanonicalWorkspaceRecords(page);
-
-	const splitter = page.getByRole('separator', { name: 'Resize conversation and workspace tools panes' });
-	await expect(splitter).toBeVisible();
-	await expect(splitter).toHaveAttribute('aria-valuemin', '42');
-	await expect(splitter).toHaveAttribute('aria-valuemax', '72');
+	const canonicalBeforeLayoutChange = await readCanonicalWorkspaceRecords(page);
 	const conversation = page.getByRole('region', { name: 'Conversation' });
 	const tools = page.locator('.workspace-tools-pane');
-	const initialWidth = (await conversation.boundingBox()).width;
-	const initialShare = Number(await splitter.getAttribute('aria-valuenow'));
-
-	await splitter.focus();
-	await splitter.press('ArrowRight');
-	await expect(splitter).toHaveAttribute('aria-valuenow', String(initialShare + 2));
-	await expect.poll(async () => (await conversation.boundingBox()).width).toBeGreaterThan(initialWidth);
-	await expect.poll(async () => {
-		const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
-		return saved.conversationShare;
-	}).toBe(initialShare + 2);
-
-	const handle = await splitter.boundingBox();
-	await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
-	await page.mouse.down();
-	await page.mouse.move(handle.x + handle.width / 2 + 72, handle.y + handle.height / 2, { steps: 4 });
-	await page.mouse.up();
-	await expect.poll(async () => Number(await splitter.getAttribute('aria-valuenow'))).toBeGreaterThan(initialShare + 2);
-	await splitter.press('End');
-	await expect(splitter).toHaveAttribute('aria-valuenow', '72');
-	const conversationWidth = (await conversation.boundingBox()).width;
-	const toolsWidth = (await tools.boundingBox()).width;
-	expect(conversationWidth).toBeGreaterThanOrEqual(320);
-	expect(toolsWidth).toBeGreaterThanOrEqual(280);
-	const recordsAfterResize = await readCanonicalWorkspaceRecords(page);
-	expect(recordsAfterResize).toEqual(canonicalBeforeResize);
-	expect(recordsAfterResize.investigations[0].id).toBe(investigationId);
-
-	await page.reload();
-	const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workbench-layout:v1')));
-	expect(restored.conversationShare).toBe(72);
-	await expect(splitter).toHaveAttribute('aria-valuenow', '72');
+	const layout = page.locator('.workspace-chat-layout');
 	await expect(conversation).toBeVisible();
 	await expect(tools).toBeVisible();
+	await expect(page.getByRole('separator', { name: /Resize conversation and workspace tools panes/ })).toHaveCount(0);
+	await expect(page.getByTestId('workbench-pane-splitter')).toHaveCount(0);
+	const wideConversation = await conversation.boundingBox();
+	const wideTools = await tools.boundingBox();
+	expect(wideConversation.width).toBeGreaterThan(wideTools.width);
+	expect(wideTools.x).toBeGreaterThan(wideConversation.x);
+
+	await page.setViewportSize({ width: 900, height: 960 });
+	const narrowConversation = await conversation.boundingBox();
+	const narrowTools = await tools.boundingBox();
+	expect(narrowTools.y).toBeGreaterThanOrEqual(narrowConversation.y + narrowConversation.height - 1);
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+	await expect(page.getByLabel('Choose files')).toBeChecked();
+	expect(await readCanonicalWorkspaceRecords(page)).toEqual(canonicalBeforeLayoutChange);
+	expect(canonicalBeforeLayoutChange.investigations[0].id).toBe(investigationId);
+
+	await page.reload();
+	await expect(conversation).toBeVisible();
+	await expect(tools).toBeVisible();
+	await expect(page.getByTestId('workbench-pane-splitter')).toHaveCount(0);
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 });
+
 
 test('an analyst can edit the main Question and linked subquestions without rewriting the request', async ({ page }) => {
 	await installDesktopMock(page);
@@ -2429,6 +2253,7 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await expect(transcriptQuestion).not.toContainText('Compare conversion over time');
 	await expect(transcriptQuestion).not.toContainText('Compare conversion by device');
 });
+
 
 test('a Question can narrow its source set and launches a run linked to that Question', async ({ page }) => {
 	const fixtureFolders = folders.map((folder) => folder.path === folders[0].path
@@ -2510,6 +2335,7 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	expect(run.question).toContain('Compare refund rates with sales');
 	await expect(page.locator('.msg.user').last()).toContainText('Compare refund rates with sales');
 });
+
 
 test('Questions show persisted coverage states and explain incomplete, blocked, and outdated answers', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -2601,6 +2427,7 @@ test('Questions show persisted coverage states and explain incomplete, blocked, 
 	await expect(page.locator('.root-question-item .question-status-reason')).toContainText('The Question or its source scope changed. Run it again to refresh the answer.');
 });
 
+
 test('clarification, verification review, and insufficient data have distinct Question states', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
@@ -2662,6 +2489,7 @@ test('clarification, verification review, and insufficient data have distinct Qu
 	await expect(coverage.locator('[data-coverage="unsupported"] dd')).toHaveText('1');
 	await expect(page.getByRole('button', { name: 'Mark complete' })).toBeDisabled();
 });
+
 
 test('completion follows Question coverage and keeps documented gaps visible', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -2735,6 +2563,7 @@ test('completion follows Question coverage and keeps documented gaps visible', a
 	await page.getByRole('button', { name: 'Reopen Investigation' }).click();
 	await expect(coverage).toHaveAttribute('data-investigation-status', 'active');
 });
+
 
 test('verification concerns remain review states rather than data gaps (coverage semantics v2)', async ({ page }) => {
 	const queryEvidence = {
@@ -2859,6 +2688,7 @@ test('verification concerns remain review states rather than data gaps (coverage
 	await expect(legacyCheck).toContainText('no structured scope note was saved');
 });
 
+
 test('each Question opens its saved answer with explicit partial or complete coverage and run provenance', async ({ page }) => {
 	await installDesktopMock(page, {
 		questionRunOutcomes: [
@@ -2913,6 +2743,7 @@ test('each Question opens its saved answer with explicit partial or complete cov
 	await expect(completePreview).toContainText('Refunds were highest in the online channel.');
 	await expect(completePreview).toContainText('fixture-question-turn-2');
 });
+
 
 test('a multi-question Investigation carries coverage, QA, and run links into its report', async ({ page }) => {
 	const rootEvidence = {
@@ -3107,6 +2938,7 @@ test('a multi-question Investigation carries coverage, QA, and run links into it
 	expect(report).not.toContain('Scoped to C:\\FellaFixture\\northwind-sales.');
 });
 
+
 test('saved analysis runs open from an Investigation and link to every Question they address', async ({ page }) => {
 	await installDesktopMock(page, { questionRunOutcomes: [{ status: 'answered', delay_ms: 250 }] });
 	await page.goto('/');
@@ -3157,6 +2989,7 @@ test('saved analysis runs open from an Investigation and link to every Question 
 	await expect(runDetail.locator('.analysis-run-question-snapshot')).toContainText('Explain how refund rates changed');
 	await expect(runDetail.locator('.analysis-run-question-links input[type="checkbox"]').nth(1)).toBeChecked();
 });
+
 
 test('an analyst can review a run assumption, correct it in Investigation context, and keep the old run intact', async ({ page }) => {
 	const recordedAssumption = 'Treat accounts with no cancellation date as active.';
@@ -3209,6 +3042,7 @@ test('an analyst can review a run assumption, correct it in Investigation contex
 	await expect(nextRun).not.toContainText(recordedAssumption);
 	await nextRun.getByRole('button', { name: 'Cancel' }).click();
 });
+
 
 test('saved Investigation definitions are revisioned, attached to later asks, and removable', async ({ page }) => {
 	await installDesktopMock(page);
@@ -3276,6 +3110,7 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	expect(removed).toMatchObject({ status: 'removed', revision: 3 });
 	expect(removed.history).toHaveLength(2);
 });
+
 
 test('saved run review exposes its method, query output, definitions, and actual source scope in the Investigation', async ({ page }) => {
 	const query = 'SELECT cohort_month, retained / cohort_size AS retention FROM cohort_retention ORDER BY cohort_month';
@@ -3374,6 +3209,7 @@ test('saved run review exposes its method, query output, definitions, and actual
 	await expect(evidenceReview).toContainText('Three monthly cohorts were returned; retention ranged from 42% to 51%.');
 	await expect(evidenceReview).toContainText('2026-03');
 });
+
 
 test('repeated Question runs stay chronological and preserve each attempt context', async ({ page }) => {
 	const firstEvidence = {
@@ -3485,6 +3321,7 @@ test('repeated Question runs stay chronological and preserve each attempt contex
 	await expect(runDetail.locator('.analysis-run-result')).toContainText('Attempt one: net sales were 120.');
 });
 
+
 test('Finding caveats and assumptions are visible, editable, and preserve provenance', async ({ page }) => {
 	const supportingEvidence = {
 		id: 'finding-evidence-retention',
@@ -3560,6 +3397,7 @@ test('Finding caveats and assumptions are visible, editable, and preserve proven
 	const originalRequest = page.locator('.msg.user').first().locator('.you-copy');
 	await expect(originalRequest).toHaveText('Explain retention by signup cohort.');
 });
+
 
 test('Investigation results summarize saved work, render linked charts, and keep open Questions visible', async ({ page }) => {
 	await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:1421' });
@@ -3703,6 +3541,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 });
 
+
 test('Finding and chart lineage flag artifacts from an earlier Question run', async ({ page }) => {
 	const source = {
 		id: 'stale-chart-source',
@@ -3815,6 +3654,7 @@ test('Finding and chart lineage flag artifacts from an earlier Question run', as
 	await expect(reportVisualizations).toContainText('Source catalog revision sales-r1');
 });
 
+
 test('Investigation Results keep transcript-only historical work outside current Question coverage', async ({ page }) => {
 	await installDesktopMock(page, {
 		directAnswerText: 'The initial scan found four relevant files and no single source of truth.',
@@ -3891,6 +3731,7 @@ test('Investigation Results keep transcript-only historical work outside current
 	await expect(page.locator('.msg.user').first().locator('.you-copy')).toHaveText('What do the weekly sales files show?');
 	await expect(page.locator('.msg.assistant[data-analysis-turn-id="fixture-turn"]')).toContainText('The initial scan found four relevant files and no single source of truth.');
 });
+
 
 test('Finding Results connect partial coverage, scoped checks, provenance, and exact evidence', async ({ page }) => {
 	const evidence = {
@@ -3972,6 +3813,7 @@ test('Finding Results connect partial coverage, scoped checks, provenance, and e
 	const evidenceTarget = page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="finding-weekly-sales-evidence"]');
 	await expect(evidenceTarget).toBeFocused();
 });
+
 
 test('Investigation report exports saved answers, Findings, QA, and source provenance without chat transcript', async ({ page }) => {
 	const evidence = {
@@ -4133,6 +3975,7 @@ test('Investigation report exports saved answers, Findings, QA, and source prove
 	await expect(reviewedDialog.getByRole('status').filter({ hasText: 'Downloaded explain-weekly-sales-for-finance-report.md.' })).toBeVisible();
 });
 
+
 test('Finding revisions preserve prior versions and compare the supporting run context', async ({ page }) => {
 	const firstEvidence = {
 		id: 'finding-net-sales-before-refunds',
@@ -4277,6 +4120,7 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	await expect(page.getByRole('region', { name: 'Query and output evidence' }).locator('[data-evidence-id="finding-net-sales-before-refunds"]')).toBeFocused();
 });
 
+
 test('suggested Question breakdown autosaves as durable child records', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4326,6 +4170,7 @@ test('suggested Question breakdown autosaves as durable child records', async ({
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 });
 
+
 test('Question autosave keeps focus and layout steady while a save is in progress', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4360,6 +4205,7 @@ test('Question autosave keeps focus and layout steady while a save is in progres
 	await expect(questionPlan.getByRole('button', { name: 'Discard plan' })).toHaveCount(0);
 });
 
+
 test('Question autosave failures stay visible and can be retried', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4381,6 +4227,7 @@ test('Question autosave failures stay visible and can be retried', async ({ page
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations()[0].questions[0].text))
 		.toBe('Measure weekly net sales');
 });
+
 
 test('Investigation shows source readiness and opens source details in place', async ({ page }) => {
 	const workspacePath = folders[0].path;
@@ -4498,40 +4345,38 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 });
 
-test('the environment composer caps named environments at four workspaces', async ({ page }) => {
+
+test('workspace dropdown stays bounded and scrollable with many remembered folders', async ({ page }) => {
+	await page.addInitScript(() => {
+		localStorage.setItem('fella:repositories', JSON.stringify(
+			Array.from({ length: 12 }, (_, index) => 'C:\\FellaFixture\\archive-' + (index + 1))
+		));
+	});
 	await installDesktopMock(page);
 	await page.goto('/');
-	const workspaceNavigation = page.getByRole('region', { name: 'Workspaces' });
-	for (const workspace of ['northwind-sales', 'health-journal', 'weekly-budget', 'travel-plans', 'reading-notes']) {
-		await workspaceNavigation.getByRole('button', { name: 'Add repository' }).click();
-		await expect(page.getByRole('combobox', { name: `Ask about ${workspace}` })).toBeVisible();
-	}
-	const { switcher, board } = await composeEnvironment(page, 'Quarterly review', [
-		'General', 'northwind-sales', 'health-journal', 'weekly-budget'
-	]);
-	await expect(board.getByRole('article')).toHaveCount(4);
-	await expect(board.getByRole('article', { name: 'travel-plans workspace' })).toHaveCount(0);
-	await expect(board.getByRole('article', { name: 'reading-notes workspace' })).toHaveCount(0);
+	const switcher = page.locator('.sidebar .workspace-switcher-trigger');
 	await switcher.click();
-	await page.getByRole('menuitem', { name: /Combine workspaces/ }).click();
-	const composer = page.getByRole('dialog', { name: 'Combine workspaces' });
-	await expect(composer.getByRole('checkbox', { name: 'Include reading-notes' })).toBeDisabled();
-	await composer.getByRole('button', { name: 'Cancel' }).click();
-	await expect(composer).toHaveCount(0);
-
-	await workspaceNavigation.getByRole('button', { name: 'Open workspace reading-notes' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about reading-notes' })).toBeVisible();
-	await switcher.click();
-	const quarterlyReview = page.getByRole('menuitemradio').filter({ hasText: 'Quarterly review' });
-	await expect(quarterlyReview).toContainText('4 workspaces');
-	await quarterlyReview.click();
-	await expect(board.getByRole('article')).toHaveCount(4);
-	await expect(board.getByRole('article', { name: 'reading-notes workspace' })).toHaveCount(0);
-
-	await page.reload();
-	await expect(board).toBeVisible();
-	await expect(board.getByRole('article')).toHaveCount(4);
-});
+	const options = page.getByRole('menuitemradio');
+	await expect(options).toHaveCount(13);
+	const metrics = await page.evaluate(() => {
+		const menu = document.querySelector('.workspace-menu-content');
+		const selected = menu?.querySelector('[aria-checked="true"]');
+		if (!(menu instanceof HTMLElement) || !(selected instanceof HTMLElement)) return null;
+		const menuRect = menu.getBoundingClientRect();
+		const selectedRect = selected.getBoundingClientRect();
+		return {
+			height: menu.clientHeight,
+			scrollHeight: menu.scrollHeight,
+			selectedVisible: selectedRect.top >= menuRect.top - 1 && selectedRect.bottom <= menuRect.bottom + 1,
+			pageWidth: document.documentElement.scrollWidth,
+			viewportWidth: window.innerWidth
+		};
+	});
+	expect(metrics).not.toBeNull();
+	expect(metrics.scrollHeight).toBeGreaterThan(metrics.height);
+	expect(metrics.selectedVisible).toBe(true);
+	expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewportWidth);
+})
 
 test('Composer source search filters and attaches a workspace source', async ({ page }) => {
 	await installDesktopMock(page);
@@ -4570,6 +4415,7 @@ test('Composer source search filters and attaches a workspace source', async ({ 
 	await expect(reference).toHaveCount(0);
 });
 
+
 test('Composer model search filters the available models', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4595,6 +4441,7 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
 });
 
+
 test('Composer command completion uses shared buttons and keeps keyboard selection', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4616,63 +4463,12 @@ test('Composer command completion uses shared buttons and keeps keyboard selecti
 	await expect(page.getByRole('listbox', { name: 'completions' })).toHaveCount(0);
 });
 
-test('environment dropdown switches between named workspace environments without leaking panes', async ({ page }) => {
+
+test('workspace dropdown supports keyboard selection and returns focus to its trigger', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const navigation = page.getByRole('region', { name: 'Workspaces' });
 	await addSalesWorkspace(page);
-	await composeEnvironment(page, 'Sales review', ['General', 'northwind-sales']);
-	const board = page.getByRole('region', { name: 'Workspace board' });
-	await expect(board.getByRole('article')).toHaveCount(2);
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await navigation.getByRole('button', { name: 'Add repository' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
-
-	await switcher.click();
-	const salesReview = page.getByRole('menuitemradio').filter({ hasText: 'Sales review' });
-	await expect(salesReview).toContainText('2 workspaces');
-	await salesReview.click();
-	await expect(board.getByRole('article')).toHaveCount(2);
-	await expect(board.getByRole('article', { name: 'health-journal workspace' })).toHaveCount(0);
-
-	await switcher.click();
-	await page.getByRole('menuitemradio').filter({ hasText: 'health-journal' }).click();
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
-	await expect(board).toHaveCount(0);
-
-	await page.reload();
-	const restoredSwitcher = page.locator('.sidebar .environment-switcher-trigger');
-	await restoredSwitcher.click();
-	await expect(page.getByRole('menuitemradio').filter({ hasText: 'health-journal' })).toHaveAttribute('aria-checked', 'true');
-	await page.keyboard.press('Escape');
-	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
-});
-
-test('environment dropdown creates and closes the current environment', async ({ page }) => {
-	await installDesktopMock(page);
-	await page.goto('/');
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await expect(switcher).toHaveAttribute('aria-haspopup', 'menu');
-	await switcher.click();
-	await page.getByRole('menuitem', { name: /New environment/ }).click();
-	await expect(switcher).toContainText('General 2');
-
-	await switcher.click();
-	await expect(page.getByRole('menuitemradio')).toHaveCount(2);
-	await page.getByRole('menuitem', { name: /Close current environment/ }).click();
-	await expect(switcher).toContainText('General');
-	await switcher.click();
-	await expect(page.getByRole('menuitemradio')).toHaveCount(1);
-	await expect(page.getByRole('menuitemradio').first()).toHaveAttribute('aria-checked', 'true');
-});
-
-test('environment dropdown supports keyboard selection and focus restoration', async ({ page }) => {
-	await installDesktopMock(page);
-	await page.goto('/');
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	await switcher.click();
-	await page.getByRole('menuitem', { name: /New environment/ }).click();
-
+	const switcher = page.locator('.sidebar .workspace-switcher-trigger');
 	await switcher.focus();
 	await page.keyboard.press('Enter');
 	const menu = page.getByRole('menu');
@@ -4683,29 +4479,28 @@ test('environment dropdown supports keyboard selection and focus restoration', a
 
 	await page.keyboard.press('Enter');
 	await page.keyboard.press('Home');
-	const firstEnvironment = page.getByRole('menuitemradio').first();
-	await expect(firstEnvironment).toBeFocused();
+	await page.keyboard.press('ArrowDown');
+	await expect(page.getByRole('menuitemradio').nth(1)).toBeFocused();
 	await page.keyboard.press('Enter');
-	await expect(switcher).toContainText('General');
-	await expect(switcher).toBeFocused();
-});
+	await expect(switcher).toContainText('northwind-sales');
+	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
+})
 
-test('environment dropdown remains available when the sidebar is collapsed', async ({ page }) => {
+
+
+test('workspace selector remains available in the collapsed titlebar', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
-	const sidebarSwitcher = page.locator('.sidebar .environment-switcher-trigger');
-	await sidebarSwitcher.click();
-	await page.getByRole('menuitem', { name: /New environment/ }).click();
+	await addSalesWorkspace(page);
 	await page.getByRole('button', { name: 'Collapse sidebar' }).click();
-
-	const titlebarSwitcher = page.locator('.titlebar .environment-switcher-trigger');
-	await expect(titlebarSwitcher).toBeVisible();
-	await expect(titlebarSwitcher).toContainText('General 2');
-	await titlebarSwitcher.click();
-	await page.getByRole('menuitemradio').first().click();
-	await expect(titlebarSwitcher.locator('.environment-switcher-label')).toHaveText('General');
+	const switcher = page.locator('.titlebar .workspace-switcher-trigger');
+	await expect(switcher).toBeVisible();
+	await switcher.click();
+	await page.getByRole('menuitemradio', { name: /General/ }).click();
+	await expect(switcher).toContainText('General');
 	await expect(page.locator('.sidebar')).toHaveCount(0);
-});
+	await expect(page.getByRole('combobox', { name: 'Ask a question' })).toBeVisible();
+})
 
 test('Composer mode selection uses the shared radio menu interaction', async ({ page }) => {
 	await installDesktopMock(page);
@@ -4731,39 +4526,7 @@ test('Composer mode selection uses the shared radio menu interaction', async ({ 
 	await expect(selectedModeTrigger).toHaveAttribute('aria-expanded', 'false');
 });
 
-test('many environments remain in a bounded, scrollable dropdown', async ({ page }) => {
-	await installDesktopMock(page);
-	await page.goto('/');
-	const switcher = page.locator('.sidebar .environment-switcher-trigger');
-	const create = page.getByRole('menuitem', { name: /New environment/ });
-	for (let index = 0; index < 11; index += 1) {
-		await switcher.click();
-		await create.click();
-	}
-	await switcher.click();
-	const environments = page.getByRole('menuitemradio');
-	await expect(environments).toHaveCount(12);
-	await expect(environments.last()).toHaveAttribute('aria-checked', 'true');
 
-	const metrics = await page.evaluate(() => {
-		const menu = document.querySelector('.environment-menu-content');
-		const selected = menu?.querySelector('[aria-checked="true"]');
-		if (!(menu instanceof HTMLElement) || !(selected instanceof HTMLElement)) return null;
-		const menuRect = menu.getBoundingClientRect();
-		const selectedRect = selected.getBoundingClientRect();
-		return {
-			menuHeight: menu.clientHeight,
-			menuScrollHeight: menu.scrollHeight,
-			selectedVisible: selectedRect.top >= menuRect.top - 1 && selectedRect.bottom <= menuRect.bottom + 1,
-			pageWidth: document.documentElement.scrollWidth,
-			viewportWidth: window.innerWidth
-		};
-	});
-	expect(metrics).not.toBeNull();
-	expect(metrics.menuScrollHeight).toBeGreaterThan(metrics.menuHeight);
-	expect(metrics.selectedVisible).toBe(true);
-	expect(metrics.pageWidth).toBeLessThanOrEqual(metrics.viewportWidth);
-});
 
 test('a history-only workspace retries its folder mount and keeps history available when it is still missing', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true });
@@ -4799,16 +4562,14 @@ test('a history-only workspace retries its folder mount and keeps history availa
 	await expect(page.getByRole('button', { name: 'Open workspace', exact: true })).toHaveAttribute('data-slot', 'button');
 });
 
-test('deleting a history-only workspace confirms and removes all of its saved conversations and environment panes', async ({ page }) => {
+
+test('deleting a history-only workspace removes its saved conversations and workspace context', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true, seedDeletionConversations: true });
 	await page.goto('/');
 
 	await page.getByRole('button', { name: 'Expand unavailable-archive' }).click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
 	await expect(page.getByRole('combobox', { name: 'Workspace unavailable: unavailable-archive' })).toBeDisabled();
-
-	await page.locator('.sidebar .environment-switcher-trigger').click();
-	await page.getByRole('menuitem', { name: 'New environment' }).click();
 	const unavailableDisclosure = page.getByRole('button', { name: /^(Expand|Collapse) unavailable-archive$/ });
 	if (await unavailableDisclosure.getAttribute('aria-expanded') === 'false') await unavailableDisclosure.click();
 	await page.getByRole('button', { name: 'Open conversation: Summarize the unavailable archive' }).click();
@@ -4842,10 +4603,10 @@ test('deleting a history-only workspace confirms and removes all of its saved co
 	]));
 	expect(deletedHistory.every(({ workspace }) => workspace === 'C:\\FellaFixture\\unavailable-archive')).toBe(true);
 	expect(await page.evaluate(() => [...window.__remainingArchiveIds()].sort())).toEqual(['archived-northwind-sales']);
-	const persistedEnvironments = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:environments')));
-	expect(persistedEnvironments.environments).toHaveLength(2);
-	expect(persistedEnvironments.environments.flatMap((environment) => environment.panes).some((pane) => pane.workspaceId === 'C:\\FellaFixture\\unavailable-archive')).toBe(false);
+	const persistedContexts = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:workspace-contexts')));
+	expect(persistedContexts.contexts.some((context) => context.workspaceId === 'C:\\FellaFixture\\unavailable-archive')).toBe(false);
 });
+
 
 test('a mounted workspace can be deleted with its saved conversations while its files are kept', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true, seedDeletionConversations: true });
@@ -4872,6 +4633,7 @@ test('a mounted workspace can be deleted with its saved conversations while its 
 		'archived-unavailable-workspace-2'
 	].sort());
 });
+
 
 test('shared workspace tabs and modal/menu primitives preserve keyboard interaction', async ({ page }) => {
 	await installDesktopMock(page);
@@ -4930,6 +4692,7 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await expect(priorRepository.getByRole('button', { name: 'Repository actions' })).toBeFocused();
 });
 
+
 test('Sidebar navigation actions use shared buttons and retain compact keyboard access', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4957,6 +4720,7 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 	await expect(settings).toHaveAttribute('aria-current', 'page');
 });
 
+
 test('Investigation list failures stay distinct from empty state and can be retried', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -4974,6 +4738,7 @@ test('Investigation list failures stay distinct from empty state and can be retr
 	await expect(page.getByRole('heading', { name: 'No investigations yet' })).toBeVisible();
 	await expect(page.getByRole('heading', { name: "Couldn't load investigations" })).toHaveCount(0);
 });
+
 
 test('workspace guide autosaves while leaving Data & context without a navigation prompt', async ({ page }) => {
 	await installDesktopMock(page);
@@ -4993,6 +4758,7 @@ test('workspace guide autosaves while leaving Data & context without a navigatio
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toHaveValue('Unsaved analyst context');
 });
 
+
 test('workspace guide autosave failures remain visible and can be retried', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5006,6 +4772,7 @@ test('workspace guide autosave failures remain visible and can be retried', asyn
 	await expect.poll(() => page.evaluate(() => window.__workspaceContextFor('C:\\FellaFixture\\northwind-sales')))
 		.toBe('Retry this saved guide');
 });
+
 
 test('opening another folder saves the current workspace guide and navigates immediately', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5022,6 +4789,7 @@ test('opening another folder saves the current workspace guide and navigates imm
 	await expect.poll(() => page.evaluate(() => window.__workspaceContextFor('C:\\FellaFixture\\northwind-sales')))
 		.toBe('Preserve this guide while I choose a folder');
 });
+
 
 test('workspace deletion keeps its destructive confirmation without blocking on a pending guide edit', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5041,6 +4809,7 @@ test('workspace deletion keeps its destructive confirmation without blocking on 
 	await expect(deleteDialog).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Open workspace northwind-sales' })).toHaveCount(0);
 });
+
 
 test('Investigation edits autosave on exit without changing the original request', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5080,6 +4849,7 @@ test('Investigation edits autosave on exit without changing the original request
 	await expect(transcriptQuestion).toHaveCount(1);
 });
 
+
 test('workspace context read failures stay distinct from a blank note and can be retried', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5096,6 +4866,7 @@ test('workspace context read failures stay distinct from a blank note and can be
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
 	await expect(page.getByRole('alert')).toHaveCount(0);
 });
+
 
 test('Sidebar icon actions use shared compact buttons and Add repository opens Focus', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5118,6 +4889,7 @@ test('Sidebar icon actions use shared compact buttons and Add repository opens F
 	await expect(page.getByRole('button', { name: 'Open workspace board' })).toHaveCount(0);
 });
 
+
 test('Titlebar Fella actions use shared buttons and remain clickable', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5136,6 +4908,7 @@ test('Titlebar Fella actions use shared buttons and remain clickable', async ({ 
 	await expandSidebar.click();
 	await expect(page.getByRole('button', { name: 'Collapse sidebar' })).toBeVisible();
 });
+
 
 test('Sidebar workspace tools use shared buttons and preserve Investigation and project actions', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5172,6 +4945,7 @@ test('Sidebar workspace tools use shared buttons and preserve Investigation and 
 	await expect(page.getByRole('button', { name: 'Open project Sales review' })).toBeVisible();
 });
 
+
 test('Sidebar workspace title stays clear of the hover new-conversation action', async ({ page }) => {
 	const workspaceName = 'quarterly-revenue-analysis-workspace-with-a-long-name';
 	const longFolder = {
@@ -5199,6 +4973,7 @@ test('Sidebar workspace title stays clear of the hover new-conversation action',
 	expect(actionBounds).not.toBeNull();
 	expect(titleBounds.x + titleBounds.width + 4).toBeLessThanOrEqual(actionBounds.x);
 });
+
 
 test('Sidebar conversation actions use shared buttons and Input, cancel rename, and delete history', async ({ page }) => {
 	await installDesktopMock(page, { seedUnavailableConversation: true });
@@ -5238,6 +5013,7 @@ test('Sidebar conversation actions use shared buttons and Input, cancel rename, 
 	await expect(conversation).toHaveCount(0);
 });
 
+
 test('Investigation data catalog filters sources and opens contextual profiles', async ({ page }) => {
 	const profiledFolder = {
 		...folders[0],
@@ -5276,6 +5052,7 @@ test('Investigation data catalog filters sources and opens contextual profiles',
 	await expect(readiness.getByRole('table', { name: 'Observed field profile for sales.csv' })).toBeVisible();
 });
 
+
 test('global file search opens the matching source inside Investigation data', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5295,6 +5072,7 @@ test('global file search opens the matching source inside Investigation data', a
 	await expect(readiness.getByRole('button', { name: /sales\.csv/ })).toHaveAttribute('aria-expanded', 'true');
 });
 
+
 test('empty Investigation catalog offers a contextual folder replacement action', async ({ page }) => {
 	const emptyFolder = {
 		...folders[0],
@@ -5313,6 +5091,7 @@ test('empty Investigation catalog offers a contextual folder replacement action'
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[1].path);
 	await expect(page.getByRole('combobox', { name: 'Ask about health-journal' })).toBeVisible();
 });
+
 
 test('Analysis capabilities describe current tools and preserve the table dependency', async ({ page }) => {
 	await installDesktopMock(page);
@@ -5356,6 +5135,7 @@ test('Analysis capabilities describe current tools and preserve the table depend
 	await visualizationsAvailable.click();
 	await expect(capabilities.getByRole('switch', { name: 'Visualizations: on' })).toHaveAttribute('aria-checked', 'true');
 });
+
 
 test('Settings actions use shared buttons and folder selection still works', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -5414,6 +5194,7 @@ test('Settings actions use shared buttons and folder selection still works', asy
 	await expect.poll(() => page.evaluate(() => window.__workspaceOpenCalls)).toContain(folders[0].path);
 });
 
+
 test('CommandPalette filters and results use shared buttons without losing search behavior', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5437,6 +5218,7 @@ test('CommandPalette filters and results use shared buttons without losing searc
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 });
+
 
 test('Investigation data catalog searches and expands large source and unavailable-file lists', async ({ page }) => {
 	const paginatedFolders = [...folders];
@@ -5492,6 +5274,7 @@ test('Investigation data catalog searches and expands large source and unavailab
 	await expect(skippedFiles.locator('li')).toHaveCount(105);
 });
 
+
 test('Project title and wiki use shared editing controls and retain saved content', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5516,6 +5299,7 @@ test('Project title and wiki use shared editing controls and retain saved conten
 		'Net revenue excludes refunds and chargebacks.'
 	);
 });
+
 
 test('Projects retain stable Finding and analysis-artifact references without copying their content', async ({ page }) => {
 	const references = [
@@ -5551,6 +5335,7 @@ test('Projects retain stable Finding and analysis-artifact references without co
 	expect(storedProjects[0]).not.toHaveProperty('findings');
 	expect(storedProjects[0]).not.toHaveProperty('artifacts');
 });
+
 
 test('Projects curate Findings, visualizations, definitions, and open Questions by canonical reference', async ({ page }) => {
 	const investigation = {
@@ -5657,6 +5442,7 @@ test('Projects curate Findings, visualizations, definitions, and open Questions 
 	expect(sourceRecords.runs[0]).toEqual(run);
 });
 
+
 test('Project actions open Investigation data and retain navigation and delete behavior', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5691,6 +5477,7 @@ test('Project actions open Investigation data and retain navigation and delete b
 	await expect(openProject).toHaveCount(0);
 });
 
+
 test('How this was analyzed uses the shared button and preserves disclosure state', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5712,6 +5499,7 @@ test('How this was analyzed uses the shared button and preserves disclosure stat
 	await expect(page.getByText('Source details were not recorded for this archived answer.')).toHaveCount(0);
 });
 
+
 test('General chat stays usable without creating or inheriting a workspace Investigation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5729,6 +5517,7 @@ test('General chat stays usable without creating or inheriting a workspace Inves
 	expect(await page.evaluate(() => window.__workspaceInvestigationEnsureCalls)).toEqual([]);
 	expect(await page.evaluate(() => window.__workspaceInvestigations())).toEqual([]);
 });
+
 
 test('a quick workspace question stays low-ceremony while keeping its answer evidence inspectable', async ({ page }) => {
 	const request = 'What were total net sales?';
@@ -5779,6 +5568,7 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 	await expect(composer).toBeVisible();
 });
 
+
 test('workspace-scoped analysis still auto-links its Investigation to the conversation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5800,6 +5590,7 @@ test('workspace-scoped analysis still auto-links its Investigation to the conver
 	expect(result.investigations).toHaveLength(1);
 	expect(result.investigations[0].conversation_id).toBe(result.ask.conversationId);
 });
+
 
 test('Evidence query disclosure uses a shared button and preserves expansion behavior', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -5830,6 +5621,7 @@ test('Evidence query disclosure uses a shared button and preserves expansion beh
 	await expect(reveal).toHaveAttribute('aria-expanded', 'false');
 	await expect(answer.locator('pre.sql')).toHaveCount(0);
 });
+
 
 test('a saved run keeps its own method and evidence inspectable after a later answer', async ({ page }) => {
 	const transcriptEvidence = {
@@ -5936,6 +5728,7 @@ test('a saved run keeps its own method and evidence inspectable after a later an
 	await expect.poll(() => page.evaluate(() => window.__analysisTurnLoadCalls)).toEqual(['fixture-turn']);
 });
 
+
 test('Transcript setup links use shared buttons and retain the sign-in action', async ({ page }) => {
 	await installDesktopMock(page, {
 		providerHealth: { reachable: false, rejected: true, models: [] }
@@ -5951,6 +5744,7 @@ test('Transcript setup links use shared buttons and retain the sign-in action', 
 	await enterKey.click();
 	await expect(page.getByText('unknown provider: openai')).toBeVisible();
 });
+
 
 test('Replay freshness uses shared status badges and rerun buttons', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -5987,6 +5781,7 @@ test('Replay freshness uses shared status badges and rerun buttons', async ({ pa
 	await expect(page.locator('.msg.assistant').last()).toContainText('Rerun is not part of this journey');
 });
 
+
 test('Replay freshness lookup errors use an alert and a working retry action', async ({ page }) => {
 	await installDesktopMock(page, { replayStatusError: true });
 	await page.goto('/');
@@ -6005,6 +5800,7 @@ test('Replay freshness lookup errors use an alert and a working retry action', a
 	await retry.click();
 	await expect.poll(() => page.evaluate(() => window.__replayStatusCalls)).toBe(2);
 });
+
 
 test('Investigation source details open beside without changing conversation scope', async ({ page }) => {
 	await installDesktopMock(page);
@@ -6025,6 +5821,7 @@ test('Investigation source details open beside without changing conversation sco
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 });
+
 
 test('Companion snapshot recovery uses a shared button and reopens the current source version', async ({ page }) => {
 	await installDesktopMock(page, {
@@ -6048,6 +5845,7 @@ test('Companion snapshot recovery uses a shared button and reopens the current s
 	await expect(companion).not.toContainText('The workspace changed after this preview was opened.');
 	await expect(companion).toContainText('Preview only · this file is not added to the conversation context.');
 });
+
 
 test('Chart disclosures use Collapsible and Open beside preserves the chart in the companion pane', async ({ page }) => {
 	await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'http://127.0.0.1:1421' });
@@ -6165,6 +5963,7 @@ test('Chart disclosures use Collapsible and Open beside preserves the chart in t
 	await expect(page.getByLabel('Chart open beside conversation')).toContainText('Monthly revenue is open beside the conversation.');
 });
 
+
 test('Suggested follow-ups use shared link buttons and submit the selected question', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -6180,6 +5979,7 @@ test('Suggested follow-ups use shared link buttons and submit the selected quest
 	await expect(page.locator('.msg.user').last()).toContainText('What else stands out?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to general.');
 });
+
 
 test('Workspace follow-ups stay in the same Investigation and conversation', async ({ page }) => {
 	await installDesktopMock(page);
@@ -6212,6 +6012,7 @@ test('Workspace follow-ups stay in the same Investigation and conversation', asy
 	expect(await page.evaluate(() => window.__workspaceInvestigations())).toHaveLength(1);
 });
 
+
 test('Workspace New conversation stays minimal and accepts a manually entered prompt', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -6231,6 +6032,7 @@ test('Workspace New conversation stays minimal and accepts a manually entered pr
 	await expect(page.locator('.msg.user').last()).toContainText('What changed over time in these files?');
 	await expect(page.locator('.msg.assistant').last()).toContainText('Scoped to C:\\FellaFixture\\northwind-sales.');
 });
+
 
 test('Companion pane close uses a shared compact button and returns to the workspace conversation', async ({ page }) => {
 	await installDesktopMock(page);

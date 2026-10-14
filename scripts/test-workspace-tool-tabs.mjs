@@ -14,15 +14,13 @@ after(() => server.close());
 test('a stale Investigation selection cannot rebind or steal another tab', () => {
 	const previous = {
 		workspaceWindows: session.workspaceWindows,
-		environments: session.environments,
-		activeEnvironmentId: session.activeEnvironmentId,
+		workspaceContexts: session.workspaceContexts,
 		conversations: session.conversations,
 		activeConversationIndex: session.activeConversationIndex,
 		activeWorkspaceId: session.activeWorkspaceId,
 		catalog: session.catalog,
 		activeInvestigationId: session.activeInvestigationId,
 		workspacePane: session.workspacePane,
-		workspaceLayoutPreset: session.workspaceLayoutPreset,
 		workspaceView: session.workspaceView,
 		workspaceToolChooserOpen: session.workspaceToolChooserOpen
 	};
@@ -35,8 +33,8 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 		const secondTab = {
 			id: 'tool-tab-2', kind: 'investigation', investigationId: 'investigation-2', conversationId: 'conversation-2'
 		};
-		const pane = {
-			id: 'test-pane', workspaceId: workspacePath, conversationId: 'conversation-2',
+		const context = {
+			workspaceId: workspacePath, conversationId: 'conversation-2',
 			workspacePane: 'investigation', workspacePaneOpen: true,
 			investigationId: 'investigation-2', workspaceToolTabs: [firstTab, secondTab],
 			activeWorkspaceToolTabId: secondTab.id
@@ -45,10 +43,7 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 			id: workspacePath, kind: 'repository', path: workspacePath,
 			catalog: { workspace: workspacePath, sources: [] }, conversationId: 'conversation-2'
 		}];
-		session.environments = [{
-			id: 'test-environment', panes: [pane], activePaneId: pane.id, layout: {}
-		}];
-		session.activeEnvironmentId = 'test-environment';
+		session.workspaceContexts = [context];
 		session.conversations = [new Conversation('conversation-1'), new Conversation('conversation-2')];
 		session.conversations[0].workspaceScope = workspacePath;
 		session.conversations[1].workspaceScope = workspacePath;
@@ -57,16 +52,15 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 		session.catalog = { workspace: workspacePath, sources: [] };
 		session.activeInvestigationId = 'investigation-2';
 		session.workspacePane = 'investigation';
-		session.workspaceLayoutPreset = 'workbench';
 		session.workspaceView = 'ask';
 		session.workspaceToolChooserOpen = false;
 
-		const originalTabs = structuredClone(pane.workspaceToolTabs);
+		const originalTabs = structuredClone(context.workspaceToolTabs);
 		session.setActiveInvestigation('investigation-1');
-		assert.deepEqual(pane.workspaceToolTabs, originalTabs);
-		assert.equal(pane.activeWorkspaceToolTabId, secondTab.id);
+		assert.deepEqual(context.workspaceToolTabs, originalTabs);
+		assert.equal(context.activeWorkspaceToolTabId, secondTab.id);
 		assert.equal(session.activeInvestigationId, secondTab.investigationId);
-		assert.equal(pane.investigationId, secondTab.investigationId);
+		assert.equal(context.investigationId, secondTab.investigationId);
 
 		// Even if a stale caller supplies the active chat alongside another
 		// Investigation ID, tab opening must not choose by the conversation side
@@ -75,8 +69,8 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 			session.openWorkspaceToolTab('investigation', 'investigation-1', 'conversation-2'),
 			null
 		);
-		assert.deepEqual(pane.workspaceToolTabs, originalTabs);
-		assert.equal(pane.activeWorkspaceToolTabId, secondTab.id);
+		assert.deepEqual(context.workspaceToolTabs, originalTabs);
+		assert.equal(context.activeWorkspaceToolTabId, secondTab.id);
 
 		// If a prior app version already changed only the saved Investigation ID,
 		// recover it from the durable conversation-to-Investigation relationship.
