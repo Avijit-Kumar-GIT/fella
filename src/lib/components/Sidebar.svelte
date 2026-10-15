@@ -9,18 +9,19 @@
 	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
 	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+	import WorkspaceEnvironment from './WorkspaceEnvironment.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
 	let {
 		onsearch,
-		onnewproject,
 		onworkspaceselect
 	}: {
 		onsearch?: () => void;
-		onnewproject?: (workspace?: string | null) => void;
 		onworkspaceselect: (id: string) => void | Promise<void>;
 	} = $props();
+
+	let sidebarMode = $state<'chats' | 'environment'>('chats');
 
 	type Repository = {
 		key: string;
@@ -30,7 +31,6 @@
 		current: boolean;
 		expanded: boolean;
 		historyOnly: boolean;
-		project: ReturnType<typeof session.projectForWorkspace>;
 	};
 
 	let list = $state<ConversationSummary[]>([]);
@@ -126,7 +126,6 @@
 					items: group.items,
 					current: active,
 					historyOnly: !!group.path && session.historyOnlyRepositoryPaths.includes(group.path),
-					project: group.path ? session.projectForWorkspace(group.path) : null,
 					expanded: expandedRepos[key] ?? (active || group.path === null)
 				};
 			});
@@ -161,13 +160,6 @@
 	function toggleExpansion(repo: Repository, event: MouseEvent): void {
 		event.stopPropagation();
 		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
-	}
-
-	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
-		expandedRepos = { ...expandedRepos, [repo.key]: true };
-		if (!(await selectRepository(repo))) return;
-		if (!repo.path) return;
-		session.setWorkspacePane('investigation');
 	}
 
 	async function addRepository(): Promise<void> {
@@ -301,6 +293,15 @@
 			<span>New conversation</span>
 		</Button>
 	</nav>
+	<div class="sidebar-mode-switch" role="group" aria-label="Sidebar view">
+		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'chats' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'chats'} onclick={() => (sidebarMode = 'chats')}>
+			<Icon name="ask" size={14} /><span>Chats</span>
+		</Button>
+		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'environment' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'environment'} onclick={() => (sidebarMode = 'environment')}>
+			<Icon name="folder" size={14} /><span>Environment</span>
+		</Button>
+	</div>
+	{#if sidebarMode === 'chats'}
 	<section class="repository-section" aria-labelledby="repositories-heading">
 		<div class="section-head">
 			<div class="nav-heading" id="repositories-heading">Workspaces</div>
@@ -406,50 +407,6 @@
 					</div>
 					{#if repo.expanded}
 						<div class="repository-contents">
-							{#if repo.path && !repo.historyOnly}
-								<div class="repository-tools" aria-label={`${repo.name} analysis tools`}>
-									<Button
-										variant="ghost"
-										class={`repository-tool${repo.current && session.workspacePaneOpen && session.workspacePane === 'investigation' ? ' active' : ''}`}
-										type="button"
-										aria-label={`Open investigation brief in ${repo.name}`}
-										aria-current={repo.current && session.workspacePaneOpen && session.workspacePane === 'investigation' ? 'page' : undefined}
-										title="Open investigation briefs"
-										onclick={() => void openRepositoryWorkspace(repo)}
-									>
-										<span class="row-slot row-icon"><Icon name="bookmark" size={16} /></span>
-										<span>Investigations</span>
-									</Button>
-								</div>
-							{/if}
-							{#if repo.path}
-								<div class="repository-tools" aria-label={`${repo.name} project`}>
-									{#if repo.project}
-										<Button
-											variant="ghost"
-											class={`repository-tool${session.workspaceView === 'project' && session.activeProjectId === repo.project.id ? ' active' : ''}`}
-											type="button"
-											title={repo.project.workspace}
-											aria-label={`Open project ${repo.project.name}`}
-											onclick={() => session.openProject(repo.project!.id)}
-										>
-										<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
-											<span>{repo.project.name}</span>
-										</Button>
-									{:else}
-										<Button
-											variant="ghost"
-											class="repository-tool project-create"
-											type="button"
-											aria-label={`Create project for ${repo.name}`}
-											onclick={() => onnewproject?.(repo.path)}
-										>
-											<span class="row-slot row-icon"><Icon name="plus" size={16} /></span>
-											<span>Add project</span>
-										</Button>
-									{/if}
-								</div>
-							{/if}
 							{#each repo.items as c (c.id)}
 								<div class="item-wrap">
 									{#if renamingId === c.id}
@@ -503,6 +460,9 @@
 			{/if}
 		</div>
 	</section>
+	{:else}
+		<WorkspaceEnvironment onopen={(source) => session.openSourceToolTab(source)} />
+	{/if}
 	<div class="sidebar-footer">
 		<Button
 			variant="ghost"
@@ -604,6 +564,31 @@
 		border-right: 1px solid var(--pane-edge);
 		overflow: hidden;
 	}
+	.sidebar-mode-switch {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 2px;
+		margin: 0 var(--space-2);
+		padding: 3px;
+		border: 1px solid var(--border);
+		border-radius: 999px;
+		background: color-mix(in srgb, var(--bg-inset) 68%, var(--sidebar-surface));
+	}
+	.sidebar-mode-switch :global(button) {
+		display: inline-flex;
+		min-width: 0;
+		min-height: 29px;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
+		padding: 0 8px;
+		border-radius: 999px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	.sidebar-mode-switch :global(button:hover) { color: var(--text); }
+	.sidebar-mode-switch :global(button.active),
+	.sidebar-mode-switch :global(button[aria-pressed='true']) { background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-xs); }
 	.header {
 		display: flex;
 		align-items: center;
@@ -845,37 +830,11 @@
 		color: var(--err);
 	}
 	.repository-contents {
-		margin: 2px 4px 5px 4px;
-		padding: 3px 5px 4px 25px;
+		margin: 2px 0 5px;
+		padding: 2px 0 4px 16px;
 		border-left: 1px solid var(--pane-edge);
-		border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-		background: color-mix(in srgb, var(--sidebar-surface) 62%, var(--workspace-canvas));
-	}
-	.repository-tools {
-		display: grid;
-		padding: 1px 0 2px;
-	}
-	.repository-contents :global(.repository-tool) {
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		height: auto;
-		min-height: 30px;
-		padding: 4px 4px 4px 0;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.repository-contents :global(.repository-tool:hover) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.repository-contents :global(.repository-tool.active) {
-		background: var(--sidebar-selected);
-		color: var(--text);
+		border-radius: 0;
+		background: transparent;
 	}
 	.repositories :global(.add-repository) {
 		display: inline-flex;

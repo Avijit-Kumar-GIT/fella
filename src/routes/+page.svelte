@@ -5,8 +5,6 @@
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
-	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
-	import ProjectView from '$lib/components/ProjectView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
@@ -22,8 +20,6 @@
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
-	let projectDialogOpen = $state(false);
-	let projectDialogWorkspace = $state<string | null>(null);
 	let dragging = $state(false);
 
 	let activeView = $derived(session.workspaceView);
@@ -124,11 +120,6 @@
 		if (!opened && session.historyOnlyRepositoryPaths.includes(id)) {
 			session.openHistoryOnlyWorkspace(id);
 		}
-	}
-
-	function openProjectDialog(workspace?: string | null): void {
-		projectDialogWorkspace = workspace ?? null;
-		projectDialogOpen = true;
 	}
 
 	function onKey(e: KeyboardEvent) {
@@ -293,7 +284,6 @@
 		{#if !session.focus && !session.sidebarCollapsed}
 			<Sidebar
 				onsearch={() => (paletteOpen = true)}
-				onnewproject={openProjectDialog}
 				onworkspaceselect={selectWorkspace}
 			/>
 		{/if}
@@ -320,9 +310,7 @@
 			<main>
 				<WorkspaceContextBar />
 				<div class="main-row">
-					{#if activeView === 'project'}
-						<ProjectView />
-					{:else if activeView === 'settings'}
+					{#if activeView === 'settings'}
 						<SettingsView />
 					{:else}
 						<div
@@ -368,7 +356,6 @@
 {/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
-<ProjectDialog bind:open={projectDialogOpen} initialWorkspace={projectDialogWorkspace} />
 
 <style>
 	.shell {
@@ -521,7 +508,7 @@
 		min-width: 0;
 		min-height: 0;
 	}
-	@container workspace-area (max-width: 1000px) {
+	@container workspace-area (max-width: 720px) {
 		.workspace-chat-layout[data-workspace-pane-open='true'],
 		.workspace-chat-layout[data-has-companion='true'] {
 			grid-template-columns: minmax(0, 1fr);

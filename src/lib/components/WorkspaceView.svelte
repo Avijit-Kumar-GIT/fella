@@ -7,6 +7,7 @@
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
 	import InvestigationBriefView from './InvestigationBriefView.svelte';
+	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
@@ -28,6 +29,10 @@
 			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
 		}
 		return null;
+	});
+	let activeSource = $derived.by(() => {
+		if (activeTab?.kind !== 'source' || !activeTab.sourcePath || !activeTab.sourceName) return null;
+		return session.catalog.sources.find((item) => item.path === activeTab.sourcePath && item.name === activeTab.sourceName) ?? null;
 	});
 
 	$effect(() => {
@@ -184,6 +189,7 @@
 
 	function tabLabel(tab: WorkspaceToolTab): string {
 		if (tab.kind === 'context') return 'Data & context';
+		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
 		return investigations.find((item) => item.id === tab.investigationId)?.title.trim() || 'Investigation';
 	}
 </script>
@@ -204,7 +210,7 @@
 							title={tabLabel(tab)}
 							onclick={() => void activateTab(tab)}
 						>
-							<Icon name={tab.kind === 'context' ? 'table' : 'bookmark'} size={14} />
+							<Icon name={tab.kind === 'context' ? 'table' : tab.kind === 'source' ? 'file' : 'bookmark'} size={14} />
 							<span>{tabLabel(tab)}</span>
 						</button>
 						<button
@@ -350,7 +356,9 @@
 	</div>
 	{:else if activeTab}
 		<div class="workspace-content" id="workspace-tool-content" role="tabpanel" aria-label={tabLabel(activeTab)}>
-			{#if activeTab.kind === 'context'}
+			{#if activeTab.kind === 'source'}
+				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} />
+			{:else if activeTab.kind === 'context'}
 				<ContextView />
 			{:else}
 				<InvestigationBriefView />

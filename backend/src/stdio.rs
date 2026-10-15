@@ -287,6 +287,7 @@ async fn dispatch(
             | "get_workspace_model"
             | "describe"
             | "sample_source"
+            | "preview_file"
             | "run_sql_direct"
             | "reindex"
             | "memory_file"
@@ -351,6 +352,11 @@ async fn dispatch(
                 .unwrap_or(5)
                 .clamp(1, 50);
             value_result(workspace_engine.sample(&name, rows))
+        }
+        "preview_file" => {
+            let name: String = required(&request.params, "name")?;
+            let (text, truncated) = workspace_engine.read_file(&name)?;
+            serialized(serde_json::json!({ "text": text, "truncated": truncated }))
         }
         "run_sql_direct" => {
             let sql: String = required(&request.params, "sql")?;

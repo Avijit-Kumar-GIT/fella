@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
+	import { session } from '$lib/session.svelte';
 	import { isRenderableChartEvidence } from '$lib/workbench';
 	import { investigationQuestionStatusDetail } from '$lib/investigation-question-status';
 	import type {
 		AnalysisTurn,
+		AnalysisTurnReplayStatus,
 		EvidenceItem,
 		Investigation,
 		InvestigationFinding,
@@ -41,6 +43,10 @@
 	let archivedConversationId = $state('');
 	let archivedConversationMessages = $state<Message[]>([]);
 	let findingCopyStatus = $state<Record<string, string>>({});
+	let freshness = $state<Record<string, AnalysisTurnReplayStatus>>({});
+	let freshnessLoading = $state(false);
+	let freshnessErrorCount = $state(0);
+	let freshnessGeneration = 0;
 	let loadedInvestigationId = '';
 	let generation = 0;
 	let transcriptMessages = $derived(
@@ -60,6 +66,69 @@
 		}
 		for (const finding of investigation.findings ?? []) ids.add(finding.analysis_turn_id);
 		return [...ids];
+	});
+	let staleQuestions = $derived(activeQuestions.filter((question) => {
+		const turnId = question.latest_analysis_turn_id;
+		const status = turnId ? freshness[turnId] : null;
+		return Boolean(status?.same_workspace && status.revision_changed);
+	}));
+	let staleFindings = $derived((investigation.findings ?? []).filter((finding) => {
+		const status = freshness[finding.analysis_turn_id];
+		return Boolean(status?.same_workspace && status.revision_changed);
+	}));
+	let freshnessUnknownCount = $derived(new Set(primaryRunIds.filter((turnId) => {
+		const status = freshness[turnId];
+		return Boolean(status?.same_workspace && !status.snapshot_available);
+	})).size);
+	let changedSourceNames = $derived([...new Set(
+		Object.values(freshness)
+			.filter((status) => status.same_workspace && status.revision_changed)
+			.flatMap((status) => status.source_changes.map((change) => `${change.kind} · ${change.name}`))
+	)].slice(0, 4));
+
+	async function checkFreshness(investigationId: string, workspaceId: string, turnIds: string[], request: number): Promise<void> {
+		const results = await Promise.all(turnIds.map(async (turnId) => {
+			try {
+				return { turnId, status: await ipc.analysisTurnReplayStatus(turnId, workspaceId), failed: false };
+			} catch {
+				return { turnId, status: null, failed: true };
+			}
+		}));
+		if (request !== freshnessGeneration || investigation.id !== investigationId) return;
+		const next: Record<string, AnalysisTurnReplayStatus> = {};
+		let errors = 0;
+		for (const result of results) {
+			if (result.status) next[result.turnId] = result.status;
+			if (result.failed) errors += 1;
+		}
+		freshness = next;
+		freshnessErrorCount = errors;
+		freshnessLoading = false;
+	}
+
+	function retryFreshness(): void {
+		const request = ++freshnessGeneration;
+		freshness = {};
+		freshnessErrorCount = 0;
+		freshnessLoading = true;
+		void checkFreshness(investigation.id, investigation.workspace_id, primaryRunIds, request);
+	}
+
+	$effect(() => {
+		const investigationId = investigation.id;
+		const workspaceId = investigation.workspace_id;
+		const ids = primaryRunIds;
+		const catalogRevision = session.catalog.revision;
+		void catalogRevision;
+		const request = ++freshnessGeneration;
+		freshness = {};
+		freshnessErrorCount = 0;
+		if (!workspaceId || !ids.length) {
+			freshnessLoading = false;
+			return;
+		}
+		freshnessLoading = true;
+		void checkFreshness(investigationId, workspaceId, ids, request);
 	});
 
 	$effect(() => {
@@ -344,7 +413,7 @@
 	}
 </script>
 
-<section class="results-view" aria-label="Current Investigation results" data-investigation-id={investigation.id}>
+<section class="results-view" class:results-has-open-questions={unresolvedQuestions.length > 0} aria-label="Current Investigation results" data-investigation-id={investigation.id}>
 	{#if hasUnsavedEdits}
 		<p class="results-warning" role="status"><Icon name="info" size={14} /> These results reflect the last saved brief, Question plan, and definitions. Save edits in Brief to include them.</p>
 	{/if}
@@ -352,6 +421,29 @@
 		<div class="results-run-errors" role="alert">
 			<p>{unavailableRunIds.length} linked run{unavailableRunIds.length === 1 ? '' : 's'} could not be loaded. Answers and visualizations may be incomplete.</p>
 			{#each unavailableRunIds as turnId (turnId)}<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(turnId)}>Retry {turnId}</Button>{/each}
+		</div>
+	{/if}
+	{#if staleQuestions.length || staleFindings.length}
+		<div class="results-freshness" role="status">
+			<Icon name="info" size={16} />
+			<div>
+				<strong>Some saved results use an older file catalog.</strong>
+				<p>{staleQuestions.length} Question answer{staleQuestions.length === 1 ? '' : 's'} and {staleFindings.length} Finding{staleFindings.length === 1 ? '' : 's'} may need review. Their original runs and source records are preserved; no analysis was rerun.{#if changedSourceNames.length} Changed sources: {changedSourceNames.join(', ')}.{/if}</p>
+				{#if staleQuestions[0]}
+					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(staleQuestions[0].id)}>Review affected Question</Button>
+				{:else if staleFindings[0]}
+					<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(staleFindings[0].analysis_turn_id)}>Review saved run</Button>
+				{/if}
+			</div>
+		</div>
+	{:else if freshnessUnknownCount || freshnessErrorCount}
+		<div class="results-freshness" role="status">
+			<Icon name="info" size={16} />
+			<div>
+				<strong>Freshness could not be confirmed for {freshnessUnknownCount + freshnessErrorCount} saved run{freshnessUnknownCount + freshnessErrorCount === 1 ? '' : 's'}.</strong>
+				<p>Older analysis records may not include a comparable source snapshot. This does not change their saved answers or evidence.</p>
+				{#if freshnessErrorCount}<Button type="button" variant="ghost" size="sm" disabled={freshnessLoading} onclick={retryFreshness}>{freshnessLoading ? 'Checking…' : 'Check again'}</Button>{/if}
+			</div>
 		</div>
 	{/if}
 	<section class="results-section" aria-labelledby="results-findings-title">
@@ -640,7 +732,7 @@
 	{/if}
 
 	<section class="results-section" aria-labelledby="results-questions-title">
-		<header class="results-section-heading"><div><h3 id="results-questions-title">Questions to resolve</h3><p>Unresolved Questions and their answers remain visible, even when the Investigation is closed.</p></div><span>{unresolvedQuestions.length}</span></header>
+		<header class="results-section-heading"><div><h3 id="results-questions-title">Questions needing review</h3><p>Open a Question to review its saved answer and next step.</p></div><span>{unresolvedQuestions.length}</span></header>
 		{#if unresolvedQuestions.length}
 			<ul class="results-questions">
 				{#each unresolvedQuestions as question (question.id)}
@@ -672,7 +764,7 @@
 		{:else if activeQuestions.length}
 			<p class="results-complete" role="status"><Icon name="check" size={16} /> All active Questions have complete, current answers.</p>
 		{:else}
-			<p class="results-empty">No active Questions are recorded for this Investigation.</p>
+			<p class="results-empty">No active Questions have been added to this Investigation.</p>
 		{/if}
 	</section>
 
@@ -697,19 +789,31 @@
 
 <style>
 	.results-view { display: grid; min-width: 0; gap: var(--space-5); padding: var(--space-4) 0; }
+	.results-view.results-has-open-questions > .results-warning,
+	.results-view.results-has-open-questions > .results-run-errors,
+	.results-view.results-has-open-questions > .results-freshness { order: 0; }
+	.results-view.results-has-open-questions > .results-section[aria-labelledby='results-questions-title'] { order: 1; }
+	.results-view.results-has-open-questions > .results-section[aria-labelledby='results-findings-title'] { order: 2; }
+	.results-view.results-has-open-questions > .results-section:not([aria-labelledby='results-questions-title']):not([aria-labelledby='results-findings-title']) { order: 3; }
 	.results-warning { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-dim); font-size: var(--fs-xs); }
 	.results-warning :global(svg) { flex: none; }
+	.results-freshness { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-2) var(--space-3); border-left: 2px solid var(--border-strong); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; background: var(--bg-inset); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.results-freshness > :global(svg) { flex: none; margin-top: 1px; color: var(--text-faint); }
+	.results-freshness > div { min-width: 0; }
+	.results-freshness strong { color: var(--text); font-weight: 600; }
+	.results-freshness p { margin: 3px 0; overflow-wrap: anywhere; }
+	.results-freshness :global(button) { margin-left: -8px; }
 	.results-run-errors { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); border: 1px solid var(--danger, #b42318); border-radius: var(--radius-sm); color: var(--danger, #b42318); font-size: var(--fs-xs); }
 	.results-run-errors p { flex: 1 1 100%; margin: 0; }
 	.results-section-heading, .results-finding-heading, .results-question-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.results-supporting h4 { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
-	.results-section { display: grid; min-width: 0; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
+	.results-section { display: grid; min-width: 0; gap: var(--space-3); padding-top: var(--space-2); }
 	.results-section-heading { align-items: center; }
 	.results-section-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.results-section-heading p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.results-section-heading > span { color: var(--text-faint); font-size: var(--fs-xs); font-variant-numeric: tabular-nums; }
-	.results-findings, .results-questions { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
-	.results-finding, .results-question { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
+	.results-findings, .results-questions { display: grid; gap: var(--space-4); margin: 0; padding: 0; list-style: none; }
+	.results-finding, .results-question { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-2) 0; }
 	.results-finding-heading { align-items: center; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 650; }
 	.results-finding-heading :global(button) { flex: none; }
 	.results-artifact-status { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -723,7 +827,7 @@
 	.results-supporting ul { margin: 0; padding-left: 1.2rem; }
 	.results-supporting > p { margin: var(--space-2) 0; overflow-wrap: anywhere; }
 	.results-supporting code { overflow-wrap: anywhere; }
-	.results-finding-context { display: grid; gap: var(--space-1); margin-top: var(--space-3); padding: var(--space-2) var(--space-3); border-left: 2px solid var(--border-strong); background: var(--bg-inset); }
+	.results-finding-context { display: grid; gap: var(--space-1); margin-top: var(--space-2); }
 	.results-finding-context > div { display: flex; flex-wrap: wrap; gap: 0 var(--space-2); }
 	.results-finding-context > div span, .results-finding-context > p { color: var(--text-faint); }
 	.results-finding-context > div strong { color: var(--text-dim); font-weight: 600; }
@@ -763,9 +867,9 @@
 	.results-artifact-lineage dt { color: var(--text-faint); }
 	.results-artifact-lineage dd { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
 	.results-artifact-lineage dd a { color: var(--link); overflow-wrap: anywhere; }
-	.results-historical { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.results-historical { padding-top: var(--space-2); }
 	.results-historical-list { display: grid; gap: var(--space-2); }
-	.results-historical-run { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.results-historical-run { display: grid; min-width: 0; gap: var(--space-2); padding: var(--space-2) 0; }
 	.results-historical-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.results-historical-heading > div { display: grid; min-width: 0; justify-items: start; gap: var(--space-1); }
 	.results-historical-heading h4 { margin: 0; font-size: var(--fs-sm); font-weight: 600; overflow-wrap: anywhere; }
@@ -786,7 +890,6 @@
 	.results-historical-evidence li :global(button) { max-width: 100%; justify-content: flex-start; text-align: left; }
 	.results-historical-evidence small { padding-left: var(--space-2); color: var(--text-faint); overflow-wrap: anywhere; }
 	.results-historical-charts { display: grid; gap: var(--space-2); }
-	.results-question[data-question-status='blocked'] { border-color: var(--danger, #b42318); }
 	.results-question-heading { align-items: center; justify-content: flex-start; }
 	.results-question-heading strong { min-width: 0; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.results-question > p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }

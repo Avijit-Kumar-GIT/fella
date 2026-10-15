@@ -11,7 +11,7 @@
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
-	import type { ConversationSummary, Project, SourceInfo } from '$lib/types';
+	import type { ConversationSummary, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 
 	let { open = $bindable(false), onpick }: { open?: boolean; onpick: (cmd: string) => void } =
@@ -31,7 +31,6 @@
 		| { kind: 'repository'; path: string; name: string; count: number }
 		| { kind: 'conversation'; item: ConversationSummary }
 		| { kind: 'source'; source: SourceInfo }
-		| { kind: 'project'; project: Project }
 		| { kind: 'command'; command: string };
 	type SearchKind = SearchResult['kind'];
 	type SearchFilter = 'all' | SearchKind;
@@ -41,7 +40,6 @@
 		{ id: 'repository', label: 'Repositories' },
 		{ id: 'conversation', label: 'Conversations' },
 		{ id: 'source', label: 'Files' },
-		{ id: 'project', label: 'Projects' },
 		{ id: 'command', label: 'Actions' }
 	];
 
@@ -109,16 +107,12 @@
 			.filter((source) => includes(`${source.name} ${source.path} ${source.synopsis ?? ''}`))
 			.slice(0, 5)
 			.map((source) => ({ kind: 'source', source }));
-		const projectHits: SearchResult[] = session.projects
-			.filter((project) => includes(`${project.name} ${project.workspace} ${project.body}`))
-			.slice(0, 5)
-			.map((project) => ({ kind: 'project', project }));
 		const commandHits: SearchResult[] = matches.map((command) => ({ kind: 'command', command }));
-		return [...repositoryHits, ...conversationHits, ...sourceHits, ...projectHits, ...commandHits];
+		return [...repositoryHits, ...conversationHits, ...sourceHits, ...commandHits];
 	});
 
 	let resultGroups = $derived.by(() => {
-		const kinds: SearchKind[] = ['repository', 'conversation', 'source', 'project', 'command'];
+		const kinds: SearchKind[] = ['repository', 'conversation', 'source', 'command'];
 		return kinds
 			.filter((kind) => activeFilter === 'all' || activeFilter === kind)
 			.map((kind) => ({
@@ -185,8 +179,6 @@
 				return result.item.workspace ? baseName(result.item.workspace) : 'General';
 			case 'source':
 				return result.source.path;
-			case 'project':
-				return baseName(result.project.workspace);
 			case 'command':
 				return COMMAND_DESCRIPTIONS[result.command] ?? '';
 		}
@@ -200,8 +192,6 @@
 				return result.item.title ?? result.item.preview;
 			case 'source':
 				return result.source.name;
-			case 'project':
-				return result.project.name;
 			case 'command':
 				return result.command;
 		}
@@ -215,8 +205,6 @@
 				return `conversation:${result.item.id}`;
 			case 'source':
 				return `source:${result.source.path}`;
-			case 'project':
-				return `project:${result.project.id}`;
 			case 'command':
 				return `command:${result.command}`;
 		}
@@ -227,7 +215,7 @@
 		return current ? resultKey(current) === resultKey(result) : false;
 	}
 
-	function icon(result: SearchResult): 'repository' | 'ask' | 'file' | 'project' | 'asterisk' {
+	function icon(result: SearchResult): 'repository' | 'ask' | 'file' | 'asterisk' {
 		switch (result.kind) {
 			case 'repository':
 				return 'repository';
@@ -235,8 +223,6 @@
 				return 'ask';
 			case 'source':
 				return 'file';
-			case 'project':
-				return 'project';
 			case 'command':
 				return 'asterisk';
 		}
@@ -256,11 +242,7 @@
 				await openConversation(result.item);
 				return;
 			case 'source':
-				session.selectSource(result.source.path);
-				session.setWorkspacePane('investigation');
-				return;
-			case 'project':
-				session.openProject(result.project.id);
+				session.openSourceToolTab(result.source);
 				return;
 		}
 	}

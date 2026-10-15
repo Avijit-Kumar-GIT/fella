@@ -101,6 +101,8 @@ export const ipc = {
 		invoke<SourceInfo>('describe', { name, ...workspaceArgs(workspaceId) }),
 	sampleSource: (name: string, rows = 5, workspaceId?: string) =>
 		invoke<QueryResult>('sample_source', { name, rows, ...workspaceArgs(workspaceId) }),
+	previewFile: (name: string, workspaceId?: string) =>
+		invoke<{ text: string; truncated: boolean }>('preview_file', { name, ...workspaceArgs(workspaceId) }),
 	runSqlDirect: (sql: string, workspaceId?: string) =>
 		invoke<QueryResult>('run_sql_direct', { sql, ...workspaceArgs(workspaceId) }),
 	getSettings: () => invoke<Settings>('get_settings'),
