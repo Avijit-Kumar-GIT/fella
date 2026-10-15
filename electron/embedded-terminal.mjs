@@ -1,75 +1,109 @@
-function shellFor(platform, env) {
-	if (platform === 'win32') return env.ComSpec || env.COMSPEC || 'cmd.exe';
-	if (platform === 'darwin') return env.SHELL || '/bin/zsh';
-	return env.SHELL || '/bin/sh';
-}
-
-function shellName(shell) {
-	return shell.split(/[\\/]/).at(-1) || shell;
-}
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 
 function validDimension(value, fallback) {
 	return Number.isInteger(value) && value >= 2 && value <= 500 ? value : fallback;
 }
 
+function shellName(shellPath) {
+	return shellPath.split(/[\\/]/).at(-1) || shellPath;
+}
+
+function writeCommand(session, command) {
+	if (session.child.stdin.destroyed) return false;
+	try {
+		session.child.stdin.write(`${JSON.stringify(command)}\n`);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 /**
- * Owns interactive terminal sessions for the desktop shell. Terminal data is
- * sent only to the renderer that opened the session; it is never forwarded to
- * the analytics engine or included in app state/logging.
+ * Owns user-only shell sessions. Each session is a separate Rust PTY helper
+ * process; shell bytes travel only to the renderer that opened that session.
  */
 export class EmbeddedTerminalSessions {
 	#sessions = new Map();
 
-	constructor({ pty, platform = process.platform, env = process.env } = {}) {
-		if (!pty || typeof pty.spawn !== 'function') {
-			throw new Error('The terminal PTY provider is unavailable.');
+	constructor({ binary, spawnProcess = spawn } = {}) {
+		if (typeof binary !== 'string' || !binary.trim()) {
+			throw new Error('The Fella Rust helper is unavailable.');
 		}
-		this.pty = pty;
-		this.platform = platform;
-		this.env = env;
+		this.binary = binary;
+		this.spawnProcess = spawnProcess;
 	}
 
-	start(owner, { terminalId, workspacePath, cols, rows }) {
+	start(owner, { terminalId, workspacePath, shellPath, cols, rows }) {
 		if (!owner || owner.isDestroyed?.()) throw new Error('The terminal window is no longer available.');
 		if (typeof terminalId !== 'string' || !/^[\w-]{1,100}$/.test(terminalId)) {
-			throw new Error('The terminal session could not be started.');
+			throw new Error('The shell session could not be started.');
 		}
-		if (this.#sessions.has(terminalId)) throw new Error('That terminal session is already open.');
+		if (this.#sessions.has(terminalId)) throw new Error('That shell session is already open.');
 		if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
-			throw new Error('Choose a workspace before opening a terminal.');
+			throw new Error('Choose a workspace before opening a shell.');
+		}
+		if (typeof shellPath !== 'string' || !shellPath.trim()) {
+			throw new Error('Choose a shell before opening it.');
 		}
 
-		const shell = shellFor(this.platform, this.env);
-		const terminal = this.pty.spawn(shell, [], {
-			name: 'xterm-256color',
+		const dimensions = {
 			cols: validDimension(cols, 80),
-			rows: validDimension(rows, 24),
-			cwd: workspacePath,
-			env: { ...this.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+			rows: validDimension(rows, 24)
+		};
+		const child = this.spawnProcess(this.binary, [
+			'--terminal-session',
+			'--shell', shellPath,
+			'--cwd', workspacePath,
+			'--cols', String(dimensions.cols),
+			'--rows', String(dimensions.rows)
+		], {
+			stdio: ['pipe', 'pipe', 'pipe'],
+			windowsHide: true
 		});
-		const session = { owner, terminal, workspacePath, shell };
+		const session = {
+			owner,
+			child,
+			workspacePath,
+			shellPath,
+			started: false,
+			stderr: '',
+			lines: createInterface({ input: child.stdout }),
+			closeTimer: null
+		};
 		this.#sessions.set(terminalId, session);
-
-		terminal.onData((data) => {
-			if (this.#sessions.get(terminalId) !== session || owner.isDestroyed?.()) return;
-			owner.send('fella:terminal-data', { terminalId, data });
+		session.lines.on('line', (line) => this.#receive(terminalId, session, line));
+		child.stderr.on('data', (chunk) => {
+			session.stderr = (session.stderr + chunk.toString()).slice(-8192);
 		});
-		terminal.onExit(({ exitCode, signal }) => {
+		child.on('error', (error) => this.#fail(terminalId, session, error));
+		child.on('exit', (code, signal) => {
+			if (session.closeTimer) clearTimeout(session.closeTimer);
 			if (this.#sessions.get(terminalId) !== session) return;
-			this.#sessions.delete(terminalId);
-			if (!owner.isDestroyed?.()) {
-				owner.send('fella:terminal-exit', { terminalId, exitCode, signal });
+			if (!session.started) {
+				this.#fail(terminalId, session, new Error(this.#startupMessage(session, code, signal)));
+				return;
 			}
+			this.#finish(terminalId, session, {
+				exitCode: Number.isInteger(code) ? code : -1,
+				signal: signal ?? null
+			});
 		});
 
-		return { terminalId, cwd: workspacePath, shell: shellName(shell) };
+		return new Promise((resolve, reject) => {
+			session.resolveStart = resolve;
+			session.rejectStart = reject;
+			session.startTimer = setTimeout(() => {
+				this.#fail(terminalId, session, new Error('The selected shell did not start in time.'));
+			}, 10_000);
+			session.startTimer.unref?.();
+		});
 	}
 
 	write(owner, terminalId, data) {
 		const session = this.#ownedSession(owner, terminalId);
 		if (!session || typeof data !== 'string' || data.length > 1_000_000) return false;
-		session.terminal.write(data);
-		return true;
+		return writeCommand(session, { type: 'data', data });
 	}
 
 	resize(owner, terminalId, cols, rows) {
@@ -78,39 +112,115 @@ export class EmbeddedTerminalSessions {
 		const nextCols = validDimension(cols, 0);
 		const nextRows = validDimension(rows, 0);
 		if (!nextCols || !nextRows) return false;
-		session.terminal.resize(nextCols, nextRows);
-		return true;
+		return writeCommand(session, { type: 'resize', cols: nextCols, rows: nextRows });
 	}
 
 	close(owner, terminalId) {
 		const session = this.#ownedSession(owner, terminalId);
 		if (!session) return false;
-		this.#sessions.delete(terminalId);
-		session.terminal.kill();
+		this.#stop(terminalId, session);
 		return true;
 	}
 
 	closeForOwner(owner) {
 		for (const [terminalId, session] of this.#sessions) {
-			if (session.owner !== owner) continue;
-			this.#sessions.delete(terminalId);
-			try {
-				session.terminal.kill();
-			} catch {
-				// The shell may have exited between the lifecycle event and cleanup.
-			}
+			if (session.owner === owner) this.#stop(terminalId, session);
 		}
 	}
 
 	dispose() {
-		for (const [terminalId, session] of this.#sessions) {
-			this.#sessions.delete(terminalId);
-			try {
-				session.terminal.kill();
-			} catch {
-				// The shell may already have exited.
-			}
+		for (const [terminalId, session] of this.#sessions) this.#stop(terminalId, session);
+	}
+
+	#receive(terminalId, session, line) {
+		let message;
+		try {
+			message = JSON.parse(line);
+		} catch {
+			return;
 		}
+		if (this.#sessions.get(terminalId) !== session) return;
+		if (message.type === 'started') {
+			if (session.started) return;
+			session.started = true;
+			clearTimeout(session.startTimer);
+			session.resolveStart?.({
+				terminalId,
+				cwd: session.workspacePath,
+				shell: shellName(session.shellPath),
+				shellPath: session.shellPath
+			});
+			session.resolveStart = null;
+			session.rejectStart = null;
+			return;
+		}
+		if (message.type === 'data' && typeof message.data === 'string') {
+			if (!session.owner.isDestroyed?.()) {
+				session.owner.send('fella:terminal-data', { terminalId, data: message.data });
+			}
+			return;
+		}
+		if (message.type === 'error') {
+			this.#fail(terminalId, session, new Error(message.message || 'The shell could not be started.'));
+			return;
+		}
+		if (message.type === 'exit') {
+			this.#finish(terminalId, session, {
+				exitCode: Number.isInteger(message.exitCode) ? message.exitCode : -1,
+				signal: typeof message.signal === 'string' ? message.signal : null
+			});
+		}
+	}
+
+	#finish(terminalId, session, event) {
+		if (this.#sessions.get(terminalId) !== session) return;
+		this.#sessions.delete(terminalId);
+		session.lines.close();
+		if (!session.owner.isDestroyed?.()) {
+			session.owner.send('fella:terminal-exit', { terminalId, ...event });
+		}
+	}
+
+	#fail(terminalId, session, error) {
+		if (this.#sessions.get(terminalId) !== session) return;
+		this.#sessions.delete(terminalId);
+		clearTimeout(session.startTimer);
+		session.lines.close();
+		if (session.resolveStart) {
+			session.rejectStart?.(error);
+			session.resolveStart = null;
+			session.rejectStart = null;
+		} else if (!session.owner.isDestroyed?.()) {
+			session.owner.send('fella:terminal-exit', { terminalId, exitCode: -1, signal: null });
+		}
+		try {
+			session.child.kill();
+		} catch {
+			// The helper may already have exited.
+		}
+	}
+
+	#stop(terminalId, session) {
+		this.#sessions.delete(terminalId);
+		clearTimeout(session.startTimer);
+		session.lines.close();
+		writeCommand(session, { type: 'close' });
+		try {
+			session.child.stdin.end();
+		} catch {
+			// The helper may already have exited.
+		}
+		session.closeTimer = setTimeout(() => {
+			if (session.child.exitCode === null && session.child.signalCode === null) {
+				session.child.kill();
+			}
+		}, 2000);
+		session.closeTimer.unref?.();
+	}
+
+	#startupMessage(session, code, signal) {
+		const detail = session.stderr.trim();
+		return detail || `The shell helper exited before starting (${code ?? signal ?? 'unknown'}).`;
 	}
 
 	#ownedSession(owner, terminalId) {

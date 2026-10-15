@@ -44,7 +44,10 @@ try {
 	assert.equal(await app.evaluate(({ app: electronApp }) => electronApp.isPackaged), true);
 	await page.getByRole('combobox', { name: 'Ask a question' }).waitFor({ state: 'visible' });
 	assert.equal(await page.evaluate(() => window.fella.invoke('ping')), 'pong');
-	const terminalOutput = await page.evaluate(({ workspacePath, command }) => new Promise((resolve, reject) => {
+	const shellInfo = await page.evaluate(() => window.fella.listTerminalShells());
+	assert.ok(shellInfo.shells.length > 0, 'Packaged Fella should detect at least one installed shell.');
+	assert.ok(shellInfo.shells.some((item) => item.path === shellInfo.defaultShellPath));
+	const terminalOutput = await page.evaluate(({ workspacePath, shellPath, command }) => new Promise((resolve, reject) => {
 		let terminalId;
 		let output = '';
 		const timeout = setTimeout(() => {
@@ -56,7 +59,7 @@ try {
 			if (terminalId) window.fella.closeTerminal(terminalId);
 			resolve(output);
 		};
-		window.fella.startTerminal(workspacePath, 80, 24, (data) => {
+		window.fella.startTerminal(workspacePath, shellPath, 80, 24, (data) => {
 			output += data;
 			const markerCount = output.split('__FELLA_PTY_OK__').length - 1;
 			if (markerCount >= 2 && output.includes(workspacePath)) finish();
@@ -70,10 +73,10 @@ try {
 			clearTimeout(timeout);
 			reject(error);
 		});
-	}), { workspacePath: fixture, command: terminalCommand });
+	}), { workspacePath: fixture, shellPath: shellInfo.defaultShellPath, command: terminalCommand });
 	assert.ok(terminalOutput.includes('__FELLA_PTY_OK__'));
 	assert.ok(terminalOutput.includes(fixture));
-	console.log('Packaged Electron UI, Rust sidecar, and embedded terminal smoke passed.');
+	console.log('Packaged Electron UI, Rust sidecar, and selectable embedded shell smoke passed.');
 } finally {
 	try {
 		await app?.close();

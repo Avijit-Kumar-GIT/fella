@@ -12,7 +12,7 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
-		"electron:build": "pnpm build && cargo build --release --locked --manifest-path backend/Cargo.toml && node electron/prepare-engine.mjs && electron-rebuild -f -w node-pty",
+		"electron:build": "pnpm build && cargo build --release --locked --manifest-path backend/Cargo.toml && node electron/prepare-engine.mjs",
 		"electron:dev": "pnpm electron:build && node electron/dev.mjs",
 		"electron:run": "pnpm electron:build && electron electron/main.mjs",
 		"electron:package": "pnpm electron:build && electron-builder --publish never",
@@ -45,7 +45,6 @@
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
 	},
 	"devDependencies": {
-		"@electron/rebuild": "^4.2.1",
 		"@playwright/test": "^1.63.0",
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.63.0",
@@ -102,7 +101,6 @@
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",
 		"html-to-image": "^1.11.13",
-		"marked": "^18.0.13",
-		"node-pty": "^1.1.0"
+		"marked": "^18.0.13"
 	}
 }

@@ -86,7 +86,7 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 	}
 });
 
-test('a workspace Terminal opens one durable tool tab without replacing the active conversation', () => {
+test('a workspace Shell opens one durable tool tab without replacing the active conversation', () => {
 	const previous = {
 		workspaceWindows: session.workspaceWindows,
 		workspaceContexts: session.workspaceContexts,

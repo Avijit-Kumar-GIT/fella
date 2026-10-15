@@ -11,14 +11,20 @@ declare global {
 				path: string,
 				onProgress: (progress: WorkspaceProgress) => void
 			): Promise<Catalog>;
+			/** Installed shells detected on the host; Fella does not install shells. */
+			listTerminalShells(): Promise<{
+				shells: Array<{ path: string; name: string }>;
+				defaultShellPath: string | null;
+			}>;
 			/** Starts a user-only PTY session. Its stream is isolated from model and analytics IPC. */
 			startTerminal(
 				workspacePath: string,
+				shellPath: string,
 				cols: number,
 				rows: number,
 				onData: (data: string) => void,
-				onExit: (event: { exitCode: number; signal: number }) => void
-			): Promise<{ terminalId: string; cwd: string; shell: string }>;
+				onExit: (event: { exitCode: number; signal: string | null }) => void
+			): Promise<{ terminalId: string; cwd: string; shell: string; shellPath: string }>;
 			writeTerminal(terminalId: string, data: string): void;
 			resizeTerminal(terminalId: string, cols: number, rows: number): void;
 			closeTerminal(terminalId: string): void;

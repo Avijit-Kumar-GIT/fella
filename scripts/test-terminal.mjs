@@ -1,31 +1,42 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { PassThrough, Writable } from 'node:stream';
 import { test } from 'node:test';
 
 import { EmbeddedTerminalSessions } from '../electron/embedded-terminal.mjs';
+import { discoverTerminalShells } from '../electron/terminal-shells.mjs';
 
-function fakePty() {
-	const calls = [];
-	return {
-		calls,
-		spawn(file, args, options) {
-			const listeners = { data: null, exit: null };
-			const terminal = {
-				writeCalls: [],
-				resizeCalls: [],
-				killed: false,
-				onData(callback) { listeners.data = callback; return { dispose() {} }; },
-				onExit(callback) { listeners.exit = callback; return { dispose() {} }; },
-				write(data) { this.writeCalls.push(data); },
-				resize(cols, rows) { this.resizeCalls.push([cols, rows]); },
-				kill() { this.killed = true; },
-				emitData(data) { listeners.data?.(data); },
-				emitExit(event) { listeners.exit?.(event); }
-			};
-			calls.push({ file, args, options, terminal });
-			return terminal;
-		}
-	};
+class FakeHelper extends EventEmitter {
+	constructor() {
+		super();
+		this.stdout = new PassThrough();
+		this.stderr = new PassThrough();
+		this.exitCode = null;
+		this.signalCode = null;
+		this.commands = [];
+		this.killed = false;
+		this.stdin = new Writable({
+			write: (chunk, _encoding, callback) => {
+				this.commands.push(chunk.toString());
+				callback();
+			}
+		});
+	}
+
+	start() {
+		setImmediate(() => this.send({ type: 'started' }));
+	}
+
+	send(message) {
+		this.stdout.write(`${JSON.stringify(message)}\n`);
+	}
+
+	kill() {
+		this.killed = true;
+		this.exitCode = 1;
+		this.emit('exit', 1, null);
+		return true;
+	}
 }
 
 function fakeOwner() {
@@ -37,94 +48,156 @@ function fakeOwner() {
 	});
 }
 
-test('starts an interactive session with the selected workspace, shell, and terminal dimensions', () => {
-	for (const [platform, env, expectedShell] of [
-		['win32', { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, 'C:\\Windows\\System32\\cmd.exe'],
-		['darwin', { SHELL: '/bin/zsh' }, '/bin/zsh'],
-		['linux', { SHELL: '/usr/bin/fish' }, '/usr/bin/fish']
-	]) {
-		const pty = fakePty();
-		const sessions = new EmbeddedTerminalSessions({ pty, platform, env });
-		const owner = fakeOwner();
-		const result = sessions.start(owner, {
-			terminalId: `test-${platform}`,
-			workspacePath: '/work/northwind sales',
-			cols: 117,
-			rows: 38
-		});
+function makeSessions() {
+	const calls = [];
+	const sessions = new EmbeddedTerminalSessions({
+		binary: '/app/fella-engine',
+		spawnProcess: (file, args, options) => {
+			const child = new FakeHelper();
+			calls.push({ file, args, options, child });
+			child.start();
+			return child;
+		}
+	});
+	return { sessions, calls };
+}
 
-		assert.deepEqual(result, {
-			terminalId: `test-${platform}`,
-			cwd: '/work/northwind sales',
-			shell: expectedShell.split(/[\\/]/).at(-1)
-		});
-		assert.deepEqual(pty.calls[0], {
-			file: expectedShell,
-			args: [],
-			options: {
-				name: 'xterm-256color',
-				cols: 117,
-				rows: 38,
-				cwd: '/work/northwind sales',
-				env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
-			},
-			terminal: pty.calls[0].terminal
-		});
-	}
+test('discovers installed Windows shells and prefers the configured command shell', () => {
+	const installed = new Set([
+		'C:\\Windows\\System32\\cmd.exe',
+		'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',
+		'D:\\Tools\\pwsh.exe'
+	].map((item) => item.toLowerCase()));
+	const found = discoverTerminalShells({
+		platform: 'win32',
+		env: {
+			ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+			Path: 'D:\\Tools;C:\\Windows\\System32',
+			SystemRoot: 'C:\\Windows',
+			PATHEXT: '.COM;.EXE;.BAT;.CMD'
+		},
+		fileExists: (filePath) => installed.has(filePath.toLowerCase())
+	});
+	assert.equal(found.defaultShellPath, 'C:\\Windows\\System32\\cmd.exe');
+	assert.deepEqual(found.shells.map(({ name }) => name), ['Command Prompt', 'Windows PowerShell', 'PowerShell']);
+	assert.equal(found.shells[2].path, 'D:\\Tools\\pwsh.exe');
 });
 
-test('routes input, resize, and output only through the owning terminal session', () => {
-	const pty = fakePty();
-	const sessions = new EmbeddedTerminalSessions({ pty, platform: 'linux', env: { SHELL: '/bin/sh' } });
+test('discovers the configured Unix shell and other installed shells without adding dependencies', () => {
+	const installed = new Set(['/usr/bin/zsh', '/usr/bin/bash', '/bin/sh']);
+	const found = discoverTerminalShells({
+		platform: 'linux',
+		env: { SHELL: '/usr/bin/zsh', PATH: '/usr/bin:/bin' },
+		fileExists: (filePath) => installed.has(filePath)
+	});
+	assert.equal(found.defaultShellPath, '/usr/bin/zsh');
+	assert.deepEqual(found.shells, [
+		{ path: '/usr/bin/zsh', name: 'Zsh' },
+		{ path: '/usr/bin/bash', name: 'Bash' },
+		{ path: '/bin/sh', name: 'POSIX shell' }
+	]);
+});
+
+test('starts the selected shell with the workspace path and requested PTY dimensions', async () => {
+	const { sessions, calls } = makeSessions();
+	const owner = fakeOwner();
+	const result = await sessions.start(owner, {
+		terminalId: 'shell-one',
+		workspacePath: '/work/northwind sales',
+		shellPath: '/usr/bin/fish',
+		cols: 117,
+		rows: 38
+	});
+	assert.deepEqual(result, {
+		terminalId: 'shell-one',
+		cwd: '/work/northwind sales',
+		shell: 'fish',
+		shellPath: '/usr/bin/fish'
+	});
+	assert.equal(calls[0].file, '/app/fella-engine');
+	assert.deepEqual(calls[0].args, [
+		'--terminal-session',
+		'--shell', '/usr/bin/fish',
+		'--cwd', '/work/northwind sales',
+		'--cols', '117',
+		'--rows', '38'
+	]);
+	assert.deepEqual(calls[0].options.stdio, ['pipe', 'pipe', 'pipe']);
+	assert.equal(calls[0].options.windowsHide, true);
+});
+
+test('routes shell input, resize and output only through the owning renderer', async () => {
+	const { sessions, calls } = makeSessions();
 	const owner = fakeOwner();
 	const otherOwner = fakeOwner();
-	sessions.start(owner, {
-		terminalId: 'terminal-one',
+	await sessions.start(owner, {
+		terminalId: 'shell-one',
 		workspacePath: '/workspace',
+		shellPath: '/bin/sh',
 		cols: 80,
 		rows: 24
 	});
-	const terminal = pty.calls[0].terminal;
-
-	terminal.emitData('private shell output');
+	const child = calls[0].child;
+	child.send({ type: 'data', data: 'private shell output' });
 	assert.deepEqual(owner.messages, [{
 		channel: 'fella:terminal-data',
-		message: { terminalId: 'terminal-one', data: 'private shell output' }
+		message: { terminalId: 'shell-one', data: 'private shell output' }
 	}]);
 	assert.deepEqual(otherOwner.messages, []);
-	assert.equal(sessions.write(otherOwner, 'terminal-one', 'echo unauthorized'), false);
-	assert.equal(sessions.resize(otherOwner, 'terminal-one', 120, 40), false);
-	assert.equal(sessions.close(otherOwner, 'terminal-one'), false);
-	assert.deepEqual(terminal.writeCalls, []);
-	assert.deepEqual(terminal.resizeCalls, []);
 
-	assert.equal(sessions.write(owner, 'terminal-one', 'echo hello\r'), true);
-	assert.equal(sessions.resize(owner, 'terminal-one', 120, 40), true);
-	assert.deepEqual(terminal.writeCalls, ['echo hello\r']);
-	assert.deepEqual(terminal.resizeCalls, [[120, 40]]);
-	terminal.emitExit({ exitCode: 0, signal: 0 });
+	assert.equal(sessions.write(otherOwner, 'shell-one', 'echo unauthorized'), false);
+	assert.equal(sessions.resize(otherOwner, 'shell-one', 120, 40), false);
+	assert.equal(sessions.close(otherOwner, 'shell-one'), false);
+	assert.deepEqual(child.commands, []);
+
+	assert.equal(sessions.write(owner, 'shell-one', 'echo hello\r'), true);
+	assert.equal(sessions.resize(owner, 'shell-one', 120, 40), true);
+	assert.deepEqual(child.commands.map((line) => JSON.parse(line)), [
+		{ type: 'data', data: 'echo hello\r' },
+		{ type: 'resize', cols: 120, rows: 40 }
+	]);
+
+	child.send({ type: 'exit', exitCode: 0, signal: null });
 	assert.deepEqual(owner.messages.at(-1), {
 		channel: 'fella:terminal-exit',
-		message: { terminalId: 'terminal-one', exitCode: 0, signal: 0 }
+		message: { terminalId: 'shell-one', exitCode: 0, signal: null }
 	});
 });
 
-test('rejects invalid sessions and dimensions and closes shells with their owner', () => {
-	const pty = fakePty();
-	const sessions = new EmbeddedTerminalSessions({ pty, platform: 'linux', env: {} });
+test('rejects invalid starts and stops the shell helper when its owner closes it', async () => {
+	const { sessions, calls } = makeSessions();
 	const owner = fakeOwner();
 	assert.throws(() => sessions.start(owner, {
-		terminalId: 'bad id', workspacePath: '/workspace', cols: 80, rows: 24
+		terminalId: 'bad id', workspacePath: '/workspace', shellPath: '/bin/sh', cols: 80, rows: 24
 	}), /could not be started/);
 	assert.throws(() => sessions.start(owner, {
-		terminalId: 'terminal-one', workspacePath: ' ', cols: 80, rows: 24
+		terminalId: 'shell-one', workspacePath: ' ', shellPath: '/bin/sh', cols: 80, rows: 24
 	}), /Choose a workspace/);
+	assert.throws(() => sessions.start(owner, {
+		terminalId: 'shell-one', workspacePath: '/workspace', shellPath: ' ', cols: 80, rows: 24
+	}), /Choose a shell/);
 
-	sessions.start(owner, {
-		terminalId: 'terminal-one', workspacePath: '/workspace', cols: 0, rows: 900
+	await sessions.start(owner, {
+		terminalId: 'shell-one', workspacePath: '/workspace', shellPath: '/bin/sh', cols: 0, rows: 900
 	});
-	assert.deepEqual([pty.calls[0].options.cols, pty.calls[0].options.rows], [80, 24]);
-	sessions.closeForOwner(owner);
-	assert.equal(pty.calls[0].terminal.killed, true);
-	assert.equal(sessions.write(owner, 'terminal-one', 'ignored'), false);
+	assert.equal(sessions.write(owner, 'shell-one', 'x'.repeat(1_000_001)), false);
+	assert.equal(sessions.resize(owner, 'shell-one', 1, 501), false);
+	assert.equal(sessions.close(owner, 'shell-one'), true);
+	assert.deepEqual(calls[0].child.commands.map((line) => JSON.parse(line)), [{ type: 'close' }]);
+	assert.equal(sessions.write(owner, 'shell-one', 'ignored'), false);
+});
+
+test('surfaces a Rust helper startup error to the shell view', async () => {
+	const child = new FakeHelper();
+	const sessions = new EmbeddedTerminalSessions({
+		binary: '/app/fella-engine',
+		spawnProcess: () => {
+			setImmediate(() => child.send({ type: 'error', message: 'shell executable not found' }));
+			return child;
+		}
+	});
+	await assert.rejects(sessions.start(fakeOwner(), {
+		terminalId: 'shell-fail', workspacePath: '/workspace', shellPath: '/missing/sh', cols: 80, rows: 24
+	}), /shell executable not found/);
+	assert.equal(child.killed, true);
 });

@@ -437,14 +437,26 @@ async function installDesktopMock(
 		window.__workspaceTerminalResizes = [];
 		window.__workspaceTerminalCloses = [];
 		window.fella = {
-			startTerminal: async (path, cols, rows, onData, onExit) => {
-				window.__workspaceTerminalStarts.push({ path, cols, rows });
+			listTerminalShells: async () => ({
+				shells: [
+					{ path: 'fixture-shell', name: 'Fixture Shell' },
+					{ path: 'alternate-shell', name: 'Alternate Shell' }
+				],
+				defaultShellPath: 'fixture-shell'
+			}),
+			startTerminal: async (path, shellPath, cols, rows, onData, onExit) => {
+				window.__workspaceTerminalStarts.push({ path, shellPath, cols, rows });
 				if (window.__workspaceTerminalFailure) throw new Error('Fixture terminal launch failure');
 				const terminalId = `fixture-terminal-${window.__workspaceTerminalStarts.length}`;
 				window.__workspaceTerminalCallbacks ??= new Map();
 				window.__workspaceTerminalCallbacks.set(terminalId, { onData, onExit });
 				onData(`${path}\r\nfixture-shell> `);
-				return { terminalId, cwd: path, shell: 'fixture-shell' };
+				return {
+					terminalId,
+					cwd: path,
+					shell: shellPath === 'alternate-shell' ? 'alternate-shell' : 'fixture-shell',
+					shellPath
+				};
 			},
 			writeTerminal: (terminalId, data) => {
 				window.__workspaceTerminalWrites.push({ terminalId, data });
@@ -5151,7 +5163,7 @@ test('sidebar controls share aligned gutters and a consistent row rhythm', async
 });
 
 
-test('Terminal opens an interactive workspace shell in its tab and keeps it isolated from analysis', async ({ page }) => {
+test('Shell opens at the workspace, can switch installed shells, and stays isolated from analysis', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -5166,6 +5178,7 @@ test('Terminal opens an interactive workspace shell in its tab and keeps it isol
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
 	const start = await page.evaluate(() => window.__workspaceTerminalStarts[0]);
 	expect(start.path).toBe(folders[0].path);
+	expect(start.shellPath).toBe('fixture-shell');
 	expect(start.cols).toBeGreaterThan(2);
 	expect(start.rows).toBeGreaterThan(2);
 
@@ -5183,10 +5196,17 @@ test('Terminal opens an interactive workspace shell in its tab and keeps it isol
 	await page.getByTestId('workspace-tool-tab-terminal').click();
 	await expect(surface).toBeVisible();
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
+	await page.getByTestId('workspace-shell-picker').selectOption('alternate-shell');
+	await page.getByRole('button', { name: 'Switch shell' }).click();
+	await expect(page.locator('.terminal-location-label')).toHaveText('alternate-shell');
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(2);
+	expect(await page.evaluate(() => window.__workspaceTerminalStarts[1].shellPath)).toBe('alternate-shell');
+	// Switching shells closes the old PTY; closing the tool tab closes the new one.
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(1);
 
 	expect(await page.evaluate(() => window.__workspaceAskCalls)).toEqual([]);
-	await page.getByRole('button', { name: 'Close Terminal tab' }).click();
-	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(1);
+	await page.getByRole('button', { name: 'Close Shell tab' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(2);
 });
 
 

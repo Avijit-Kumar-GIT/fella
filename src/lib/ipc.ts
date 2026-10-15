@@ -54,18 +54,37 @@ export async function sampleWorkspacePath(): Promise<string | null> {
 	return isElectron() ? window.fella?.sampleWorkspacePath() ?? null : null;
 }
 
-/** Start an embedded, user-only terminal at the selected workspace. */
+export interface TerminalShellOption {
+	path: string;
+	name: string;
+}
+
+export interface TerminalShellList {
+	shells: TerminalShellOption[];
+	defaultShellPath: string | null;
+}
+
+/** Lists installed shells without installing or managing any shell package. */
+export async function listWorkspaceTerminalShells(): Promise<TerminalShellList> {
+	if (!isElectron() || !window.fella) {
+		throw new Error('Shell selection is available in the desktop app.');
+	}
+	return window.fella.listTerminalShells();
+}
+
+/** Start an embedded, user-only shell at the selected workspace. */
 export async function startWorkspaceTerminal(
 	workspacePath: string,
+	shellPath: string,
 	cols: number,
 	rows: number,
 	onData: (data: string) => void,
-	onExit: (event: { exitCode: number; signal: number }) => void
-): Promise<{ terminalId: string; cwd: string; shell: string }> {
+	onExit: (event: { exitCode: number; signal: string | null }) => void
+): Promise<{ terminalId: string; cwd: string; shell: string; shellPath: string }> {
 	if (!isElectron() || !window.fella) {
-		throw new Error('The embedded terminal is available in the desktop app.');
+		throw new Error('The embedded shell is available in the desktop app.');
 	}
-	return window.fella.startTerminal(workspacePath, cols, rows, onData, onExit);
+	return window.fella.startTerminal(workspacePath, shellPath, cols, rows, onData, onExit);
 }
 
 export function writeWorkspaceTerminal(terminalId: string, data: string): void {

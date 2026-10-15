@@ -193,7 +193,7 @@
 	function tabLabel(tab: WorkspaceToolTab): string {
 		if (tab.kind === 'context') return 'Data & context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
-		if (tab.kind === 'terminal') return 'Terminal';
+		if (tab.kind === 'terminal') return 'Shell';
 		return investigations.find((item) => item.id === tab.investigationId)?.title.trim() || 'Investigation';
 	}
 </script>
@@ -256,7 +256,7 @@
 			aria-hidden={!terminalActive}
 			id={terminalActive ? 'workspace-tool-content' : undefined}
 			role={terminalActive ? 'tabpanel' : undefined}
-			aria-label={terminalActive ? 'Terminal' : undefined}
+			aria-label={terminalActive ? 'Shell' : undefined}
 		>
 			{#key workspacePath}
 				<TerminalToolView active={terminalActive} />
@@ -373,7 +373,7 @@
 				>
 					<span class="workspace-tool-option-icon workspace-terminal-icon" aria-hidden="true">›_</span>
 					<span class="workspace-tool-option-copy">
-						<strong>Terminal</strong>
+						<strong>Shell</strong>
 						<small>Interactive shell at this workspace</small>
 					</span>
 					<Icon name="chevron-right" size={16} />

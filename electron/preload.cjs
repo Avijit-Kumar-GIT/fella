@@ -33,10 +33,14 @@ contextBridge.exposeInMainWorld('fella', {
 			.finally(() => listeners.delete(requestId));
 	},
 
-	startTerminal(workspacePath, cols, rows, onData, onExit) {
+	listTerminalShells() {
+		return ipcRenderer.invoke('fella:terminal-shells');
+	},
+
+	startTerminal(workspacePath, shellPath, cols, rows, onData, onExit) {
 		const terminalId = `terminal-${nextTerminalId++}`;
 		terminalListeners.set(terminalId, { onData, onExit });
-		return ipcRenderer.invoke('fella:terminal-start', { terminalId, workspacePath, cols, rows }).catch((error) => {
+		return ipcRenderer.invoke('fella:terminal-start', { terminalId, workspacePath, shellPath, cols, rows }).catch((error) => {
 			terminalListeners.delete(terminalId);
 			throw error;
 		});

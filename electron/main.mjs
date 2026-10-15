@@ -4,15 +4,15 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import * as nodePty from 'node-pty';
 import { EngineClient, assertBinary, isRegularFile } from './engine.mjs';
 import { EmbeddedTerminalSessions } from './embedded-terminal.mjs';
+import { discoverTerminalShells } from './terminal-shells.mjs';
 import { checkAndApply } from './update.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 let engine;
-const terminalSessions = new EmbeddedTerminalSessions({ pty: nodePty });
+let terminalSessions;
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -205,6 +205,7 @@ app.whenReady().then(() => {
 			mkdirSync(dataDir, { recursive: true });
 			console.info(`Fella data directory: ${dataDir}`);
 			engine = new EngineClient(binary, dataDir);
+			terminalSessions = new EmbeddedTerminalSessions({ binary });
 		} catch (error) {
 			void dialog.showErrorBox('Fella engine unavailable', String(error));
 			app.quit();
@@ -225,14 +226,22 @@ app.whenReady().then(() => {
 				}
 			})
 		);
+		ipcMain.handle('fella:terminal-shells', (event) => {
+			if (!isTrustedAppFrame(event)) throw new Error('Shell choices are only available from Fella.');
+			return discoverTerminalShells();
+		});
 		ipcMain.handle('fella:terminal-start', async (event, request) => {
-			if (!isTrustedAppFrame(event)) throw new Error('Terminal sessions are only available from Fella.');
+			if (!isTrustedAppFrame(event)) throw new Error('Shell sessions are only available from Fella.');
 			if (typeof request?.workspacePath !== 'string' || !request.workspacePath.trim()) {
-				throw new Error('Choose a workspace before opening a terminal.');
+				throw new Error('Choose a workspace before opening a shell.');
 			}
 			const canonicalPath = await realpath(request.workspacePath);
 			if (!(await stat(canonicalPath)).isDirectory()) {
 				throw new Error('The selected workspace is no longer an available folder.');
+			}
+			const availableShells = discoverTerminalShells().shells;
+			if (!availableShells.some((item) => item.path === request?.shellPath)) {
+				throw new Error('That shell is no longer available. Choose an installed shell and try again.');
 			}
 			return terminalSessions.start(event.sender, {
 				...request,
@@ -303,6 +312,6 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-	terminalSessions.dispose();
+	terminalSessions?.dispose();
 	engine?.dispose();
 });
