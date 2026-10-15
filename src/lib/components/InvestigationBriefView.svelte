@@ -2900,20 +2900,24 @@
 		width: max-content;
 		max-width: 100%;
 		margin: 0 0 var(--space-4);
-		overflow: visible;
+		overflow-x: auto;
+		overflow-y: hidden;
+		scrollbar-width: thin;
+		scrollbar-color: var(--border-strong) transparent;
+		overscroll-behavior-x: contain;
 		background: var(--bg);
 	}
+	.investigation-nav::-webkit-scrollbar { height: 4px; }
+	.investigation-nav::-webkit-scrollbar-track { background: transparent; }
+	.investigation-nav::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--border-strong); }
 	@container investigation-pane (max-width: 430px) {
 		.investigation-nav {
-			display: grid;
-			grid-template-columns: repeat(3, minmax(0, 1fr));
 			width: 100%;
 		}
+		.investigation-nav > .fella-pill-nav-item { padding-inline: 6px; }
 	}
 	@container investigation-pane (max-width: 280px) {
-		.investigation-nav {
-			grid-template-columns: repeat(2, minmax(0, 1fr));
-		}
+		.investigation-nav > .fella-pill-nav-item { padding-inline: 4px; }
 	}
 	.investigation-tab-panel { min-width: 0; }
 	.investigation-tab-panel[hidden] { display: none; }
