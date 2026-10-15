@@ -5164,7 +5164,13 @@ test('sidebar controls share aligned gutters and a consistent row rhythm', async
 
 
 test('Shell opens at the workspace, can switch installed shells, and stays isolated from analysis', async ({ page }) => {
-	await installDesktopMock(page);
+	const workspacePath = '\\\\?\\C:\\FellaFixture\\northwind-sales';
+	const shellWorkspace = {
+		...folders[0],
+		path: workspacePath,
+		catalog: { ...folders[0].catalog, workspace: workspacePath }
+	};
+	await installDesktopMock(page, { fixtureFolders: [shellWorkspace, ...folders.slice(1)] });
 	await page.goto('/');
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
@@ -5173,11 +5179,13 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 
 	const surface = page.getByTestId('terminal-surface');
 	await expect(surface.locator('.xterm')).toBeVisible();
-	await expect(page.locator('.terminal-location code')).toHaveText(folders[0].path);
-	await expect(page.locator('.terminal-location-label')).toHaveText('fixture-shell');
+	await expect(page.locator('.terminal-location code')).toHaveText('C:\\FellaFixture\\northwind-sales');
+	await expect(page.locator('.terminal-location code')).toHaveAttribute('title', workspacePath);
+	await expect(page.locator('.terminal-connection')).toHaveText('Connected');
+	await expect(page.locator('.terminal-toolbar')).toHaveCSS('flex-direction', 'column');
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
 	const start = await page.evaluate(() => window.__workspaceTerminalStarts[0]);
-	expect(start.path).toBe(folders[0].path);
+	expect(start.path).toBe(workspacePath);
 	expect(start.shellPath).toBe('fixture-shell');
 	expect(start.cols).toBeGreaterThan(2);
 	expect(start.rows).toBeGreaterThan(2);
@@ -5196,9 +5204,11 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 	await page.getByTestId('workspace-tool-tab-terminal').click();
 	await expect(surface).toBeVisible();
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
+	await expect(page.getByTestId('workspace-shell-picker')).toHaveValue('fixture-shell');
 	await page.getByTestId('workspace-shell-picker').selectOption('alternate-shell');
 	await page.getByRole('button', { name: 'Switch shell' }).click();
-	await expect(page.locator('.terminal-location-label')).toHaveText('alternate-shell');
+	await expect(page.locator('.terminal-connection')).toHaveText('Connected');
+	await expect(page.getByTestId('workspace-shell-picker')).toHaveValue('alternate-shell');
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(2);
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts[1].shellPath)).toBe('alternate-shell');
 	// Switching shells closes the old PTY; closing the tool tab closes the new one.

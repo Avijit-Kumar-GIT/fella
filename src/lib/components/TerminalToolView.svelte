@@ -3,6 +3,7 @@
 	import { Terminal } from '@xterm/xterm';
 	import '@xterm/xterm/css/xterm.css';
 	import { onDestroy, onMount } from 'svelte';
+	import Icon from './Icon.svelte';
 	import {
 		closeWorkspaceTerminal,
 		listWorkspaceTerminalShells,
@@ -12,15 +13,23 @@
 	} from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 
+	const CONNECTION_LABELS = {
+		starting: 'Starting',
+		connected: 'Connected',
+		exited: 'Exited',
+		error: 'Unavailable',
+		unavailable: 'No shell'
+	} as const;
+
 	let { active = true } = $props<{ active?: boolean }>();
 	let workspacePath = $derived(session.catalog.workspace);
 	let terminalHost: HTMLDivElement;
 	let terminalState = $state<'starting' | 'connected' | 'exited' | 'error' | 'unavailable'>('starting');
 	let error = $state('');
-	let currentShell = $state('');
 	let currentShellPath = $state('');
 	let selectedShellPath = $state('');
 	let shellOptions = $state<Array<{ path: string; name: string }>>([]);
+	let connectionLabel = $derived(CONNECTION_LABELS[terminalState]);
 	let terminalId = '';
 	let generation = 0;
 	let destroyed = false;
@@ -48,6 +57,11 @@
 			cursorAccent: color('--bg-inset', '#1e1e22'),
 			selectionBackground: 'rgba(0, 128, 128, 0.32)'
 		};
+	}
+
+	function displayWorkspacePath(path: string | null): string {
+		if (!path) return '';
+		return path.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
 	}
 
 	async function launchTerminal(): Promise<void> {
@@ -81,7 +95,6 @@
 				return;
 			}
 			terminalId = result.terminalId;
-			currentShell = result.shell;
 			currentShellPath = result.shellPath;
 			terminalState = exitedWhileStarting ? 'exited' : 'connected';
 			requestAnimationFrame(() => {
@@ -190,11 +203,20 @@
 
 <section class="terminal-view" aria-label="Shell">
 	<header class="terminal-toolbar">
-		<div class="terminal-location" title={workspacePath ?? ''}>
-			<span class="terminal-state-dot" class:connected={terminalState === 'connected'} aria-hidden="true"></span>
-			<span class="terminal-location-label">{terminalState === 'connected' ? currentShell : 'Shell'}</span>
+		<div class="terminal-location">
+			<span class="terminal-connection" role="status">
+				<span
+					class="terminal-state-dot"
+					class:connected={terminalState === 'connected'}
+					class:starting={terminalState === 'starting'}
+					aria-hidden="true"
+				></span>
+				{connectionLabel}
+			</span>
 			{#if workspacePath}
-				<code>{workspacePath}</code>
+				<span class="terminal-location-divider" aria-hidden="true"></span>
+				<Icon name="folder" size={14} />
+				<code title={workspacePath}>{displayWorkspacePath(workspacePath)}</code>
 			{/if}
 		</div>
 		<div class="shell-controls">
@@ -218,9 +240,11 @@
 			<button
 				class="terminal-restart"
 				type="button"
+				aria-label={currentShellPath && currentShellPath !== selectedShellPath ? 'Switch shell' : 'Restart shell'}
 				disabled={terminalState === 'starting' || !workspacePath || !selectedShellPath}
 				onclick={() => void restartTerminal()}
 			>
+				<Icon name="refresh" size={14} />
 				{currentShellPath && currentShellPath !== selectedShellPath ? 'Switch shell' : 'Restart shell'}
 			</button>
 		</div>
@@ -242,21 +266,32 @@
 		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
-		background: var(--bg);
+		background: var(--workspace-canvas);
+		container-type: inline-size;
 	}
 	.terminal-toolbar {
 		display: flex;
-		min-height: 42px;
+		min-height: 48px;
 		flex: none;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
 		padding: 0 var(--space-4);
 		border-bottom: 1px solid var(--pane-edge);
+		background: var(--pane-head);
 	}
 	.terminal-location {
 		display: flex;
 		min-width: 0;
+		align-items: center;
+		gap: var(--space-2);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		white-space: nowrap;
+	}
+	.terminal-connection {
+		display: inline-flex;
+		flex: none;
 		align-items: center;
 		gap: var(--space-2);
 		color: var(--text-dim);
@@ -269,29 +304,46 @@
 		border-radius: 50%;
 		background: var(--text-faint);
 	}
-	.terminal-state-dot.connected { background: #43a879; }
-	.terminal-location-label { flex: none; color: var(--text); font-weight: 560; }
+	.terminal-state-dot.connected {
+		background: var(--ok);
+		box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 13%, transparent);
+	}
+	.terminal-state-dot.starting { background: var(--brand); animation: terminal-pulse 1.3s ease-in-out infinite; }
+	.terminal-location-divider {
+		width: 1px;
+		height: 16px;
+		flex: none;
+		margin: 0 2px;
+		background: var(--pane-edge);
+	}
+	.terminal-location :global(svg.icon) { color: var(--text-faint); }
 	.terminal-location code {
 		overflow: hidden;
+		min-width: 0;
 		color: var(--text-faint);
 		font-family: var(--mono);
 		font-size: 11px;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		unicode-bidi: plaintext;
 	}
 	.terminal-restart {
+		display: inline-flex;
 		min-height: 28px;
 		flex: none;
+		align-items: center;
+		justify-content: center;
+		gap: 6px;
 		padding: 0 10px;
 		border: 1px solid var(--pane-edge);
-		border-radius: 999px;
-		background: transparent;
-		color: var(--text-dim);
+		border-radius: var(--radius-chip);
+		background: var(--bg-raised);
+		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-xs);
 		cursor: pointer;
 	}
-	.terminal-restart:hover:not(:disabled) { background: var(--bg-inset); color: var(--text); }
+	.terminal-restart:hover:not(:disabled) { border-color: var(--pane-edge-active); background: var(--bg-inset); }
 	.terminal-restart:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 	.terminal-restart:disabled { cursor: default; opacity: 0.5; }
 	.shell-controls { display: flex; flex: none; align-items: center; gap: var(--space-2); }
@@ -301,8 +353,8 @@
 		min-height: 28px;
 		padding: 0 26px 0 9px;
 		border: 1px solid var(--pane-edge);
-		border-radius: 999px;
-		background: var(--bg);
+		border-radius: var(--radius-chip);
+		background: var(--bg-raised);
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-xs);
@@ -314,8 +366,12 @@
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
-		padding: 14px 16px;
+		margin: var(--space-3);
+		padding: var(--space-3) var(--space-4);
 		overflow: hidden;
+		border: 1px solid var(--pane-edge);
+		border-radius: var(--radius-window);
+		background: var(--bg-inset);
 	}
 	.terminal-surface :global(.xterm) { height: 100%; }
 	.terminal-surface :global(.xterm-viewport) { scrollbar-width: thin; }
@@ -329,4 +385,22 @@
 		overflow-wrap: anywhere;
 	}
 	.terminal-unavailable { color: var(--text-faint); }
+	@keyframes terminal-pulse {
+		50% { opacity: 0.45; }
+	}
+	@container (max-width: 720px) {
+		.terminal-toolbar {
+			align-items: stretch;
+			flex-direction: column;
+			gap: var(--space-2);
+			padding: var(--space-2) var(--space-3);
+		}
+		.terminal-location { width: 100%; min-height: 24px; }
+		.terminal-location code { flex: 1; }
+		.shell-controls { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+		.terminal-surface { margin: var(--space-2); padding: var(--space-2); border-radius: var(--radius-md); }
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.terminal-state-dot.starting { animation: none; }
+	}
 </style>
