@@ -3422,7 +3422,10 @@ test('saved Investigation definitions are revisioned, attached to later asks, an
 	await expect(page.locator('.definition-disclosure > summary')).toContainText('Definitions & assumptions');
 
 	await page.getByRole('button', { name: 'Add definition or assumption' }).click();
-	await page.getByRole('combobox', { name: 'Context type 1' }).selectOption('assumption');
+	const contextType = page.getByRole('button', { name: 'Context type 1' });
+	await expect(contextType).toHaveAttribute('aria-haspopup', 'listbox');
+	await contextType.click();
+	await page.getByRole('option', { name: 'Assumption' }).click();
 	const note = page.getByRole('textbox', { name: 'Context note 1' });
 	await note.fill('A missing cancellation date means the account is still active.');
 	await waitForDefinitionsSaved(page);
@@ -4464,7 +4467,8 @@ test('Finding revisions preserve prior versions and compare the supporting run c
 	await expect(attempts).toHaveCount(2);
 	await attempts.nth(1).click();
 	const secondCapture = page.getByRole('region', { name: 'Saved analysis run' }).locator('.finding-capture');
-	await secondCapture.getByRole('combobox', { name: 'Revise existing Finding' }).selectOption(findingId);
+	await secondCapture.getByRole('button', { name: 'Revise existing Finding' }).click();
+	await page.getByRole('option', { name: /Finding 1 · Net sales were \$120 before refunds/ }).click();
 	await secondCapture.getByRole('textbox', { name: 'Finding claim' }).fill('Net sales were $102 after refund adjustments.');
 	await secondCapture.getByRole('textbox', { name: 'Finding caveats' }).fill('The refreshed export includes refund adjustments.');
 	await secondCapture.getByRole('textbox', { name: 'Finding assumptions' }).fill('Order IDs remain stable across exports.');
@@ -5171,7 +5175,9 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 		catalog: { ...folders[0].catalog, workspace: workspacePath }
 	};
 	await installDesktopMock(page, { fixtureFolders: [shellWorkspace, ...folders.slice(1)] });
+	await page.emulateMedia({ colorScheme: 'dark' });
 	await page.goto('/');
+	await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
 	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
@@ -5184,10 +5190,29 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 	});
 	expect(terminalFont).toContain('Geist Mono');
 	expect(terminalFont).not.toContain('var(--mono)');
-	await expect(page.locator('.terminal-location code')).toHaveText('C:\\FellaFixture\\northwind-sales');
-	await expect(page.locator('.terminal-location code')).toHaveAttribute('title', workspacePath);
-	await expect(page.locator('.terminal-connection')).toHaveText('Connected');
-	await expect(page.locator('.terminal-toolbar')).toHaveCSS('flex-direction', 'column');
+	await expect(page.locator('.terminal-location, .terminal-connection')).toHaveCount(0);
+	await expect(page.locator('.terminal-toolbar')).toHaveCSS('flex-direction', 'row');
+	const shellPicker = page.getByTestId('workspace-shell-picker');
+	await expect(shellPicker).toHaveRole('button');
+	await shellPicker.click();
+	const shellMenu = page.getByRole('menu');
+	await expect(shellMenu).toBeVisible();
+	const menuColors = await shellMenu.evaluate((menu) => ({
+		background: getComputedStyle(menu).backgroundColor,
+		appSurface: (() => {
+			const probe = document.createElement('span');
+			probe.style.backgroundColor = 'var(--bg-raised)';
+			menu.append(probe);
+			const value = getComputedStyle(probe).backgroundColor;
+			probe.remove();
+			return value;
+		})()
+	}));
+	expect(menuColors.background).toBe(menuColors.appSurface);
+	expect(menuColors.background).not.toBe('rgb(255, 255, 255)');
+	await expect(shellMenu.getByRole('menuitemradio', { name: 'Fixture Shell' })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await expect(shellMenu).toHaveCount(0);
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
 	const start = await page.evaluate(() => window.__workspaceTerminalStarts[0]);
 	expect(start.path).toBe(workspacePath);
@@ -5206,22 +5231,40 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 	await expect(page.locator('#workspace-tool-content')).toBeVisible();
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
 	expect(await page.evaluate(() => window.__workspaceTerminalCloses)).toEqual([]);
+	await page.getByTestId('workspace-tool-add').click();
+	await page.getByTestId('workspace-tool-context').click();
+	await expect(page.getByRole('tab', { name: 'Data & context 2' })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Data & context 1' })).toBeVisible();
+	await page.getByRole('button', { name: 'Close Data & context 2 tab' }).click();
 	await page.getByTestId('workspace-tool-tab-terminal').click();
 	await expect(surface).toBeVisible();
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
-	await expect(page.getByTestId('workspace-shell-picker')).toHaveValue('fixture-shell');
-	await page.getByTestId('workspace-shell-picker').selectOption('alternate-shell');
+	await expect(shellPicker).toHaveAttribute('aria-label', 'Shell: Fixture Shell');
+	await shellPicker.click();
+	await page.getByRole('menuitemradio', { name: 'Alternate Shell' }).click();
+	await expect(shellPicker).toHaveAttribute('aria-label', 'Shell: Alternate Shell');
 	await page.getByRole('button', { name: 'Switch shell' }).click();
-	await expect(page.locator('.terminal-connection')).toHaveText('Connected');
-	await expect(page.getByTestId('workspace-shell-picker')).toHaveValue('alternate-shell');
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(2);
 	expect(await page.evaluate(() => window.__workspaceTerminalStarts[1].shellPath)).toBe('alternate-shell');
-	// Switching shells closes the old PTY; closing the tool tab closes the new one.
+	// Changing the selected shell restarts only this tab's process.
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(1);
+	await page.getByTestId('workspace-tool-add').click();
+	await page.getByTestId('workspace-tool-terminal').click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(3);
+	await expect(page.getByRole('tab', { name: 'Shell 1' })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Shell 2' })).toBeVisible();
+	const terminalSurfaces = page.getByTestId('terminal-surface');
+	await expect(terminalSurfaces).toHaveCount(2);
+	await expect(terminalSurfaces.nth(1)).toBeVisible();
+	await page.getByRole('tab', { name: 'Shell 1' }).click();
+	await expect(terminalSurfaces.nth(0)).toBeVisible();
+	await expect(terminalSurfaces.nth(1)).toBeHidden();
 
 	expect(await page.evaluate(() => window.__workspaceAskCalls)).toEqual([]);
-	await page.getByRole('button', { name: 'Close Shell tab' }).click();
+	await page.getByRole('button', { name: 'Close Shell 2 tab' }).click();
 	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(2);
+	await page.getByRole('button', { name: 'Close Shell tab' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(3);
 });
 
 

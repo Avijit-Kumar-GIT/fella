@@ -4,6 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Dialog } from '$lib/components/ui/dialog';
+	import { Select } from '$lib/components/ui/select';
 	import { analyzeInvestigationQuestion } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -1807,11 +1808,17 @@
 								<p>A message uses explicit revision or source-scope language. Review it before updating the brief.</p>
 							</div>
 							<label for="proposal-target">Apply as</label>
-							<select id="proposal-target" bind:value={proposalTarget} disabled={saving}>
-								<option value="goal">New goal</option>
-								<option value="desired_output">Desired output</option>
-								<option value="constraint">Additional constraint</option>
-							</select>
+							<Select
+								id="proposal-target"
+								value={proposalTarget}
+								options={[
+									{ value: 'goal', label: 'New goal' },
+									{ value: 'desired_output', label: 'Desired output' },
+									{ value: 'constraint', label: 'Additional constraint' }
+								]}
+								disabled={saving}
+								onValueChange={(value) => (proposalTarget = value as BriefProposalTarget)}
+							/>
 							<Textarea id="proposal-text" class="brief-field proposal-field" bind:value={proposalText} disabled={saving} aria-label="Proposed brief update" />
 							<div class="proposal-actions">
 								<Button type="button" disabled={saving || !proposalText.trim()} onclick={() => void reviewProposal(true)}>
@@ -1899,10 +1906,17 @@
 												<Button type="button" variant="ghost" aria-label="Remove context note {index + 1}" disabled={saving} onclick={() => removeDefinition(definition.id)}>Remove</Button>
 											</div>
 										</div>
-										<select id="definition-kind-{definition.id}" aria-label="Context type {index + 1}" bind:value={definition.kind} disabled={saving}>
-											<option value="definition">Definition</option>
-											<option value="assumption">Assumption</option>
-										</select>
+										<Select
+											id="definition-kind-{definition.id}"
+											ariaLabel="Context type {index + 1}"
+											value={definition.kind}
+											options={[
+												{ value: 'definition', label: 'Definition' },
+												{ value: 'assumption', label: 'Assumption' }
+											]}
+											disabled={saving}
+											onValueChange={(value) => (definition.kind = value as typeof definition.kind)}
+										/>
 										<Textarea
 											id="definition-text-{definition.id}"
 											class="definition-field"
@@ -2687,26 +2701,36 @@
 						<label for="finding-assumptions-{openAnalysisTurn.id}">Assumptions <span>(optional, one per line)</span></label>
 						<Textarea id="finding-assumptions-{openAnalysisTurn.id}" bind:value={findingAssumptionsDraft} oninput={() => (findingDraftTouched = true)} aria-label="Finding assumptions" class="finding-capture-field finding-notes-field" disabled={savingFinding} />
 						<label for="finding-question-{openAnalysisTurn.id}">Question this Finding answers</label>
-						<select id="finding-question-{openAnalysisTurn.id}" aria-label="Question for Finding" bind:value={findingQuestionDraft} onchange={() => { findingDraftTouched = true; findingRevisionTargetDraft = ''; findingRevisionNoteDraft = ''; }} disabled={savingFinding || questionsDirty || !(selected.questions?.length)}>
-							<option value="">Select a Question</option>
-							{#each selected.questions ?? [] as question (question.id)}
-								<option value={question.id}>{question.text}</option>
-							{/each}
-						</select>
+						<Select
+							id="finding-question-{openAnalysisTurn.id}"
+							ariaLabel="Question for Finding"
+							value={findingQuestionDraft}
+							emptyOptionLabel="Select a Question"
+							options={(selected.questions ?? []).map((question) => ({ value: question.id, label: question.text }))}
+							disabled={savingFinding || questionsDirty || !(selected.questions?.length)}
+							onValueChange={(value) => {
+								findingQuestionDraft = value;
+								findingDraftTouched = true;
+								findingRevisionTargetDraft = '';
+								findingRevisionNoteDraft = '';
+							}}
+						/>
 						{#if (selected.findings ?? []).some((finding) => finding.question_id === findingQuestionDraft)}
 							<label for="finding-revision-target-{openAnalysisTurn.id}">Revise an existing Finding <span>(optional)</span></label>
-							<select
+							<Select
 								id="finding-revision-target-{openAnalysisTurn.id}"
-								aria-label="Revise existing Finding"
+								ariaLabel="Revise existing Finding"
 								value={findingRevisionTargetDraft}
-								onchange={(event) => selectFindingRevisionTarget(event.currentTarget.value)}
+								emptyOptionLabel="Save as a new Finding"
+								options={(selected.findings ?? [])
+									.filter((finding) => finding.question_id === findingQuestionDraft)
+									.map((finding) => ({
+										value: finding.id,
+										label: `Finding ${finding.revision ?? 1} · ${finding.claim.slice(0, 90)}`
+									}))}
 								disabled={savingFinding || questionsDirty}
-							>
-								<option value="">Save as a new Finding</option>
-								{#each (selected.findings ?? []).filter((finding) => finding.question_id === findingQuestionDraft) as finding (finding.id)}
-									<option value={finding.id}>Finding {finding.revision ?? 1} · {finding.claim.slice(0, 90)}</option>
-								{/each}
-							</select>
+								onValueChange={selectFindingRevisionTarget}
+							/>
 						{/if}
 						{#if findingRevisionTargetDraft}
 							<label for="finding-revision-note-{openAnalysisTurn.id}">Why this changed <span>(optional)</span></label>
@@ -3051,7 +3075,7 @@
 	.proposal-copy h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.proposal-copy p { margin-top: 3px; color: var(--text-dim); font-size: var(--fs-xs); }
 	.brief-proposal label { margin: 0; font-size: var(--fs-xs); }
-	.brief-proposal select { min-width: 190px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+	.brief-proposal :global(.fella-ui-select-trigger) { min-width: 190px; }
 	.brief-proposal :global(.proposal-field) { grid-column: 1 / -1; min-height: 78px; }
 	.proposal-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: var(--space-2); }
 	h2 { font-size: var(--fs-lg); font-weight: 650; }
@@ -3077,7 +3101,7 @@
 	.definition-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.definition-item-meta { color: var(--text-faint); font-size: var(--fs-xs); }
 	.definition-item-meta :global(button) { min-height: 30px; }
-	.definition-item select { width: max-content; min-width: 140px; padding: 6px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; }
+	.definition-item :global(.fella-ui-select-trigger) { width: max-content; min-width: 140px; }
 	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.definition-empty { margin: 0; }
 	.question-editor { display: grid; gap: var(--space-4); padding: var(--space-4) 0; margin-top: var(--space-2); }
@@ -3243,7 +3267,7 @@
 	.finding-capture :global(.finding-capture-field) { width: 100%; min-height: 66px; resize: vertical; }
 	.finding-capture :global(.finding-notes-field) { min-height: 52px; }
 	.finding-card :global(.finding-revision-note) { min-height: 52px; }
-	.finding-capture select { width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: var(--fs-sm); }
+	.finding-capture :global(.fella-ui-select-trigger) { width: 100%; min-width: 0; font-size: var(--fs-sm); }
 	.finding-evidence-select { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); margin: var(--space-1) 0 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
 	.finding-evidence-select legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
 	.finding-evidence-select label { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; font-size: var(--fs-xs); cursor: pointer; }

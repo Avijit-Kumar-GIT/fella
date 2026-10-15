@@ -86,7 +86,7 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 	}
 });
 
-test('a workspace Shell opens one durable tool tab without replacing the active conversation', () => {
+test('workspace Shell tabs reuse by default and allow an explicit independent instance', () => {
 	const previous = {
 		workspaceWindows: session.workspaceWindows,
 		workspaceContexts: session.workspaceContexts,
@@ -138,6 +138,13 @@ test('a workspace Shell opens one durable tool tab without replacing the active 
 		assert.equal(context.workspacePane, 'context');
 		assert.equal(session.activeChat.id, conversation.id);
 		assert.equal(session.catalog.workspace, workspacePath);
+
+		const secondInstance = session.openWorkspaceToolTab('terminal', null, null, true);
+		assert.ok(secondInstance);
+		assert.notEqual(secondInstance.id, first?.id);
+		assert.equal(context.workspaceToolTabs.length, 2);
+		assert.equal(context.activeWorkspaceToolTabId, secondInstance.id);
+		assert.equal(session.activeChat.id, conversation.id);
 	} finally {
 		Object.assign(session, previous);
 	}

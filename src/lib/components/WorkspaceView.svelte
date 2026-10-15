@@ -20,8 +20,7 @@
 	let selectionRequest = 0;
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
-	let hasTerminalTab = $derived(session.workspaceToolTabs.some((tab) => tab.kind === 'terminal'));
-	let terminalActive = $derived(activeTab?.kind === 'terminal' && !session.workspaceToolChooserOpen);
+	let terminalTabs = $derived(session.workspaceToolTabs.filter((tab) => tab.kind === 'terminal'));
 	let currentInvestigation = $derived.by(() => {
 		if (activeTab?.kind === 'investigation' && activeTab.investigationId) {
 			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
@@ -190,11 +189,18 @@
 		}
 	}
 
-	function tabLabel(tab: WorkspaceToolTab): string {
+	function baseTabLabel(tab: WorkspaceToolTab): string {
 		if (tab.kind === 'context') return 'Data & context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
 		if (tab.kind === 'terminal') return 'Shell';
 		return investigations.find((item) => item.id === tab.investigationId)?.title.trim() || 'Investigation';
+	}
+
+	function tabLabel(tab: WorkspaceToolTab): string {
+		const label = baseTabLabel(tab);
+		const matchingTabs = session.workspaceToolTabs.filter((item) => baseTabLabel(item) === label);
+		if (matchingTabs.length < 2) return label;
+		return `${label} ${matchingTabs.findIndex((item) => item.id === tab.id) + 1}`;
 	}
 </script>
 
@@ -249,20 +255,22 @@
 		</div>
 	{/if}
 
-	{#if hasTerminalTab}
+	{#each terminalTabs as tab (tab.id)}
+		{@const isActive = activeTab?.id === tab.id && !session.workspaceToolChooserOpen}
 		<div
 			class="workspace-content terminal-session-pane"
-			hidden={!terminalActive}
-			aria-hidden={!terminalActive}
-			id={terminalActive ? 'workspace-tool-content' : undefined}
-			role={terminalActive ? 'tabpanel' : undefined}
-			aria-label={terminalActive ? 'Shell' : undefined}
+			hidden={!isActive}
+			aria-hidden={!isActive}
+			id={isActive ? 'workspace-tool-content' : undefined}
+			role={isActive ? 'tabpanel' : undefined}
+			aria-label={isActive ? tabLabel(tab) : undefined}
+			data-terminal-tool-tab={tab.id}
 		>
 			{#key workspacePath}
-				<TerminalToolView active={terminalActive} />
+				<TerminalToolView active={isActive} tabId={tab.id} />
 			{/key}
 		</div>
-	{/if}
+	{/each}
 
 	{#if session.workspaceToolChooserOpen}
 		<div class="workspace-tool-chooser" data-testid="workspace-tool-chooser">
@@ -356,7 +364,7 @@
 					class="workspace-tool-option"
 					type="button"
 					data-testid="workspace-tool-context"
-					onclick={() => session.openWorkspaceToolTab('context')}
+					onclick={() => session.openWorkspaceToolTab('context', null, null, true)}
 				>
 					<span class="workspace-tool-option-icon"><Icon name="table" size={16} /></span>
 					<span class="workspace-tool-option-copy">
@@ -369,7 +377,7 @@
 					class="workspace-tool-option"
 					type="button"
 					data-testid="workspace-tool-terminal"
-					onclick={() => session.openWorkspaceToolTab('terminal')}
+					onclick={() => session.openWorkspaceToolTab('terminal', null, null, true)}
 				>
 					<span class="workspace-tool-option-icon workspace-terminal-icon" aria-hidden="true">›_</span>
 					<span class="workspace-tool-option-copy">

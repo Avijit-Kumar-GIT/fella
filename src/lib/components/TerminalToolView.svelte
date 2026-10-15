@@ -3,6 +3,7 @@
 	import { Terminal } from '@xterm/xterm';
 	import '@xterm/xterm/css/xterm.css';
 	import { onDestroy, onMount } from 'svelte';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
 	import {
 		closeWorkspaceTerminal,
@@ -13,15 +14,7 @@
 	} from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 
-	const CONNECTION_LABELS = {
-		starting: 'Starting',
-		connected: 'Connected',
-		exited: 'Exited',
-		error: 'Unavailable',
-		unavailable: 'No shell'
-	} as const;
-
-	let { active = true } = $props<{ active?: boolean }>();
+	let { active = true, tabId = 'terminal' } = $props<{ active?: boolean; tabId?: string }>();
 	let workspacePath = $derived(session.catalog.workspace);
 	let terminalHost: HTMLDivElement;
 	let terminalState = $state<'starting' | 'connected' | 'exited' | 'error' | 'unavailable'>('starting');
@@ -29,7 +22,8 @@
 	let currentShellPath = $state('');
 	let selectedShellPath = $state('');
 	let shellOptions = $state<Array<{ path: string; name: string }>>([]);
-	let connectionLabel = $derived(CONNECTION_LABELS[terminalState]);
+	let shellMenuOpen = $state(false);
+	let selectedShellName = $derived(shellOptions.find((item) => item.path === selectedShellPath)?.name ?? 'Choose shell');
 	let terminalId = '';
 	let generation = 0;
 	let destroyed = false;
@@ -50,12 +44,20 @@
 	function terminalTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>['theme'] {
 		const styles = getComputedStyle(terminalHost);
 		const color = (name: string, fallback: string) => styles.getPropertyValue(name).trim() || fallback;
+		const dark = document.documentElement.getAttribute('data-color-mode') === 'dark';
 		return {
 			background: color('--bg-inset', '#1e1e22'),
 			foreground: color('--text', '#ededec'),
 			cursor: color('--brand', '#008080'),
 			cursorAccent: color('--bg-inset', '#1e1e22'),
-			selectionBackground: 'rgba(0, 128, 128, 0.32)'
+			selectionBackground: 'rgba(0, 128, 128, 0.32)',
+			// GNU ls uses blue text on a green background for writable
+			// directories. Keep that distinction, but bring the ANSI colors into
+			// Fella's restrained palette instead of xterm's high-saturation defaults.
+			green: dark ? '#315b4c' : '#d2e6d8',
+			brightGreen: dark ? '#75b894' : '#397652',
+			blue: dark ? '#bfd0ef' : '#315c8e',
+			brightBlue: dark ? '#d2def4' : '#4a77ad'
 		};
 	}
 
@@ -64,11 +66,6 @@
 			getComputedStyle(terminalHost).getPropertyValue('--mono').trim() ||
 			'ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, monospace'
 		);
-	}
-
-	function displayWorkspacePath(path: string | null): string {
-		if (!path) return '';
-		return path.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
 	}
 
 	async function launchTerminal(): Promise<void> {
@@ -211,40 +208,31 @@
 
 <section class="terminal-view" aria-label="Shell">
 	<header class="terminal-toolbar">
-		<div class="terminal-location">
-			<span class="terminal-connection" role="status">
-				<span
-					class="terminal-state-dot"
-					class:connected={terminalState === 'connected'}
-					class:starting={terminalState === 'starting'}
-					aria-hidden="true"
-				></span>
-				{connectionLabel}
-			</span>
-			{#if workspacePath}
-				<span class="terminal-location-divider" aria-hidden="true"></span>
-				<Icon name="folder" size={14} />
-				<code title={workspacePath}>{displayWorkspacePath(workspacePath)}</code>
-			{/if}
-		</div>
 		<div class="shell-controls">
-			<label class="shell-picker-label">
-				<span>Shell</span>
-				<span class="shell-picker-control">
-					<select
-						aria-label="Shell"
-						data-testid="workspace-shell-picker"
-						value={selectedShellPath}
-						disabled={shellOptions.length === 0 || terminalState === 'starting'}
-						onchange={(event) => selectShell(event.currentTarget.value)}
-					>
-						{#each shellOptions as option (option.path)}
-							<option value={option.path}>{option.name}</option>
-						{/each}
-					</select>
+			<span class="shell-control-label">Shell</span>
+			<DropdownMenu.Root open={shellMenuOpen} onOpenChange={(open) => (shellMenuOpen = open)}>
+				<DropdownMenu.Trigger
+					class="terminal-shell-trigger"
+					aria-label={`Shell: ${selectedShellName}`}
+					data-testid="workspace-shell-picker"
+					disabled={shellOptions.length === 0 || terminalState === 'starting'}
+				>
+					<span>{selectedShellName}</span>
 					<Icon name="chevron-down" size={14} />
-				</span>
-			</label>
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content class="fella-ui-menu-content terminal-shell-menu" side="bottom" align="end" sideOffset={5}>
+						<DropdownMenu.RadioGroup value={selectedShellPath} onValueChange={selectShell}>
+							{#each shellOptions as option (option.path)}
+								<DropdownMenu.RadioItem class="fella-ui-menu-item terminal-shell-option" value={option.path}>
+									<span>{option.name}</span>
+									{#if option.path === selectedShellPath}<Icon name="check" size={14} />{/if}
+								</DropdownMenu.RadioItem>
+							{/each}
+						</DropdownMenu.RadioGroup>
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
 			{#if selectedShellPath && currentShellPath !== selectedShellPath}
 				<span class="shell-pending" role="status">Restart to apply</span>
 			{/if}
@@ -267,7 +255,7 @@
 			{shellOptions.length === 0 ? 'No installed shells were found on this system.' : 'Open a workspace to start a shell there.'}
 		</p>
 	{/if}
-	<div class="terminal-surface" bind:this={terminalHost} data-testid="terminal-surface" aria-label="Interactive shell"></div>
+	<div class="terminal-surface" bind:this={terminalHost} data-testid="terminal-surface" data-terminal-tab={tabId} aria-label="Interactive shell"></div>
 </section>
 
 <style>
@@ -282,62 +270,14 @@
 	}
 	.terminal-toolbar {
 		display: flex;
-		min-height: 52px;
+		min-height: 48px;
 		flex: none;
 		align-items: center;
-		justify-content: space-between;
+		justify-content: flex-end;
 		gap: var(--space-4);
 		padding: 0 var(--space-3);
 		border-bottom: 1px solid var(--border);
 		background: var(--workspace-canvas);
-	}
-	.terminal-location {
-		display: flex;
-		min-width: 0;
-		align-items: center;
-		gap: var(--space-2);
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
-	}
-	.terminal-connection {
-		display: inline-flex;
-		flex: none;
-		align-items: center;
-		gap: var(--space-2);
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
-	}
-	.terminal-state-dot {
-		width: 7px;
-		height: 7px;
-		flex: none;
-		border-radius: 50%;
-		background: var(--text-faint);
-	}
-	.terminal-state-dot.connected {
-		background: var(--ok);
-		box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 12%, transparent);
-	}
-	.terminal-state-dot.starting { background: var(--brand); animation: terminal-pulse 1.3s ease-in-out infinite; }
-	.terminal-location-divider {
-		width: 1px;
-		height: 18px;
-		flex: none;
-		margin: 0 var(--space-1);
-		background: var(--border);
-	}
-	.terminal-location :global(svg.icon) { color: var(--text-faint); }
-	.terminal-location code {
-		overflow: hidden;
-		min-width: 0;
-		color: var(--text-dim);
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		letter-spacing: 0;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		unicode-bidi: plaintext;
 	}
 	.terminal-restart {
 		display: inline-flex;
@@ -358,45 +298,37 @@
 	.terminal-restart:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-inset); }
 	.terminal-restart:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 	.terminal-restart:disabled { cursor: default; opacity: 0.5; }
-	.shell-controls { display: flex; flex: none; align-items: center; gap: var(--space-2); }
-	.shell-picker-label { display: flex; align-items: center; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
-	.shell-picker-control {
-		position: relative;
-		display: flex;
-		min-width: 140px;
-		max-width: 220px;
-		min-height: 32px;
+	.shell-controls { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
+	.shell-control-label { color: var(--text-faint); font-size: var(--fs-xs); }
+	:global(.terminal-shell-trigger) {
+		display: inline-flex;
+		width: 180px;
+		max-width: min(220px, 40vw);
+		min-width: 120px;
+		min-height: 34px;
 		align-items: center;
+		justify-content: space-between;
+		gap: var(--space-2);
+		padding: 5px 9px 5px 10px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		background: var(--bg-raised);
-		transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
-	}
-	.shell-picker-control:hover { border-color: var(--border-strong); }
-	.shell-picker-control:focus-within { border-color: var(--link); box-shadow: var(--focus-ring); }
-	.shell-picker-control :global(svg) {
-		position: absolute;
-		right: 9px;
-		color: var(--text-faint);
-		pointer-events: none;
-	}
-	.shell-picker-control select {
-		width: 100%;
-		min-width: 0;
-		min-height: 30px;
-		appearance: none;
-		padding: 0 32px 0 11px;
-		border: 0;
-		border-radius: inherit;
-		outline: 0;
-		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-xs);
-		text-overflow: ellipsis;
-		cursor: pointer;
+		text-align: left;
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
 	}
-	.shell-picker-control select:disabled { opacity: 0.55; cursor: default; }
+	:global(.terminal-shell-trigger > span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	:global(.terminal-shell-trigger > svg) { flex: none; color: var(--text-faint); transform: rotate(90deg); transition: transform var(--dur-fast) var(--ease); }
+	:global(.terminal-shell-trigger:hover:not(:disabled)),
+	:global(.terminal-shell-trigger[data-state='open']) { border-color: var(--border-strong); background: var(--bg-inset); }
+	:global(.terminal-shell-trigger[data-state='open'] > svg) { transform: rotate(-90deg); }
+	:global(.terminal-shell-trigger:focus-visible) { outline: 2px solid color-mix(in srgb, var(--brand) 52%, transparent); outline-offset: 2px; }
+	:global(.terminal-shell-trigger:disabled) { cursor: default; opacity: 0.55; }
+	:global(.terminal-shell-menu) { min-width: 180px; max-width: min(280px, calc(100vw - 24px)); }
+	:global(.terminal-shell-option) { justify-content: space-between; gap: var(--space-3); }
+	:global(.terminal-shell-option > svg) { flex: none; color: var(--brand-icon); }
 	.shell-pending { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
 	.terminal-surface {
 		flex: 1;
@@ -421,22 +353,15 @@
 		overflow-wrap: anywhere;
 	}
 	.terminal-unavailable { color: var(--text-faint); }
-	@keyframes terminal-pulse {
-		50% { opacity: 0.45; }
-	}
 	@container (max-width: 720px) {
 		.terminal-toolbar {
-			align-items: stretch;
-			flex-direction: column;
+			min-height: 44px;
 			gap: var(--space-2);
-			padding: var(--space-2) var(--space-3);
+			padding: var(--space-2);
 		}
-		.terminal-location { width: 100%; min-height: 28px; }
-		.terminal-location code { flex: 1; }
-		.shell-controls { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
+		.shell-controls { flex: 1; flex-wrap: wrap; justify-content: flex-end; }
+		:global(.terminal-shell-trigger) { width: min(180px, 40vw); }
+		.shell-pending { display: none; }
 		.terminal-surface { margin: var(--space-2); padding: var(--space-2); border-radius: var(--radius-md); }
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.terminal-state-dot.starting { animation: none; }
 	}
 </style>

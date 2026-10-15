@@ -1180,13 +1180,15 @@ class Session {
 		if (tab) this.activateWorkspaceToolTab(tab.id);
 	}
 
-	/** Open a workspace tool as a durable pane-level tab. Data & context is
-	 *  workspace-wide and therefore has one reusable tab; each Investigation
-	 *  keeps its own linked conversation. */
+	/** Open a workspace tool as a durable pane-level tab. Reusable navigation
+	 *  selects an existing workspace-wide tool; the Tools add menu can request an
+	 *  independent second instance. Each Investigation remains tied to its own
+	 *  canonical conversation. */
 	openWorkspaceToolTab(
 		kind: WorkspaceToolKind,
 		investigationId: string | null = null,
-		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null
+		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null,
+		newInstance = false
 	): WorkspaceToolTab | null {
 		const context = this.activeWorkspaceContext;
 		if (!context || !this.catalog.workspace) return null;
@@ -1203,9 +1205,9 @@ class Session {
 		// A tab already owned by a different Investigation is never a fallback.
 		let tab: WorkspaceToolTab | null | undefined;
 		if (kind === 'context') {
-			tab = context.workspaceToolTabs.find((item) => item.kind === 'context');
+			tab = newInstance ? null : context.workspaceToolTabs.find((item) => item.kind === 'context');
 		} else if (kind === 'terminal') {
-			tab = context.workspaceToolTabs.find((item) => item.kind === 'terminal');
+			tab = newInstance ? null : context.workspaceToolTabs.find((item) => item.kind === 'terminal');
 		} else {
 			tab = tabByInvestigation;
 			if (!tab && tabByConversation && (!investigationId || !tabByConversation.investigationId)) {
@@ -1220,8 +1222,13 @@ class Session {
 			activeTab.investigationId !== investigationId
 		) return null;
 		if (!tab) {
+			const hasSameKind = context.workspaceToolTabs.some((item) => item.kind === kind);
 			tab = {
-				id: kind === 'context' ? 'context' : kind === 'terminal' ? 'terminal' : `investigation:${uid()}`,
+				id: kind === 'context'
+					? hasSameKind ? `context:${uid()}` : 'context'
+					: kind === 'terminal'
+						? hasSameKind ? `terminal:${uid()}` : 'terminal'
+						: `investigation:${uid()}`,
 				kind,
 				investigationId: kind === 'investigation' ? investigationId : null,
 				conversationId: kind === 'investigation' ? conversationId : null

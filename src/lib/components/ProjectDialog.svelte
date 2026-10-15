@@ -96,12 +96,9 @@
 							<Select
 								id="project-repository"
 								value={workspace}
-								onchange={(event) => selectRepository((event.currentTarget as HTMLSelectElement).value)}
-							>
-								{#each repositories as repository (repository.path)}
-									<option value={repository.path}>{repository.name}</option>
-								{/each}
-							</Select>
+								options={repositories.map((repository) => ({ value: repository.path, label: repository.name }))}
+								onValueChange={selectRepository}
+							/>
 							{#if selectedRepository}
 								<p class="field-hint" title={selectedRepository.path}>{selectedRepository.path}</p>
 							{/if}
