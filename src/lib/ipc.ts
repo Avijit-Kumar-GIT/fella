@@ -54,12 +54,30 @@ export async function sampleWorkspacePath(): Promise<string | null> {
 	return isElectron() ? window.fella?.sampleWorkspacePath() ?? null : null;
 }
 
-/** Open the OS terminal at the selected workspace. Fella never receives terminal I/O. */
-export async function openWorkspaceTerminal(workspacePath: string): Promise<void> {
+/** Start an embedded, user-only terminal at the selected workspace. */
+export async function startWorkspaceTerminal(
+	workspacePath: string,
+	cols: number,
+	rows: number,
+	onData: (data: string) => void,
+	onExit: (event: { exitCode: number; signal: number }) => void
+): Promise<{ terminalId: string; cwd: string; shell: string }> {
 	if (!isElectron() || !window.fella) {
-		throw new Error('The system terminal is available in the desktop app.');
+		throw new Error('The embedded terminal is available in the desktop app.');
 	}
-	await window.fella.openWorkspaceTerminal(workspacePath);
+	return window.fella.startTerminal(workspacePath, cols, rows, onData, onExit);
+}
+
+export function writeWorkspaceTerminal(terminalId: string, data: string): void {
+	window.fella?.writeTerminal(terminalId, data);
+}
+
+export function resizeWorkspaceTerminal(terminalId: string, cols: number, rows: number): void {
+	window.fella?.resizeTerminal(terminalId, cols, rows);
+}
+
+export function closeWorkspaceTerminal(terminalId: string): void {
+	window.fella?.closeTerminal(terminalId);
 }
 
 /** Open an https URL in the user's default browser. No-op outside the app. */

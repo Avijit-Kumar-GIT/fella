@@ -20,6 +20,8 @@
 	let selectionRequest = 0;
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
+	let hasTerminalTab = $derived(session.workspaceToolTabs.some((tab) => tab.kind === 'terminal'));
+	let terminalActive = $derived(activeTab?.kind === 'terminal' && !session.workspaceToolChooserOpen);
 	let currentInvestigation = $derived.by(() => {
 		if (activeTab?.kind === 'investigation' && activeTab.investigationId) {
 			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
@@ -247,6 +249,21 @@
 		</div>
 	{/if}
 
+	{#if hasTerminalTab}
+		<div
+			class="workspace-content terminal-session-pane"
+			hidden={!terminalActive}
+			aria-hidden={!terminalActive}
+			id={terminalActive ? 'workspace-tool-content' : undefined}
+			role={terminalActive ? 'tabpanel' : undefined}
+			aria-label={terminalActive ? 'Terminal' : undefined}
+		>
+			{#key workspacePath}
+				<TerminalToolView active={terminalActive} />
+			{/key}
+		</div>
+	{/if}
+
 	{#if session.workspaceToolChooserOpen}
 		<div class="workspace-tool-chooser" data-testid="workspace-tool-chooser">
 			<div class="workspace-tool-chooser-inner">
@@ -357,7 +374,7 @@
 					<span class="workspace-tool-option-icon workspace-terminal-icon" aria-hidden="true">›_</span>
 					<span class="workspace-tool-option-copy">
 						<strong>Terminal</strong>
-						<small>Open your system terminal at this workspace</small>
+						<small>Interactive shell at this workspace</small>
 					</span>
 					<Icon name="chevron-right" size={16} />
 				</button>
@@ -365,14 +382,12 @@
 			{#if chooserError}<p class="workspace-tool-error" role="alert">{chooserError}</p>{/if}
 		</div>
 	</div>
-	{:else if activeTab}
+	{:else if activeTab && activeTab.kind !== 'terminal'}
 		<div class="workspace-content" id="workspace-tool-content" role="tabpanel" aria-label={tabLabel(activeTab)}>
 			{#if activeTab.kind === 'source'}
 				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />
-			{:else if activeTab.kind === 'terminal'}
-				<TerminalToolView />
 			{:else}
 				<InvestigationBriefView />
 			{/if}
@@ -640,4 +655,5 @@
 		min-width: 0;
 		min-height: 0;
 	}
+	.workspace-content[hidden] { display: none; }
 </style>

@@ -11,8 +11,17 @@ declare global {
 				path: string,
 				onProgress: (progress: WorkspaceProgress) => void
 			): Promise<Catalog>;
-			/** Launches the operating system terminal at a workspace. No terminal I/O returns to Fella. */
-			openWorkspaceTerminal(path: string): Promise<{ opened: true }>;
+			/** Starts a user-only PTY session. Its stream is isolated from model and analytics IPC. */
+			startTerminal(
+				workspacePath: string,
+				cols: number,
+				rows: number,
+				onData: (data: string) => void,
+				onExit: (event: { exitCode: number; signal: number }) => void
+			): Promise<{ terminalId: string; cwd: string; shell: string }>;
+			writeTerminal(terminalId: string, data: string): void;
+			resizeTerminal(terminalId: string, cols: number, rows: number): void;
+			closeTerminal(terminalId: string): void;
 			ask(
 				params: {
 					conversationId: string;

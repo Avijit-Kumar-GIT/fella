@@ -1,106 +1,130 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import test from 'node:test';
+import { test } from 'node:test';
 
-import { openWorkspaceTerminal, terminalLaunchCandidates } from '../electron/terminal.mjs';
+import { EmbeddedTerminalSessions } from '../electron/embedded-terminal.mjs';
 
-test('platform launch candidates preserve the workspace path as one argument', () => {
-	const workspace = 'C:\\Users\\Avi Projects\\sales';
-	assert.deepEqual(terminalLaunchCandidates('win32', workspace, { ComSpec: 'cmd.exe' })[0], {
-		command: 'cmd.exe',
-		args: []
-	});
-	assert.deepEqual(terminalLaunchCandidates('darwin', '/Users/avi/sales')[0], {
-		command: 'open',
-		args: ['-a', 'Terminal', '/Users/avi/sales']
-	});
-	assert.deepEqual(terminalLaunchCandidates('linux', '/home/avi/sales', {})[0], {
-		command: 'xdg-terminal-exec',
-		args: ['--dir', '/home/avi/sales']
-	});
-	assert.deepEqual(terminalLaunchCandidates('linux', '/home/avi/sales', { TERMINAL: 'kitty' })[0], {
-		command: 'kitty',
-		args: []
-	});
-	assert.throws(() => terminalLaunchCandidates('plan9', '/workspace'), /not supported/);
-});
-
-test('terminal launch detaches without exposing terminal input or output to Fella', async () => {
-	const cwd = '/workspace/northwind sales';
+function fakePty() {
 	const calls = [];
-	let unrefCalled = false;
-	const spawnProcess = (command, args, options) => {
-		calls.push({ command, args, options });
-		const child = new EventEmitter();
-		child.unref = () => { unrefCalled = true; };
-		queueMicrotask(() => child.emit('spawn'));
-		return child;
-	};
-
-	assert.deepEqual(await openWorkspaceTerminal(cwd, {
-		platform: 'linux',
-		env: {},
-		spawnProcess
-	}), { opened: true });
-	assert.equal(calls.length, 1);
-	assert.deepEqual(calls[0], {
-		command: 'xdg-terminal-exec',
-		args: ['--dir', cwd],
-		options: {
-			cwd,
-			detached: true,
-			stdio: 'ignore',
-			windowsHide: false,
-			shell: false
+	return {
+		calls,
+		spawn(file, args, options) {
+			const listeners = { data: null, exit: null };
+			const terminal = {
+				writeCalls: [],
+				resizeCalls: [],
+				killed: false,
+				onData(callback) { listeners.data = callback; return { dispose() {} }; },
+				onExit(callback) { listeners.exit = callback; return { dispose() {} }; },
+				write(data) { this.writeCalls.push(data); },
+				resize(cols, rows) { this.resizeCalls.push([cols, rows]); },
+				kill() { this.killed = true; },
+				emitData(data) { listeners.data?.(data); },
+				emitExit(event) { listeners.exit?.(event); }
+			};
+			calls.push({ file, args, options, terminal });
+			return terminal;
 		}
+	};
+}
+
+function fakeOwner() {
+	return Object.assign(new EventEmitter(), {
+		messages: [],
+		destroyed: false,
+		isDestroyed() { return this.destroyed; },
+		send(channel, message) { this.messages.push({ channel, message }); }
 	});
-	assert.equal(unrefCalled, true);
+}
+
+test('starts an interactive session with the selected workspace, shell, and terminal dimensions', () => {
+	for (const [platform, env, expectedShell] of [
+		['win32', { ComSpec: 'C:\\Windows\\System32\\cmd.exe' }, 'C:\\Windows\\System32\\cmd.exe'],
+		['darwin', { SHELL: '/bin/zsh' }, '/bin/zsh'],
+		['linux', { SHELL: '/usr/bin/fish' }, '/usr/bin/fish']
+	]) {
+		const pty = fakePty();
+		const sessions = new EmbeddedTerminalSessions({ pty, platform, env });
+		const owner = fakeOwner();
+		const result = sessions.start(owner, {
+			terminalId: `test-${platform}`,
+			workspacePath: '/work/northwind sales',
+			cols: 117,
+			rows: 38
+		});
+
+		assert.deepEqual(result, {
+			terminalId: `test-${platform}`,
+			cwd: '/work/northwind sales',
+			shell: expectedShell.split(/[\\/]/).at(-1)
+		});
+		assert.deepEqual(pty.calls[0], {
+			file: expectedShell,
+			args: [],
+			options: {
+				name: 'xterm-256color',
+				cols: 117,
+				rows: 38,
+				cwd: '/work/northwind sales',
+				env: { ...env, TERM: 'xterm-256color', COLORTERM: 'truecolor' }
+			},
+			terminal: pty.calls[0].terminal
+		});
+	}
 });
 
-test('only a missing launcher falls through to the next system fallback', async () => {
-	const calls = [];
-	const spawnProcess = (command, args, options) => {
-		calls.push({ command, args, options });
-		const child = new EventEmitter();
-		child.unref = () => {};
-		queueMicrotask(() => {
-			if (calls.length === 1) {
-				const error = new Error('not installed');
-				error.code = 'ENOENT';
-				child.emit('error', error);
-			} else {
-				child.emit('spawn');
-			}
-		});
-		return child;
-	};
-
-	await openWorkspaceTerminal('C:\\Users\\Avi\\sales', {
-		platform: 'win32',
-		env: { ComSpec: 'custom-shell.exe' },
-		spawnProcess
+test('routes input, resize, and output only through the owning terminal session', () => {
+	const pty = fakePty();
+	const sessions = new EmbeddedTerminalSessions({ pty, platform: 'linux', env: { SHELL: '/bin/sh' } });
+	const owner = fakeOwner();
+	const otherOwner = fakeOwner();
+	sessions.start(owner, {
+		terminalId: 'terminal-one',
+		workspacePath: '/workspace',
+		cols: 80,
+		rows: 24
 	});
-	assert.deepEqual(calls.map(({ command, args }) => ({ command, args })), [
-		{ command: 'custom-shell.exe', args: [] },
-		{ command: 'cmd.exe', args: [] }
-	]);
-	assert.ok(calls.every(({ options }) => options.stdio === 'ignore' && options.shell === false));
-	assert.ok(calls.every(({ options }) => options.cwd === 'C:\\Users\\Avi\\sales'));
+	const terminal = pty.calls[0].terminal;
+
+	terminal.emitData('private shell output');
+	assert.deepEqual(owner.messages, [{
+		channel: 'fella:terminal-data',
+		message: { terminalId: 'terminal-one', data: 'private shell output' }
+	}]);
+	assert.deepEqual(otherOwner.messages, []);
+	assert.equal(sessions.write(otherOwner, 'terminal-one', 'echo unauthorized'), false);
+	assert.equal(sessions.resize(otherOwner, 'terminal-one', 120, 40), false);
+	assert.equal(sessions.close(otherOwner, 'terminal-one'), false);
+	assert.deepEqual(terminal.writeCalls, []);
+	assert.deepEqual(terminal.resizeCalls, []);
+
+	assert.equal(sessions.write(owner, 'terminal-one', 'echo hello\r'), true);
+	assert.equal(sessions.resize(owner, 'terminal-one', 120, 40), true);
+	assert.deepEqual(terminal.writeCalls, ['echo hello\r']);
+	assert.deepEqual(terminal.resizeCalls, [[120, 40]]);
+	terminal.emitExit({ exitCode: 0, signal: 0 });
+	assert.deepEqual(owner.messages.at(-1), {
+		channel: 'fella:terminal-exit',
+		message: { terminalId: 'terminal-one', exitCode: 0, signal: 0 }
+	});
 });
 
-test('terminal launcher rejects empty paths and reports a missing Linux default', async () => {
-	await assert.rejects(openWorkspaceTerminal('  ', { platform: 'linux' }), /Choose a workspace/);
-	const spawnProcess = (command) => {
-		const child = new EventEmitter();
-		queueMicrotask(() => {
-			const error = new Error(`${command} not found`);
-			error.code = 'ENOENT';
-			child.emit('error', error);
-		});
-		return child;
-	};
-	await assert.rejects(
-		openWorkspaceTerminal('/workspace', { platform: 'linux', env: {}, spawnProcess }),
-		/No system terminal launcher was found/
-	);
+test('rejects invalid sessions and dimensions and closes shells with their owner', () => {
+	const pty = fakePty();
+	const sessions = new EmbeddedTerminalSessions({ pty, platform: 'linux', env: {} });
+	const owner = fakeOwner();
+	assert.throws(() => sessions.start(owner, {
+		terminalId: 'bad id', workspacePath: '/workspace', cols: 80, rows: 24
+	}), /could not be started/);
+	assert.throws(() => sessions.start(owner, {
+		terminalId: 'terminal-one', workspacePath: ' ', cols: 80, rows: 24
+	}), /Choose a workspace/);
+
+	sessions.start(owner, {
+		terminalId: 'terminal-one', workspacePath: '/workspace', cols: 0, rows: 900
+	});
+	assert.deepEqual([pty.calls[0].options.cols, pty.calls[0].options.rows], [80, 24]);
+	sessions.closeForOwner(owner);
+	assert.equal(pty.calls[0].terminal.killed, true);
+	assert.equal(sessions.write(owner, 'terminal-one', 'ignored'), false);
 });

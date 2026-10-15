@@ -432,12 +432,29 @@ async function installDesktopMock(
 		window.__remainingArchiveIds = () => [...archivedConversations.keys()];
 		window.__replayStatusCalls = 0;
 		window.__analysisTurnLoadCalls = [];
-		window.__workspaceTerminalLaunches = [];
+		window.__workspaceTerminalStarts = [];
+		window.__workspaceTerminalWrites = [];
+		window.__workspaceTerminalResizes = [];
+		window.__workspaceTerminalCloses = [];
 		window.fella = {
-			openWorkspaceTerminal: async (path) => {
-				window.__workspaceTerminalLaunches.push(path);
+			startTerminal: async (path, cols, rows, onData, onExit) => {
+				window.__workspaceTerminalStarts.push({ path, cols, rows });
 				if (window.__workspaceTerminalFailure) throw new Error('Fixture terminal launch failure');
-				return { opened: true };
+				const terminalId = `fixture-terminal-${window.__workspaceTerminalStarts.length}`;
+				window.__workspaceTerminalCallbacks ??= new Map();
+				window.__workspaceTerminalCallbacks.set(terminalId, { onData, onExit });
+				onData(`${path}\r\nfixture-shell> `);
+				return { terminalId, cwd: path, shell: 'fixture-shell' };
+			},
+			writeTerminal: (terminalId, data) => {
+				window.__workspaceTerminalWrites.push({ terminalId, data });
+			},
+			resizeTerminal: (terminalId, cols, rows) => {
+				window.__workspaceTerminalResizes.push({ terminalId, cols, rows });
+			},
+			closeTerminal: (terminalId) => {
+				window.__workspaceTerminalCloses.push(terminalId);
+				window.__workspaceTerminalCallbacks?.delete(terminalId);
 			},
 			invoke: async (command, args = {}) => {
 				switch (command) {
@@ -5134,7 +5151,7 @@ test('sidebar controls share aligned gutters and a consistent row rhythm', async
 });
 
 
-test('Terminal opens the OS terminal at the selected workspace without embedding a session', async ({ page }) => {
+test('Terminal opens an interactive workspace shell in its tab and keeps it isolated from analysis', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -5142,14 +5159,34 @@ test('Terminal opens the OS terminal at the selected workspace without embedding
 	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
 	await page.getByTestId('workspace-tool-terminal').click();
 
-	await expect(page.getByRole('heading', { name: 'Terminal', exact: true })).toBeVisible();
-	await expect(page.getByText(folders[0].path, { exact: true })).toBeVisible();
-	await expect(page.getByText(/runs outside Fella/i)).toBeVisible();
-	await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
-	await expect(page.locator('.terminal-status')).toHaveText('Terminal opened at this workspace.');
+	const surface = page.getByTestId('terminal-surface');
+	await expect(surface.locator('.xterm')).toBeVisible();
+	await expect(page.locator('.terminal-location code')).toHaveText(folders[0].path);
+	await expect(page.locator('.terminal-location-label')).toHaveText('fixture-shell');
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
+	const start = await page.evaluate(() => window.__workspaceTerminalStarts[0]);
+	expect(start.path).toBe(folders[0].path);
+	expect(start.cols).toBeGreaterThan(2);
+	expect(start.rows).toBeGreaterThan(2);
 
-	expect(await page.evaluate(() => window.__workspaceTerminalLaunches)).toEqual([folders[0].path]);
-	await expect(page.locator('.terminal-session-output')).toHaveCount(0);
+	await surface.click();
+	await page.keyboard.type('pwd');
+	await page.keyboard.press('Enter');
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalWrites.map((item) => item.data).join('')))
+		.toContain('pwd');
+
+	await page.getByTestId('workspace-tool-add').click();
+	await page.getByTestId('workspace-tool-context').click();
+	await expect(page.locator('#workspace-tool-content')).toBeVisible();
+	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
+	expect(await page.evaluate(() => window.__workspaceTerminalCloses)).toEqual([]);
+	await page.getByTestId('workspace-tool-tab-terminal').click();
+	await expect(surface).toBeVisible();
+	expect(await page.evaluate(() => window.__workspaceTerminalStarts.length)).toBe(1);
+
+	expect(await page.evaluate(() => window.__workspaceAskCalls)).toEqual([]);
+	await page.getByRole('button', { name: 'Close Terminal tab' }).click();
+	await expect.poll(() => page.evaluate(() => window.__workspaceTerminalCloses.length)).toBe(1);
 });
 
 
