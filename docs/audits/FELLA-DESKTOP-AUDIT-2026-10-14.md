@@ -141,7 +141,7 @@ At 1440 × 960, with the Tools pane open, the Questions section’s “Question 
 
 The main workspace split allocates 62% to the Conversation and 38% to Tools, with minimums of 320px and 280px, and only stacks the panels below a workspace-area width of 1000px. The Investigation component then has a container rule for panes under 900px that turns the Question heading into a column. The rendered result suggests the heading’s content/flex sizing is not expanding to the available line width under that layout. The screenshot establishes the visual behavior; the CSS is a plausible implementation lead, not proof of a single root cause.
 
-Evidence: [05 — Investigation Questions](assets/05-investigation-questions.png), [workspace split CSS](../../src/routes/+page.svelte#L501), [Question responsive rule](../../src/lib/components/InvestigationBriefView.svelte#L3249).
+Evidence: the deterministic Investigation Questions capture, [workspace split CSS](../../src/routes/+page.svelte#L501), and [Question responsive rule](../../src/lib/components/InvestigationBriefView.svelte#L3249). Screenshot captures are excluded from the repository.
 
 ### P1 — Chat, Question, run, answer, and Finding need a clearer relationship
 
@@ -211,69 +211,49 @@ Evidence: [test](../../tests/e2e/workspace.spec.mjs#L5383), [failing label asser
 
 Because the suite uses a deterministic bridge mock, a passed “analysis” journey usually proves that the UI submitted the expected data and rendered a fixture result. It does not prove that the model will propose a good breakdown, that the generated SQL answers the Question, that a chart has the right grain, or that source profiling handles every messy file. Real-model and real-folder quality should be measured separately, with fixed benchmark questions and implementation-independent acceptance criteria.
 
-## Visual evidence
+## Visual review notes
 
-All captures below are from the same 1440 × 960 light-theme deterministic UI session. Text/data in the mock is illustrative; the visible layout and controls are from the app renderer.
+The observations below come from the same 1440 × 960 light-theme deterministic UI session. Text/data in the mock is illustrative; the visible layout and controls are from the app renderer. Screenshot files are excluded from the repository; these notes preserve the review findings.
 
 ### 1. First launch: a strong low-friction start
 
 The initial action is clear and the privacy/provider disclosure is quiet. The titlebar’s “Focus” label is the visible inconsistency.
 
-![First launch](assets/01-first-launch.png)
-
 ### 2. Folder-scoped conversation
 
 The workspace is visible in the sidebar and top context; the composer remains the main interaction. The user can begin in plain language without opening a tool first.
-
-![Workspace conversation](assets/02-workspace-chat.png)
 
 ### 3. Tools chooser
 
 The optional Tools surface is a distinct place for workspace-level tools. The Investigation selector is a dropdown, Data & context opens as a tab, and Terminal is present but disabled.
 
-![Tools chooser](assets/03-tools-chooser.png)
-
 ### 4. Investigation Brief
 
 The Investigation has an internal navigation and exposes its goal, audience, deliverable, and constraints. This is a useful durable frame for the analysis.
-
-![Investigation brief](assets/04-investigation-brief.png)
 
 ### 5. Questions: the clearest visual defect
 
 The Question-plan heading and explanatory copy collapse into a narrow column. The tab row is also tight. This is the strongest direct visual finding in the audit.
 
-![Investigation Questions](assets/05-investigation-questions.png)
-
 ### 6. Investigation data and scope
 
 The source inventory and scope controls are visible, with a warning that catalog observations do not establish that a source answers the Investigation.
-
-![Investigation data](assets/06-investigation-data.png)
 
 ### 7. Analysis history
 
 The Analysis section has an explicit home for run history and saved Findings, even when empty.
 
-![Investigation analysis](assets/07-investigation-analysis.png)
-
 ### 8. Results and unresolved work
 
 The Results section separates Findings, visualizations, and Questions needing resolution. The empty state also reveals how much of the product’s usefulness depends on actually completing the linked analysis lifecycle.
-
-![Investigation results](assets/08-investigation-results.png)
 
 ### 9. Workspace Data & context
 
 This is a workspace guide/context surface, not the same screen as the Investigation’s source inventory. The difference in ownership is useful; the similar naming is not.
 
-![Workspace Data and context](assets/09-workspace-context.png)
-
 ### 10. Settings and analysis capabilities
 
 Analysis capability controls are present in Settings. This supports discoverability and user control, though the full settings view requires scrolling.
-
-![Settings](assets/10-settings.png)
 
 ## Recommended order for follow-up work
 
@@ -433,7 +413,7 @@ These findings point to a focused product-quality opportunity: make Fella’s ex
 
 **Research date:** 14 October 2026
 
-**Scope:** the ten captured desktop views in [`assets/`](assets/), reviewed alongside the visual tokens in [`src/app.css`](../../src/app.css) and the relevant workspace and Investigation components. The captures are a deterministic light-theme fixture at 1440 × 960, not a usability study. They do not establish how the interface feels in dark mode, at compact window sizes, or with real users. Product comparisons below draw on first-party product documentation and guidelines; they are design-pattern evidence, not a claim that these products have been independently usability-tested against Fella.
+**Scope:** ten captured desktop views, reviewed alongside the visual tokens in [`src/app.css`](../../src/app.css) and the relevant workspace and Investigation components. The captures are a deterministic light-theme fixture at 1440 × 960, not a usability study. They do not establish how the interface feels in dark mode, at compact window sizes, or with real users. Screenshot files are excluded from the repository. Product comparisons below draw on first-party product documentation and guidelines; they are design-pattern evidence, not a claim that these products have been independently usability-tested against Fella.
 
 ### Finding in one sentence
 
@@ -455,19 +435,19 @@ The common thread is **progressive disclosure with durable structure**: the defa
 
 | Area | What the audit shows | Why it matters / design direction |
 |---|---|---|
-| **Pane roles and available width — P0** | The workspace gives the chat the broad center canvas and places Tools in a narrower right pane. That works for the Tools chooser ([screenshot 03](assets/03-tools-chooser.png)) and can work for compact workspace context ([screenshot 09](assets/09-workspace-context.png)). But Investigation opens in that same narrow region. Its six-item Brief/Data/Questions/Analysis/Results/Share pill navigation is clipped at the captured width ([screenshot 04](assets/04-investigation-brief.png)); on Questions, the content column collapses so severely that the heading and copy wrap almost word by word ([screenshot 05](assets/05-investigation-questions.png)). | This is the strongest demonstrated visual defect. It is not a matter of taste: the content is not reliably readable. Give the Investigation a width-aware layout with a sensible minimum readable width, or let it occupy the primary work surface when its content requires it. If the user chooses a narrow Tools pane, navigation should compact or overflow intentionally and content must reflow gracefully—never collapse into a sliver. |
-| **Identity, context, and heading hierarchy — P1** | The Investigation view begins with the generic heading “Investigation,” then repeats the Investigation’s title/goal as a second prominent heading. The surrounding shell supplies Workspace and Tools context, but the selected Investigation and selected section do not read as one concise location path. See [screenshot 04](assets/04-investigation-brief.png). | Make the location immediately answer “which workspace, which Investigation, which section?” Use one primary title for the user’s actual Investigation and a quieter breadcrumb or context label for its container. Remove duplicated title/description copy. Keep section navigation subordinate to the document title and current work. |
-| **Too many equal-weight navigation choices — P1** | Six similarly styled pills compete for attention. At the observed pane width, even the navigation itself cannot fit. In Questions, “Question plan,” its helper copy, save state, coverage summary, and actions all compete in a single narrow vertical stream ([screenshot 05](assets/05-investigation-questions.png)). | Keep every destination accessible, but give the navigation a responsive form and a visible selected state. Consider grouping the information architecture into a small number of understandable stages (for example, setup/context, analysis, and handoff), with less-frequent detail available on demand. This is a hierarchy hypothesis to test—not a recommendation to delete useful sections or force a fixed analyst workflow. |
-| **Repeated explanation and low signal-to-noise — P1** | Several views repeat the section name in the page title, a subheading, and explanatory text. Results presents Key Findings, Visualizations, and Questions to resolve as similarly weighted blocks, with empty explanatory copy and counts but little visual indication of the next useful action ([screenshot 08](assets/08-investigation-results.png)). | Let the title establish the current destination once. Reserve helper text for a decision the user must make or a term that needs clarification. In empty states, state what is missing and offer one direct next step; in populated states, lead with the finding or unresolved Question, and let the user open supporting detail. |
+| **Pane roles and available width — P0** | The workspace gives the chat the broad center canvas and places Tools in a narrower right pane. That works for the Tools chooser and can work for compact workspace context. But Investigation opens in that same narrow region. Its six-item Brief/Data/Questions/Analysis/Results/Share pill navigation is clipped at the captured width; on Questions, the content column collapses so severely that the heading and copy wrap almost word by word. | This is the strongest demonstrated visual defect. It is not a matter of taste: the content is not reliably readable. Give the Investigation a width-aware layout with a sensible minimum readable width, or let it occupy the primary work surface when its content requires it. If the user chooses a narrow Tools pane, navigation should compact or overflow intentionally and content must reflow gracefully—never collapse into a sliver. |
+| **Identity, context, and heading hierarchy — P1** | The Investigation view begins with the generic heading “Investigation,” then repeats the Investigation’s title/goal as a second prominent heading. The surrounding shell supplies Workspace and Tools context, but the selected Investigation and selected section do not read as one concise location path. | Make the location immediately answer “which workspace, which Investigation, which section?” Use one primary title for the user’s actual Investigation and a quieter breadcrumb or context label for its container. Remove duplicated title/description copy. Keep section navigation subordinate to the document title and current work. |
+| **Too many equal-weight navigation choices — P1** | Six similarly styled pills compete for attention. At the observed pane width, even the navigation itself cannot fit. In Questions, “Question plan,” its helper copy, save state, coverage summary, and actions all compete in a single narrow vertical stream. | Keep every destination accessible, but give the navigation a responsive form and a visible selected state. Consider grouping the information architecture into a small number of understandable stages (for example, setup/context, analysis, and handoff), with less-frequent detail available on demand. This is a hierarchy hypothesis to test—not a recommendation to delete useful sections or force a fixed analyst workflow. |
+| **Repeated explanation and low signal-to-noise — P1** | Several views repeat the section name in the page title, a subheading, and explanatory text. Results presents Key Findings, Visualizations, and Questions to resolve as similarly weighted blocks, with empty explanatory copy and counts but little visual indication of the next useful action. | Let the title establish the current destination once. Reserve helper text for a decision the user must make or a term that needs clarification. In empty states, state what is missing and offer one direct next step; in populated states, lead with the finding or unresolved Question, and let the user open supporting detail. |
 | **Surface and border vocabulary — P2** | The base system is restrained, but expanded analytical content can layer a rounded summary surface, bordered cards, inset fills, and nested run/evidence panels. Those are visible in the Investigation component structure and token usage, even when the current captures show mostly empty states. | Audit the expanded, real-data state before adding more surfaces. Establish a small vocabulary—canvas, selected/raised object, and optional evidence detail. Use spacing and type to distinguish hierarchy; use a border or fill only when it marks a real boundary, selection, or interactive object. The remedy is not to give every item another rounded rectangle. |
 | **Color and state communication — P2** | The CSS deliberately uses warm neutrals, one teal brand/action accent, and semantic status colors paired with text. This is coherent and should be preserved. In the captures, some selected/secondary controls are visually quiet, while the narrow clipped navigation is the more consequential problem. The report has no dark-theme capture and no measured contrast results. | Don’t add a color per tool, status, or section. Make focus, selection, disabled, warning, and success states distinguishable through a restrained combination of contrast, shape, text, and icon—not color alone. Verify text contrast in both themes and at actual rendered sizes; WCAG’s usual AA thresholds are 4.5:1 for normal text and 3:1 for large text. [WCAG 2.2 contrast technique](https://www.w3.org/WAI/WCAG22/Techniques/general/G145) |
-| **Spacing and type scale — P2** | The first-launch view is calm and spacious, with a clear invitation to choose a folder or try sample data ([screenshot 01](assets/01-first-launch.png)). The empty Analysis view is also spacious, but has very little content or guidance ([screenshot 07](assets/07-investigation-analysis.png)). Settings uses a readable single column but is a long scroll ([screenshot 10](assets/10-settings.png)). Inside the narrow Investigation view, smaller supporting labels and long helper copy become harder to scan. | Preserve whitespace where it makes the starting point and primary task legible. In an empty or inactive view, pair the whitespace with a clear action or useful explanation so it feels intentional, not unfinished. At constrained sizes, reduce redundant copy and secondary metadata before shrinking primary labels or the actual analysis. |
+| **Spacing and type scale — P2** | The first-launch view is calm and spacious, with a clear invitation to choose a folder or try sample data. The empty Analysis view is also spacious, but has very little content or guidance. Settings uses a readable single column but is a long scroll. Inside the narrow Investigation view, smaller supporting labels and long helper copy become harder to scan. | Preserve whitespace where it makes the starting point and primary task legible. In an empty or inactive view, pair the whitespace with a clear action or useful explanation so it feels intentional, not unfinished. At constrained sizes, reduce redundant copy and secondary metadata before shrinking primary labels or the actual analysis. |
 
 ### What is already working and should not be “fixed” away
 
 - **A consistent foundation:** the CSS already states the right principles—monochrome first, one brand accent, semantic colors, typography and spacing before borders, purposeful surfaces, and reduced-motion support. Its warm canvas, quiet chrome, dark/light tokens, and restrained teal support the requested macOS curvature and Notion-like clarity.
 - **A strong starting state:** first launch has one clear identity, two reasonable entry paths, and a persistent composer without a dashboard of feature cards. Its remaining identity issue is the legacy “Focus” label in the captured titlebar, not a need for more ornamental branding.
-- **The chat is a natural default canvas:** the workspace chat screenshot is quiet and familiar; the Tools chooser can remain optional. Keep the composer anchored to its conversation and retain the current relationship between workspace and tools.
+- **The chat is a natural default canvas:** the workspace chat view is quiet and familiar; the Tools chooser can remain optional. Keep the composer anchored to its conversation and retain the current relationship between workspace and tools.
 - **Investigation as a durable object:** the product model’s Questions, evidence, run history, and handoff should remain available. The visual task is to make those parts navigable and understandable—not remove analytical depth to make a screenshot look sparse.
 
 ### Design target: “simple to enter, powerful to inspect”

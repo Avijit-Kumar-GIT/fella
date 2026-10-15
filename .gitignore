@@ -49,6 +49,9 @@ vite.config.ts.timestamp-*
 # Personal notes
 /STUDY.md
 
+# Local-only audit captures
+/docs/audits/assets/*.png
+
 # Local tooling / editor / AI-assistant config (not part of the project)
 /.vscode
 /.idea
