@@ -1734,25 +1734,24 @@ test('Investigation navigation opens one focused section at a time', async ({ pa
 		const nav = element.getBoundingClientRect();
 		const pane = element.closest('.workspace-tools-pane').getBoundingClientRect();
 		const tabRects = [...element.querySelectorAll('[role="tab"]')].map((tab) => tab.getBoundingClientRect());
-		const scrollWidth = element.scrollWidth;
-		const clientWidth = element.clientWidth;
-		element.scrollLeft = element.scrollWidth;
-		const share = element.querySelector('#investigation-tab-share').getBoundingClientRect();
+		const tabs = [...element.querySelectorAll('[role="tab"]')];
+		const inlinePadding = tabs.map((tab) => getComputedStyle(tab).paddingInline);
 		return {
 			display: getComputedStyle(element).display,
 			width: nav.width,
 			paneWidth: pane.width,
 			rows: new Set(tabRects.map((rect) => Math.round(rect.top))).size,
-			scrollWidth,
-			clientWidth,
-			shareVisibleAtScrollEnd: share.left >= nav.left && share.right <= nav.right
+			fits: element.scrollWidth <= element.clientWidth,
+			allItemsContained: tabRects.every((rect) => rect.left >= nav.left && rect.right <= nav.right),
+			uniformInlinePadding: new Set(inlinePadding).size === 1
 		};
 	});
 	expect(compactNavigation.paneWidth).toBeLessThanOrEqual(430);
 	expect(compactNavigation.display).toBe('flex');
 	expect(compactNavigation.rows).toBe(1);
-	expect(compactNavigation.scrollWidth).toBeGreaterThan(compactNavigation.clientWidth);
-	expect(compactNavigation.shareVisibleAtScrollEnd).toBe(true);
+	expect(compactNavigation.fits).toBe(true);
+	expect(compactNavigation.allItemsContained).toBe(true);
+	expect(compactNavigation.uniformInlinePadding).toBe(true);
 });
 
 

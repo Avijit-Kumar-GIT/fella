@@ -2913,11 +2913,14 @@
 	@container investigation-pane (max-width: 430px) {
 		.investigation-nav {
 			width: 100%;
+			gap: clamp(0px, 0.4cqi, 2px);
 		}
-		.investigation-nav > .fella-pill-nav-item { padding-inline: 6px; }
-	}
-	@container investigation-pane (max-width: 280px) {
-		.investigation-nav > .fella-pill-nav-item { padding-inline: 4px; }
+		.investigation-nav > .fella-pill-nav-item {
+			flex: 1 1 auto;
+			min-width: 0;
+			padding-inline: clamp(1px, 0.5cqi, 3px);
+			font-size: clamp(10px, 3.2cqi, var(--fs-xs));
+		}
 	}
 	.investigation-tab-panel { min-width: 0; }
 	.investigation-tab-panel[hidden] { display: none; }
