@@ -4,6 +4,7 @@
 	import '@xterm/xterm/css/xterm.css';
 	import { onDestroy, onMount } from 'svelte';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { createTerminalOutputFormatter } from '$lib/terminal-output.js';
 	import Icon from './Icon.svelte';
 	import {
 		closeWorkspaceTerminal,
@@ -51,11 +52,9 @@
 			cursor: color('--brand', '#008080'),
 			cursorAccent: color('--bg-inset', '#1e1e22'),
 			selectionBackground: 'rgba(0, 128, 128, 0.32)',
-			// GNU ls uses blue text on a green background for writable
-			// directories. Keep that distinction, but bring the ANSI colors into
-			// Fella's restrained palette instead of xterm's high-saturation defaults.
-			green: dark ? '#315b4c' : '#d2e6d8',
-			brightGreen: dark ? '#75b894' : '#397652',
+			// Keep ANSI foregrounds legible against Fella's dark and light surfaces.
+			green: dark ? '#75b894' : '#397652',
+			brightGreen: dark ? '#9bc7a8' : '#286943',
 			blue: dark ? '#bfd0ef' : '#315c8e',
 			brightBlue: dark ? '#d2def4' : '#4a77ad'
 		};
@@ -76,6 +75,7 @@
 		}
 		const currentGeneration = ++generation;
 		const shellTerminal = terminal;
+		const formatOutput = createTerminalOutputFormatter();
 		terminalState = 'starting';
 		error = '';
 		let exitedWhileStarting = false;
@@ -86,7 +86,10 @@
 				shellTerminal.cols || 80,
 				shellTerminal.rows || 24,
 				(data) => {
-					if (!destroyed && generation === currentGeneration) shellTerminal.write(data);
+					if (!destroyed && generation === currentGeneration) {
+						const displayData = formatOutput(data);
+						if (displayData) shellTerminal.write(displayData);
+					}
 				},
 				() => {
 					if (destroyed || generation !== currentGeneration) return;

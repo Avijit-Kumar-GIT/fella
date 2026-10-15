@@ -5,6 +5,21 @@ import { test } from 'node:test';
 
 import { EmbeddedTerminalSessions } from '../electron/embedded-terminal.mjs';
 import { discoverTerminalShells } from '../electron/terminal-shells.mjs';
+import { createTerminalOutputFormatter } from '../src/lib/terminal-output.js';
+
+test('removes GNU ls green directory backgrounds while preserving foreground colors', () => {
+	const format = createTerminalOutputFormatter();
+	assert.equal(format('\u001b[34;42mreports\u001b[0m'), '\u001b[34;49mreports\u001b[0m');
+	assert.equal(format('\u001b[1;102mbright\u001b[0m'), '\u001b[1;49mbright\u001b[0m');
+	assert.equal(format('\u001b[38;5;42mforeground\u001b[0m'), '\u001b[38;5;42mforeground\u001b[0m');
+	assert.equal(format('\u001b[34;44mother background\u001b[0m'), '\u001b[34;44mother background\u001b[0m');
+});
+
+test('removes a green background when its SGR sequence spans PTY chunks', () => {
+	const format = createTerminalOutputFormatter();
+	assert.equal(format('before\u001b[34;4'), 'before');
+	assert.equal(format('2mfolder\u001b[0m'), '\u001b[34;49mfolder\u001b[0m');
+});
 
 class FakeHelper extends EventEmitter {
 	constructor() {
