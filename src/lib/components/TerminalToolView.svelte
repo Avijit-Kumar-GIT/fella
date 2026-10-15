@@ -230,17 +230,20 @@
 		<div class="shell-controls">
 			<label class="shell-picker-label">
 				<span>Shell</span>
-				<select
-					aria-label="Shell"
-					data-testid="workspace-shell-picker"
-					value={selectedShellPath}
-					disabled={shellOptions.length === 0 || terminalState === 'starting'}
-					onchange={(event) => selectShell(event.currentTarget.value)}
-				>
-					{#each shellOptions as option (option.path)}
-						<option value={option.path}>{option.name}</option>
-					{/each}
-				</select>
+				<span class="shell-picker-control">
+					<select
+						aria-label="Shell"
+						data-testid="workspace-shell-picker"
+						value={selectedShellPath}
+						disabled={shellOptions.length === 0 || terminalState === 'starting'}
+						onchange={(event) => selectShell(event.currentTarget.value)}
+					>
+						{#each shellOptions as option (option.path)}
+							<option value={option.path}>{option.name}</option>
+						{/each}
+					</select>
+					<Icon name="chevron-down" size={14} />
+				</span>
 			</label>
 			{#if selectedShellPath && currentShellPath !== selectedShellPath}
 				<span class="shell-pending" role="status">Restart to apply</span>
@@ -279,14 +282,14 @@
 	}
 	.terminal-toolbar {
 		display: flex;
-		min-height: 48px;
+		min-height: 52px;
 		flex: none;
 		align-items: center;
 		justify-content: space-between;
-		gap: var(--space-3);
-		padding: 0 var(--space-4);
-		border-bottom: 1px solid var(--pane-edge);
-		background: var(--pane-head);
+		gap: var(--space-4);
+		padding: 0 var(--space-3);
+		border-bottom: 1px solid var(--border);
+		background: var(--workspace-canvas);
 	}
 	.terminal-location {
 		display: flex;
@@ -314,61 +317,86 @@
 	}
 	.terminal-state-dot.connected {
 		background: var(--ok);
-		box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 13%, transparent);
+		box-shadow: 0 0 0 2px color-mix(in srgb, var(--ok) 12%, transparent);
 	}
 	.terminal-state-dot.starting { background: var(--brand); animation: terminal-pulse 1.3s ease-in-out infinite; }
 	.terminal-location-divider {
 		width: 1px;
-		height: 16px;
+		height: 18px;
 		flex: none;
-		margin: 0 2px;
-		background: var(--pane-edge);
+		margin: 0 var(--space-1);
+		background: var(--border);
 	}
 	.terminal-location :global(svg.icon) { color: var(--text-faint); }
 	.terminal-location code {
 		overflow: hidden;
 		min-width: 0;
-		color: var(--text-faint);
+		color: var(--text-dim);
 		font-family: var(--mono);
-		font-size: 11px;
+		font-size: var(--fs-xs);
+		letter-spacing: 0;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		unicode-bidi: plaintext;
 	}
 	.terminal-restart {
 		display: inline-flex;
-		min-height: 28px;
+		min-height: 32px;
 		flex: none;
 		align-items: center;
 		justify-content: center;
-		gap: 6px;
-		padding: 0 10px;
-		border: 1px solid var(--pane-edge);
-		border-radius: var(--radius-chip);
-		background: var(--bg-raised);
+		gap: var(--space-1);
+		padding: 0 11px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-xs);
 		cursor: pointer;
 	}
-	.terminal-restart:hover:not(:disabled) { border-color: var(--pane-edge-active); background: var(--bg-inset); }
+	.terminal-restart:hover:not(:disabled) { border-color: var(--border-strong); background: var(--bg-inset); }
 	.terminal-restart:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 	.terminal-restart:disabled { cursor: default; opacity: 0.5; }
 	.shell-controls { display: flex; flex: none; align-items: center; gap: var(--space-2); }
-	.shell-picker-label { display: flex; align-items: center; gap: 7px; color: var(--text-faint); font-size: var(--fs-xs); }
-	.shell-picker-label select {
-		max-width: 180px;
-		min-height: 28px;
-		padding: 0 26px 0 9px;
-		border: 1px solid var(--pane-edge);
-		border-radius: var(--radius-chip);
+	.shell-picker-label { display: flex; align-items: center; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
+	.shell-picker-control {
+		position: relative;
+		display: flex;
+		min-width: 140px;
+		max-width: 220px;
+		min-height: 32px;
+		align-items: center;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
 		background: var(--bg-raised);
+		transition: border-color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+	}
+	.shell-picker-control:hover { border-color: var(--border-strong); }
+	.shell-picker-control:focus-within { border-color: var(--link); box-shadow: var(--focus-ring); }
+	.shell-picker-control :global(svg) {
+		position: absolute;
+		right: 9px;
+		color: var(--text-faint);
+		pointer-events: none;
+	}
+	.shell-picker-control select {
+		width: 100%;
+		min-width: 0;
+		min-height: 30px;
+		appearance: none;
+		padding: 0 32px 0 11px;
+		border: 0;
+		border-radius: inherit;
+		outline: 0;
+		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: var(--fs-xs);
+		text-overflow: ellipsis;
+		cursor: pointer;
 	}
-	.shell-picker-label select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-	.shell-picker-label select:disabled { opacity: 0.55; }
+	.shell-picker-control select:disabled { opacity: 0.55; cursor: default; }
 	.shell-pending { color: var(--text-faint); font-size: 11px; white-space: nowrap; }
 	.terminal-surface {
 		flex: 1;
@@ -403,7 +431,7 @@
 			gap: var(--space-2);
 			padding: var(--space-2) var(--space-3);
 		}
-		.terminal-location { width: 100%; min-height: 24px; }
+		.terminal-location { width: 100%; min-height: 28px; }
 		.terminal-location code { flex: 1; }
 		.shell-controls { width: 100%; flex-wrap: wrap; justify-content: flex-end; }
 		.terminal-surface { margin: var(--space-2); padding: var(--space-2); border-radius: var(--radius-md); }
