@@ -6143,6 +6143,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }];
         let mut out = Vec::new();
@@ -6203,6 +6204,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }];
         let mut out = Vec::new();
@@ -6239,6 +6241,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }
     }

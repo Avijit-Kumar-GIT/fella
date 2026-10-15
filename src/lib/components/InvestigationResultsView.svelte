@@ -34,7 +34,7 @@
 		hasUnsavedEdits?: boolean;
 		onopenrun: (turnId: string, evidenceId?: string) => void;
 		onopenlegacy: (turnId?: string) => void;
-		onreviewquestion: (questionId: string) => void;
+		onreviewquestion: (questionId: string, freshness?: AnalysisTurnReplayStatus) => void;
 	} = $props();
 
 	let runs = $state<Record<string, AnalysisTurn>>({});
@@ -78,7 +78,7 @@
 	}));
 	let freshnessUnknownCount = $derived(new Set(primaryRunIds.filter((turnId) => {
 		const status = freshness[turnId];
-		return Boolean(status?.same_workspace && !status.snapshot_available);
+		return Boolean(status && (!status.same_workspace || !status.snapshot_available));
 	})).size);
 	let changedSourceNames = $derived([...new Set(
 		Object.values(freshness)
@@ -428,9 +428,12 @@
 			<Icon name="info" size={16} />
 			<div>
 				<strong>Some saved results use an older file catalog.</strong>
-				<p>{staleQuestions.length} Question answer{staleQuestions.length === 1 ? '' : 's'} and {staleFindings.length} Finding{staleFindings.length === 1 ? '' : 's'} may need review. Their original runs and source records are preserved; no analysis was rerun.{#if changedSourceNames.length} Changed sources: {changedSourceNames.join(', ')}.{/if}</p>
+				<p>{staleQuestions.length} Question answer{staleQuestions.length === 1 ? '' : 's'} and {staleFindings.length} Finding{staleFindings.length === 1 ? '' : 's'} use an older catalog. Their original runs and source records are preserved; no analysis was rerun. Source scopes remain unchanged.{#if changedSourceNames.length} Changed sources: {changedSourceNames.join(', ')}.{/if}</p>
 				{#if staleQuestions[0]}
-					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(staleQuestions[0].id)}>Review affected Question</Button>
+					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(staleQuestions[0].id, freshness[staleQuestions[0].latest_analysis_turn_id!])}>Review affected Question</Button>
+				{:else if staleFindings[0] && questionForFinding(staleFindings[0].question_id)}
+					{@const staleFindingQuestion = questionForFinding(staleFindings[0].question_id)!}
+					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(staleFindingQuestion.id, freshness[staleFindings[0].analysis_turn_id])}>Review linked Question</Button>
 				{:else if staleFindings[0]}
 					<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(staleFindings[0].analysis_turn_id)}>Review saved run</Button>
 				{/if}
@@ -465,11 +468,14 @@
 						</div>
 						{#if findingCopyStatus[finding.id]}<span class="results-artifact-status" role="status">{findingCopyStatus[finding.id]}</span>{/if}
 						<p class="results-finding-claim">{finding.claim}</p>
+						{#if freshness[finding.analysis_turn_id]?.same_workspace && freshness[finding.analysis_turn_id]?.revision_changed}
+							<p class="results-freshness-warning" role="status">This saved Finding uses catalog {freshness[finding.analysis_turn_id]?.original_revision ?? 'revision not recorded'}; the current catalog is {freshness[finding.analysis_turn_id]?.current_revision ?? 'different'}. Its evidence is unchanged.{#if question} Review the Question and source scope before choosing to rerun.{/if}</p>
+						{/if}
 						{#if fromEarlierRun}<p class="results-freshness-warning" role="status">Based on an earlier run than this Question’s latest answer. Review its source revision before treating this Finding as current.</p>{/if}
 						{#if question}
 							<div class="results-finding-question-row">
 								<p class="results-finding-question">Answers: {question.text}</p>
-								<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(question.id)}>Open Question</Button>
+								<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(question.id, freshness[finding.analysis_turn_id])}>Open Question</Button>
 							</div>
 						{/if}
 						<details class="results-supporting">
@@ -544,7 +550,16 @@
 				{/each}
 			</div>
 		{:else}
-			<p class="results-empty">No Findings have been saved yet. Capture a reviewed conclusion from an analysis run to feature it here.</p>
+			<div class="results-empty-state">
+				<p>No reviewed Findings have been saved yet.</p>
+				{#if activeQuestions.some((question) => question.latest_analysis_turn_id)}
+					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(activeQuestions.find((question) => question.latest_analysis_turn_id)!.id)}>Review an answer</Button>
+				{:else if activeQuestions[0]}
+					<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(activeQuestions[0].id)}>Go to Questions</Button>
+				{:else}
+					<span>Add a Question before saving a Finding.</span>
+				{/if}
+			</div>
 		{/if}
 	</section>
 
@@ -556,6 +571,7 @@
 					{@const linkedFindings = findingsForChart(card)}
 					{@const fromEarlierRun = Boolean(card.question?.latest_analysis_turn_id && card.question.latest_analysis_turn_id !== card.run.id)}
 					<article class="results-chart" aria-label="Visualization artifact from {card.question?.text ?? 'saved analysis'}" data-artifact-kind="model-visualization">
+						{#if freshness[card.run.id]?.same_workspace && freshness[card.run.id]?.revision_changed}<p class="results-freshness-warning" role="status">This chart uses an older source catalog ({freshness[card.run.id]?.original_revision ?? 'revision not recorded'}). Its data and run are unchanged.</p>{/if}
 						{#if fromEarlierRun}<p class="results-freshness-warning" role="status">From an earlier run than the Question’s latest answer · Source catalog revision {card.run.workspace_revision ?? 'not recorded'}.</p>{/if}
 						<Chart
 							spec={card.evidence.chart!}
@@ -761,6 +777,15 @@
 					</li>
 				{/each}
 			</ul>
+		{:else if freshnessLoading}
+			<p class="results-empty" role="status">Checking saved answer freshness…</p>
+		{:else if staleQuestions.length}
+			<div class="results-complete results-complete-stale" role="status">
+				<span>{staleQuestions.length} saved answer{staleQuestions.length === 1 ? '' : 's'} use an older data catalog. The answers and source scope are unchanged.</span>
+				<Button type="button" variant="outline" size="sm" onclick={() => onreviewquestion(staleQuestions[0].id, freshness[staleQuestions[0].latest_analysis_turn_id!])}>Review scope to rerun</Button>
+			</div>
+		{:else if freshnessErrorCount || freshnessUnknownCount}
+			<p class="results-empty" role="status">Saved answers are unchanged, but freshness could not be confirmed. Check the source catalog before relying on them.</p>
 		{:else if activeQuestions.length}
 			<p class="results-complete" role="status"><Icon name="check" size={16} /> All active Questions have complete, current answers.</p>
 		{:else}

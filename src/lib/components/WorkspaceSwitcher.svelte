@@ -42,6 +42,20 @@
 		void onselect(id);
 	}
 
+	function handleWorkspaceMenuKeydown(event: KeyboardEvent): void {
+		if (!['Home', 'End'].includes(event.key)) return;
+		const items = [...(menuContent?.querySelectorAll<HTMLElement>('[role="menuitemradio"]') ?? [])];
+		if (!items.length) return;
+
+		const nextIndex = event.key === 'Home' ? 0 : items.length - 1;
+		const nextItem = items[nextIndex];
+		if (!nextItem) return;
+
+		event.preventDefault();
+		event.stopPropagation();
+		nextItem.focus();
+	}
+
 	function setMenuOpen(open: boolean): void {
 		menuOpen = open;
 		if (!open) return;
@@ -74,6 +88,7 @@
 				side="bottom"
 				align="start"
 				sideOffset={6}
+				onkeydowncapture={handleWorkspaceMenuKeydown}
 				bind:ref={menuContent}
 			>
 				<DropdownMenu.RadioGroup

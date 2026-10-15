@@ -923,7 +923,23 @@ def forecast_error_bands(values, method, horizon, level=0.8, seasonal_period=Non
 
 #[cfg(test)]
 mod tests {
-    use super::{references_forecast_helper, visible_stdout, TABLE_MARKER};
+    use super::{
+        references_forecast_helper, visible_stdout, CapturedOutput, OUTPUT_CAP, TABLE_MARKER,
+    };
+
+    #[test]
+    fn captured_python_output_is_capped_and_marks_truncation() {
+        let mut output = CapturedOutput::default();
+        output.push(&vec![b'x'; OUTPUT_CAP + 1]);
+
+        let text = output.into_text();
+        assert!(text.starts_with(&"x".repeat(OUTPUT_CAP)));
+        assert!(text.ends_with("\n…(output truncated)"));
+        assert_eq!(
+            text.chars().count(),
+            OUTPUT_CAP + "\n…(output truncated)".chars().count()
+        );
+    }
 
     #[test]
     fn forecast_helpers_are_selected_by_python_api_use() {

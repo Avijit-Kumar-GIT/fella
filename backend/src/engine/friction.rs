@@ -111,6 +111,7 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: error.map(String::from),
+            error_kind: None,
             verifier_disposition: None,
         }
     }

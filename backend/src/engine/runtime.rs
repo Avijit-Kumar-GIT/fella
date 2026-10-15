@@ -1350,6 +1350,7 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         };
         let evidence = vec![

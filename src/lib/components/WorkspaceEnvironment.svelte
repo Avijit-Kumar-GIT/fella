@@ -9,7 +9,8 @@
 	let { onopen }: { onopen: (source: SourceInfo) => void } = $props();
 	type Node = { id: string; name: string; kind: 'folder' | 'file' | 'sheet'; children: Node[]; sources: SourceInfo[]; source?: SourceInfo };
 	type Row = { node: Node; depth: number; parentIds: string[] };
-	type RefreshSummary = { added: number; changed: number; removed: number; newlySkipped: number; nowReadable: number; changedSources: string[]; staleQuestions: number; staleFindings: number; revision: string | null };
+	type FreshnessSummary = { questions: number; findings: number; unverifiedRuns: number; checkFailed: boolean };
+	type RefreshSummary = { added: number; changed: number; removed: number; newlySkipped: number; nowReadable: number; changedSources: string[]; remainingChangedSources: number; staleQuestions: number; staleFindings: number; unverifiedRuns: number; freshnessCheckFailed: boolean; revision: string | null };
 
 	let expandedFolders = $state<Record<string, boolean>>({});
 	let expandedWorkbooks = $state<Record<string, boolean>>({});
@@ -95,13 +96,40 @@
 	}
 
 	function catalogFiles(catalog: Catalog): Map<string, string> {
-		return new Map(catalog.sources.map((source) => {
-			const signature = [source.kind, source.name, source.view ?? '', source.size_bytes, source.mtime, source.row_count ?? ''].join('|');
-			return [source.path, signature];
+		const grouped = new Map<string, SourceInfo[]>();
+		for (const source of catalog.sources) {
+			const group = grouped.get(source.path) ?? [];
+			group.push(source);
+			grouped.set(source.path, group);
+		}
+		return new Map([...grouped].map(([path, sources]) => {
+			const signatures = sources.map((source) => ({
+				kind: source.kind,
+				name: source.name,
+				view: source.view,
+				row_count: source.row_count,
+				size_bytes: source.size_bytes,
+				mtime: source.mtime,
+				synopsis: source.synopsis,
+				note: source.note,
+				columns: source.columns?.map((column) => [
+					column.name,
+					column.type,
+					column.null_fraction,
+					column.distinct,
+					column.min,
+					column.max,
+					column.example,
+					column.common_values,
+					column.note
+				])
+			}));
+			signatures.sort((left, right) => `${left.name}:${left.view ?? ''}`.localeCompare(`${right.name}:${right.view ?? ''}`));
+			return [path, JSON.stringify(signatures)];
 		}));
 	}
 
-	async function freshnessCounts(path: string): Promise<{ questions: number; findings: number }> {
+	async function freshnessCounts(path: string): Promise<FreshnessSummary> {
 		try {
 			const records = (await ipc.investigationsList()).filter((item) => item.workspace_id === path);
 			const questionRuns = new Set<string>();
@@ -112,16 +140,19 @@
 			}
 			const all = [...new Set([...questionRuns, ...findingRuns])];
 			const results = await Promise.all(all.map(async (turnId) => {
-				try { return [turnId, await ipc.analysisTurnReplayStatus(turnId, path)] as const; }
-				catch { return [turnId, null] as const; }
+				try { return { turnId, status: await ipc.analysisTurnReplayStatus(turnId, path), failed: false }; }
+				catch { return { turnId, status: null, failed: true }; }
 			}));
-			const stale = new Set(results.filter(([, status]) => status?.revision_changed && status.same_workspace).map(([turnId]) => turnId));
+			const stale = new Set(results.filter(({ status }) => status?.revision_changed && status.same_workspace).map(({ turnId }) => turnId));
+			const unverifiedRuns = results.filter(({ status }) => !status || !status.same_workspace || !status.snapshot_available).length;
 			return {
 				questions: [...questionRuns].filter((turnId) => stale.has(turnId)).length,
-				findings: [...findingRuns].filter((turnId) => stale.has(turnId)).length
+				findings: [...findingRuns].filter((turnId) => stale.has(turnId)).length,
+				unverifiedRuns,
+				checkFailed: results.some(({ failed }) => failed)
 			};
 		} catch {
-			return { questions: 0, findings: 0 };
+			return { questions: 0, findings: 0, unverifiedRuns: 0, checkFailed: true };
 		}
 	}
 
@@ -151,15 +182,19 @@
 			session.catalog = next;
 			const mounted = session.workspaceAt(path);
 			if (mounted) mounted.catalog = next;
+			const changedSourcePaths = [...new Set([...added, ...changed, ...removed, ...newlySkipped, ...nowReadable])];
 			refreshSummary = {
 				added: added.length,
 				changed: changed.length,
 				removed: removed.length,
 				newlySkipped: newlySkipped.length,
 				nowReadable: nowReadable.length,
-				changedSources: [...added, ...changed, ...removed, ...newlySkipped, ...nowReadable].slice(0, 5).map((file) => relativePath(file, path)),
+				changedSources: changedSourcePaths.slice(0, 5).map((file) => relativePath(file, path)),
+				remainingChangedSources: Math.max(0, changedSourcePaths.length - 5),
 				staleQuestions: freshness.questions,
 				staleFindings: freshness.findings,
+				unverifiedRuns: freshness.unverifiedRuns,
+				freshnessCheckFailed: freshness.checkFailed,
 				revision: next.revision ?? null
 			};
 		} catch (cause) {
@@ -224,9 +259,12 @@
 			<div class="refresh-summary" role="status" aria-live="polite">
 				<strong>Workspace checked</strong>
 				<p>{refreshSummary.added} added · {refreshSummary.changed} changed · {refreshSummary.removed} removed{#if refreshSummary.newlySkipped}{' '}· {refreshSummary.newlySkipped} unavailable{/if}{#if refreshSummary.nowReadable}{' '}· {refreshSummary.nowReadable} readable{/if}</p>
-				{#if refreshSummary.changedSources.length}<ul>{#each refreshSummary.changedSources as file (file)}<li>{file}</li>{/each}</ul>{/if}
+				{#if refreshSummary.changedSources.length}<ul>{#each refreshSummary.changedSources as file (file)}<li>{file}</li>{/each}</ul>{#if refreshSummary.remainingChangedSources}<small>and {refreshSummary.remainingChangedSources} more changed source{refreshSummary.remainingChangedSources === 1 ? '' : 's'}</small>{/if}{/if}
 				{#if refreshSummary.staleQuestions || refreshSummary.staleFindings}
-					<p>{refreshSummary.staleQuestions} saved Question answer{refreshSummary.staleQuestions === 1 ? '' : 's'} and {refreshSummary.staleFindings} Finding{refreshSummary.staleFindings === 1 ? '' : 's'} use an older catalog revision. Their original runs are unchanged; review freshness in Results before rerunning.</p>
+					<p>{refreshSummary.staleQuestions} saved Question answer{refreshSummary.staleQuestions === 1 ? '' : 's'} and {refreshSummary.staleFindings} Finding{refreshSummary.staleFindings === 1 ? '' : 's'} use an older catalog revision. Their original runs and source scopes are unchanged; review the affected Question before choosing to rerun.</p>
+				{/if}
+				{#if refreshSummary.freshnessCheckFailed || refreshSummary.unverifiedRuns}
+					<p>Freshness could not be confirmed{refreshSummary.unverifiedRuns ? ` for ${refreshSummary.unverifiedRuns} saved run${refreshSummary.unverifiedRuns === 1 ? '' : 's'}` : ''}. Saved answers and runs were not changed; review Results before relying on or rerunning them.</p>
 				{/if}
 				{#if refreshSummary.revision}<small>Catalog revision {refreshSummary.revision}</small>{/if}
 			</div>

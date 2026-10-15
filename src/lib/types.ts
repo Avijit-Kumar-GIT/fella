@@ -108,6 +108,8 @@ export interface EvidenceItem {
 	python_input_trace?: PythonInputTrace;
 	ms: number;
 	error?: string;
+	/** Stable tool failure category, when this evidence item is an error. */
+	error_kind?: string;
 	/** Verifier decision; separate from whether the tool itself executed. */
 	verifier_disposition?:
 		| { state: 'excluded'; reason: string }

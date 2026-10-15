@@ -10,8 +10,8 @@ use crate::engine::analytics::{provenance, verify};
 use crate::engine::context::ContextPacket;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
-    Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
-    Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
+    Answer, AnswerProvenance, AskEvent, EvidenceItem, EvidenceSource, PythonInputTrace,
+    PythonQueryReference, Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
 use crate::engine::investigation::{InvestigationContextSnapshot, InvestigationSourceSelection};
 use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
@@ -20,7 +20,7 @@ use crate::engine::runtime::{
     ModelCallTrace, PlanStrategy, ResolvedClarification, TraceStep, TurnState,
 };
 use crate::engine::state::EngineState;
-use crate::engine::tools::Registry;
+use crate::engine::tools::{Registry, ToolOutput};
 use crate::engine::{friction, planner, risk, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
@@ -1626,6 +1626,7 @@ fn duplicate_tool_outcome(call: &ToolCall, content: String) -> (EvidenceItem, St
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         },
         content,
@@ -1650,8 +1651,9 @@ async fn run_tool_call(
         return tool_error(
             &call.name,
             &call.arguments,
-            "the workspace changed while this question was running; the tool call was not used ask again".into(),
+            "the workspace changed while this question was running; this tool call was not used. Inspect the current workspace and ask again.".into(),
             started,
+            Some("workspace_stale"),
         );
     }
     let tool_context = crate::engine::tools::ToolContext {
@@ -1666,13 +1668,21 @@ async fn run_tool_call(
         return tool_error(
             &call.name,
             &call.arguments,
-            "the workspace changed while this question was running; the tool result was discarded ask again".into(),
+            "the workspace changed while this question was running; this tool result was discarded. Inspect the current workspace and ask again.".into(),
             started,
+            Some("workspace_stale"),
         );
     }
     match result {
         Some(Ok(out)) => {
             let mut sources = out.sources.clone();
+            for source in
+                tool_operation_sources(catalog, &call.name, &call.arguments, &out, source_selection)
+            {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
             for source in out
                 .sql
                 .as_deref()
@@ -1738,6 +1748,7 @@ async fn run_tool_call(
                 python_queries_complete: out.python_queries_complete,
                 ms: started.elapsed().as_millis() as u64,
                 error: None,
+                error_kind: None,
                 verifier_disposition: None,
             };
             (item, out.llm_text)
@@ -1750,15 +1761,153 @@ async fn run_tool_call(
                     msg = format!("{msg}\n\nTables in this workspace:\n{schema}");
                 }
             }
-            tool_error(&call.name, &call.arguments, msg, started)
+            tool_error(&call.name, &call.arguments, msg, started, Some(e.kind()))
         }
         None => tool_error(
             &call.name,
             &call.arguments,
             format!("no such tool `{}`", call.name),
             started,
+            Some("tool_not_found"),
         ),
     }
+}
+
+/// Bind file-oriented tool results to the exact catalog entries they read or
+/// listed. SQL and Python add table lineage below; this fills the parallel
+/// provenance gap for inspection, document reads/search, and inventory pages.
+fn tool_operation_sources(
+    catalog: &Catalog,
+    tool: &str,
+    args: &serde_json::Value,
+    output: &ToolOutput,
+    selection: Option<&InvestigationSourceSelection>,
+) -> Vec<EvidenceSource> {
+    let root = std::path::Path::new(catalog.workspace.as_deref().unwrap_or_default());
+    let relative_path = |source: &crate::engine::catalog::SourceInfo| {
+        crate::engine::catalog::workspace_relative_path(root, std::path::Path::new(&source.path))
+    };
+    let eligible = |source: &&crate::engine::catalog::SourceInfo| {
+        selection.is_none_or(|scope| scope.includes_path(&relative_path(source)))
+    };
+    let mut references: Vec<EvidenceSource> = Vec::new();
+
+    let mut add = |source: &crate::engine::catalog::SourceInfo, note: Option<String>| {
+        let path = relative_path(source);
+        let table = source.view.clone().unwrap_or_default();
+        if let Some(existing) = references
+            .iter_mut()
+            .find(|reference| reference.source == path && reference.table == table)
+        {
+            if let Some(note) = note {
+                match &mut existing.note {
+                    Some(existing_note) if !existing_note.split("; ").any(|part| part == note) => {
+                        existing_note.push_str("; ");
+                        existing_note.push_str(&note);
+                    }
+                    None => existing.note = Some(note),
+                    _ => {}
+                }
+            }
+            return;
+        }
+        references.push(EvidenceSource {
+            source: path,
+            table,
+            note,
+        });
+    };
+
+    match tool {
+        "inspect_table" => {
+            if let Some(name) = args.get("name").and_then(serde_json::Value::as_str) {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.name == name || source.view.as_deref() == Some(name) {
+                        add(source, Some("table inspection".into()));
+                    }
+                }
+            }
+        }
+        "read_file" => {
+            let names: Vec<&str> = args
+                .get("names")
+                .and_then(serde_json::Value::as_array)
+                .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_else(|| {
+                    args.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .into_iter()
+                        .collect()
+                });
+            for name in names {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() && relative_path(source) == name {
+                        add(source, Some("document read".into()));
+                    }
+                }
+            }
+        }
+        "grep_files" => {
+            let hits = output.rows.as_deref().unwrap_or_default();
+            for row in hits {
+                let Some(path) = row.get(1).and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let line = row
+                    .get(2)
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|line| format!("line {line}"));
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() && relative_path(source) == path {
+                        add(source, line.clone());
+                    }
+                }
+            }
+            if hits.is_empty() {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() {
+                        add(source, Some("included in lexical search scope".into()));
+                    }
+                }
+            }
+        }
+        "list_files" => {
+            let text = output.output.as_deref().unwrap_or(&output.llm_text);
+            for source in catalog.sources.iter().filter(eligible) {
+                let path = relative_path(source);
+                let listed = if source.view.is_some() {
+                    let view = source.view.as_deref().unwrap_or_default();
+                    text.lines()
+                        .any(|line| line.starts_with(&format!("table {view} (file={path},")))
+                } else {
+                    text.lines()
+                        .any(|line| line.starts_with(&format!("document {path} (")))
+                };
+                if listed {
+                    add(source, Some("workspace inventory entry".into()));
+                }
+            }
+            for skipped in &catalog.skipped {
+                let relative = crate::engine::catalog::workspace_relative_path(
+                    root,
+                    std::path::Path::new(&skipped.name),
+                );
+                if text
+                    .lines()
+                    .any(|line| line.starts_with(&format!("skipped {relative} (")))
+                {
+                    references.push(EvidenceSource {
+                        source: relative,
+                        table: String::new(),
+                        note: Some(format!("unavailable: {}", skipped.reason)),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    references
 }
 
 fn tool_error(
@@ -1766,6 +1915,7 @@ fn tool_error(
     args: &serde_json::Value,
     message: String,
     started: Instant,
+    error_kind: Option<&'static str>,
 ) -> (EvidenceItem, String) {
     (
         EvidenceItem {
@@ -1787,9 +1937,13 @@ fn tool_error(
             python_queries_complete: None,
             ms: started.elapsed().as_millis() as u64,
             error: Some(message.clone()),
+            error_kind: error_kind.map(str::to_string),
             verifier_disposition: None,
         },
-        format!("ERROR: {message}"),
+        match error_kind {
+            Some(kind) => format!("ERROR ({kind}): {message}"),
+            None => format!("ERROR: {message}"),
+        },
     )
 }
 
@@ -2242,6 +2396,201 @@ mod tests {
     use super::*;
     use crate::engine::llm::ToolCall;
 
+    #[test]
+    fn failed_tool_results_keep_a_typed_recovery_category() {
+        let (item, model_message) = tool_error(
+            "run_sql",
+            &serde_json::json!({"sql": "SELECT 1"}),
+            "the workspace changed during this run".into(),
+            Instant::now(),
+            Some("workspace_stale"),
+        );
+
+        assert_eq!(item.error_kind.as_deref(), Some("workspace_stale"));
+        assert_eq!(
+            item.error.as_deref(),
+            Some("the workspace changed during this run")
+        );
+        assert!(model_message.starts_with("ERROR (workspace_stale):"));
+        assert_eq!(
+            serde_json::to_value(item).unwrap()["error_kind"],
+            "workspace_stale"
+        );
+    }
+
+    #[test]
+    fn file_tools_preserve_exact_source_provenance_with_investigation_scope() {
+        use crate::engine::catalog::{SkippedFile, SourceInfo, SourceKind};
+
+        let catalog = Catalog {
+            workspace: Some("/workspace".into()),
+            sources: vec![
+                SourceInfo {
+                    name: "sales.csv".into(),
+                    path: "/workspace/sales.csv".into(),
+                    kind: SourceKind::Csv,
+                    view: Some("sales".into()),
+                    row_count: Some(2),
+                    columns: None,
+                    size_bytes: 20,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "q4-notes.md".into(),
+                    path: "/workspace/reports/q4-notes.md".into(),
+                    kind: SourceKind::Text,
+                    view: None,
+                    row_count: None,
+                    columns: None,
+                    size_bytes: 30,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "other.md".into(),
+                    path: "/workspace/private/other.md".into(),
+                    kind: SourceKind::Text,
+                    view: None,
+                    row_count: None,
+                    columns: None,
+                    size_bytes: 40,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "book.xlsx · Q1".into(),
+                    path: "/workspace/reports/book.xlsx".into(),
+                    kind: SourceKind::Xlsx,
+                    view: Some("book_q1".into()),
+                    row_count: Some(3),
+                    columns: None,
+                    size_bytes: 50,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "book.xlsx · Q2".into(),
+                    path: "/workspace/reports/book.xlsx".into(),
+                    kind: SourceKind::Xlsx,
+                    view: Some("book_q2".into()),
+                    row_count: Some(4),
+                    columns: None,
+                    size_bytes: 50,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+            ],
+            skipped: vec![SkippedFile {
+                name: "private/unsupported.docx".into(),
+                reason: "Unsupported file type".into(),
+            }],
+            ..Catalog::default()
+        };
+        let output = |text: &str| ToolOutput {
+            summary: "fixture".into(),
+            llm_text: text.into(),
+            sources: Vec::new(),
+            sql: None,
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: Some(text.into()),
+            chart: None,
+            result_table: None,
+            python_queries: None,
+            python_queries_complete: None,
+        };
+        let selection = InvestigationSourceSelection {
+            mode: crate::engine::investigation::InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["reports/q4-notes.md".into()],
+        };
+
+        let read = tool_operation_sources(
+            &catalog,
+            "read_file",
+            &serde_json::json!({"name": "reports/q4-notes.md"}),
+            &output("Q4 notes"),
+            Some(&selection),
+        );
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].source, "reports/q4-notes.md");
+        assert_eq!(read[0].note.as_deref(), Some("document read"));
+
+        let grep_output = ToolOutput {
+            rows: Some(vec![vec![
+                serde_json::json!(1),
+                serde_json::json!("reports/q4-notes.md"),
+                serde_json::json!(12),
+                serde_json::json!("Revenue grew"),
+            ]]),
+            ..output("Revenue grew")
+        };
+        let grep = tool_operation_sources(
+            &catalog,
+            "grep_files",
+            &serde_json::json!({"pattern": "revenue"}),
+            &grep_output,
+            Some(&selection),
+        );
+        assert_eq!(grep.len(), 1);
+        assert_eq!(grep[0].source, "reports/q4-notes.md");
+        assert_eq!(grep[0].note.as_deref(), Some("line 12"));
+
+        let inspect = tool_operation_sources(
+            &catalog,
+            "inspect_table",
+            &serde_json::json!({"name": "sales"}),
+            &output("inspected sales"),
+            None,
+        );
+        assert_eq!(inspect.len(), 1);
+        assert_eq!(inspect[0].source, "sales.csv");
+        assert_eq!(inspect[0].table, "sales");
+
+        let inventory = tool_operation_sources(
+            &catalog,
+            "list_files",
+            &serde_json::json!({"kind": "documents"}),
+            &output("document reports/q4-notes.md (text, 0 KB)"),
+            Some(&selection),
+        );
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].source, "reports/q4-notes.md");
+        assert_eq!(
+            inventory[0].note.as_deref(),
+            Some("workspace inventory entry")
+        );
+
+        let listed = tool_operation_sources(
+            &catalog,
+            "list_files",
+            &serde_json::json!({"kind": "all"}),
+            &output(
+                "table book_q1 (file=reports/book.xlsx, 3 rows)\nskipped private/unsupported.docx (Unsupported file type)",
+            ),
+            None,
+        );
+        assert_eq!(listed.len(), 2);
+        assert!(listed
+            .iter()
+            .any(|source| { source.source == "reports/book.xlsx" && source.table == "book_q1" }));
+        assert!(!listed.iter().any(|source| source.table == "book_q2"));
+        let skipped = listed
+            .iter()
+            .find(|source| source.source == "private/unsupported.docx")
+            .unwrap();
+        assert_eq!(
+            skipped.note.as_deref(),
+            Some("unavailable: Unsupported file type")
+        );
+    }
+
     fn evidence_item(tool: &str) -> EvidenceItem {
         EvidenceItem {
             id: "evidence-test".into(),
@@ -2262,6 +2611,7 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }
     }

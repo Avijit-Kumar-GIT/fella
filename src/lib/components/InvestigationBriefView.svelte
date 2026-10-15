@@ -28,6 +28,7 @@
 		InvestigationQuestion,
 		InvestigationQuestionInput,
 		InvestigationQuestionAnswerStatus,
+		AnalysisTurnReplayStatus,
 		InvestigationSourceSelection,
 		Message
 	} from '$lib/types';
@@ -90,6 +91,7 @@
 	let proposalText = $state('');
 	let proposalTarget = $state<BriefProposalTarget>('goal');
 	let pendingAnalysisQuestionId = $state<string | null>(null);
+	let staleResultReview = $state<{ questionId: string; status: AnalysisTurnReplayStatus } | null>(null);
 	let loading = $state(false);
 	let openingConversation = $state(false);
 	let saving = $state(false);
@@ -1073,8 +1075,15 @@
 		await openSelectedConversation(turnId);
 	}
 
-	async function reviewQuestionFromResults(questionId: string): Promise<void> {
-		focusQuestion(questionId);
+	async function reviewQuestionFromResults(
+		questionId: string,
+		freshness?: AnalysisTurnReplayStatus
+	): Promise<void> {
+		staleResultReview = freshness?.same_workspace && freshness.revision_changed
+			? { questionId, status: freshness }
+			: null;
+		if (staleResultReview) pendingAnalysisQuestionId = questionId;
+		await focusQuestion(questionId);
 	}
 
 	function findingEvidenceOptions(run: AnalysisTurn): { id: string; label: string }[] {
@@ -1356,6 +1365,7 @@
 			error = 'Fill in or remove each blank Question before analyzing the plan.';
 			return;
 		}
+		staleResultReview = null;
 		pendingAnalysisQuestionId = questionId;
 		error = '';
 	}
@@ -1913,6 +1923,7 @@
 						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
+								<p>Analyze one Question at a time; subquestions are optional.</p>
 							</div>
 							<div class="question-save">
 								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
@@ -2011,7 +2022,6 @@
 								<div class="question-item root-question-item">
 									<div class="question-item-heading">
 										<label for="question-{rootQuestion.id}">Main question</label>
-										<span class="question-parent-label">Parent request</span>
 										<Badge
 											variant={questionAnswerStatusVariant(questionAnswerStatus(rootQuestion.id))}
 											aria-label="Main Question status: {questionAnswerStatusLabel(questionAnswerStatus(rootQuestion.id))}"
@@ -2030,6 +2040,20 @@
 									</div>
 									{#if questionAnswerReason(rootQuestion.id)}
 										<p class="question-status-reason" data-question-status={questionAnswerStatus(rootQuestion.id)} role="status">{questionAnswerReason(rootQuestion.id)}</p>
+									{/if}
+									{#if staleResultReview?.questionId === rootQuestion.id}
+										<div class="question-stale-review" role="status">
+											<p>This saved answer used catalog {staleResultReview.status.original_revision ?? 'not recorded'}; the current catalog is {staleResultReview.status.current_revision ?? 'different'}. The saved answer and run are unchanged.</p>
+											<details>
+												<summary>Source scope used by the saved run</summary>
+												{#if staleResultReview.status.source_scope?.used_sources.length}
+													<ul>{#each staleResultReview.status.source_scope.used_sources as source (`${source.source}-${source.table}`)}<li>{source.table ? `${source.source} · ${source.table}` : source.source}</li>{/each}</ul>
+												{:else}
+													<p>The saved run did not record its source list.</p>
+												{/if}
+										</details>
+											<p>Review the included files in the run preview before choosing to run this Question again.</p>
+										</div>
 									{/if}
 									{#if savedQuestion(rootQuestion.id)}
 										<QuestionAnswerPreview
@@ -2072,7 +2096,7 @@
 								</div>
 							{/if}
 							{#if subquestions.length}
-								<h4 class="subquestion-title">Breakdown</h4>
+											<h4 class="subquestion-title">Subquestions</h4>
 								<ol class="question-list">
 									{#each subquestions as question, index (question.id)}
 										<li class="question-item">
@@ -2102,6 +2126,20 @@
 											{#if questionAnswerReason(question.id)}
 												<p class="question-status-reason" data-question-status={questionAnswerStatus(question.id)} role="status">{questionAnswerReason(question.id)}</p>
 											{/if}
+												{#if staleResultReview?.questionId === question.id}
+													<div class="question-stale-review" role="status">
+														<p>This saved answer used catalog {staleResultReview.status.original_revision ?? 'not recorded'}; the current catalog is {staleResultReview.status.current_revision ?? 'different'}. The saved answer and run are unchanged.</p>
+														<details>
+														<summary>Source scope used by the saved run</summary>
+														{#if staleResultReview.status.source_scope?.used_sources.length}
+															<ul>{#each staleResultReview.status.source_scope.used_sources as source (`${source.source}-${source.table}`)}<li>{source.table ? `${source.source} · ${source.table}` : source.source}</li>{/each}</ul>
+														{:else}
+															<p>The saved run did not record its source list.</p>
+														{/if}
+													</details>
+													<p>Review the included files in the run preview before choosing to run this Question again.</p>
+													</div>
+												{/if}
 											{#if savedQuestion(question.id)}
 												<QuestionAnswerPreview
 													question={savedQuestion(question.id)!}
@@ -2215,7 +2253,7 @@
 									<p class="run-preview-dirty">Your unsaved Question and context edits will be saved before this run starts.</p>
 								{/if}
 								<div class="run-preview-actions">
-									<Button type="button" variant="ghost" disabled={startingQuestionAnalysis} onclick={() => (pendingAnalysisQuestionId = null)}>Cancel</Button>
+											<Button type="button" variant="ghost" disabled={startingQuestionAnalysis} onclick={() => { pendingAnalysisQuestionId = null; staleResultReview = null; }}>Cancel</Button>
 									<Button
 										type="button"
 										disabled={saving || proposingQuestions || openingConversation || startingQuestionAnalysis || session.activeChat.busy || hasBlankQuestion || hasBlankDefinition || (analysisSetupCatalogAvailable && analysisSetupIsNarrowed && !analysisSetupSourcePaths.length)}
@@ -2918,8 +2956,8 @@
 		.investigation-nav > .fella-pill-nav-item {
 			flex: 1 1 auto;
 			min-width: 0;
-			padding-inline: clamp(1px, 0.5cqi, 3px);
-			font-size: clamp(10px, 3.2cqi, var(--fs-xs));
+			padding-inline: clamp(2px, 0.55cqi, 4px);
+			font-size: clamp(11px, 3cqi, var(--fs-xs));
 		}
 	}
 	.investigation-tab-panel { min-width: 0; }
@@ -3051,7 +3089,7 @@
 	.question-save { width: 12rem; min-width: 12rem; max-width: 22rem; min-height: 20px; flex: 0 1 22rem; justify-content: flex-end; }
 	.question-save > span { display: block; min-width: 0; min-height: 18px; overflow: hidden; color: var(--text-faint); font-size: var(--fs-xs); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
 	.question-plan-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
-	.question-coverage { display: grid; gap: var(--space-3); padding: var(--space-3) 0; border: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+	.question-coverage { display: grid; gap: var(--space-3); padding: 0; margin-top: var(--space-1); border: 0; border-radius: 0; background: transparent; }
 	.question-coverage > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-coverage-message { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
@@ -3075,9 +3113,12 @@
 	.question-item { min-width: 0; padding: var(--space-4); border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
-	.question-parent-label { color: var(--text-faint); font-size: var(--fs-xs); }
 	.question-status-reason { margin: 0 0 var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.question-status-reason[data-question-status='blocked'] { color: var(--err); }
+	.question-stale-review { display: grid; gap: var(--space-2); margin: var(--space-2) 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.question-stale-review p { margin: 0; }
+	.question-stale-review summary { width: fit-content; color: var(--text); cursor: pointer; }
+	.question-stale-review ul { display: grid; gap: 2px; margin: var(--space-1) 0 0; padding-left: var(--space-5); }
 	.question-item-actions { gap: 0; }
 	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
@@ -3157,7 +3198,7 @@
 	.analysis-run-facts code { font-size: var(--fs-xs); }
 	.analysis-run-facts :global(.analysis-run-parent-link) { min-height: 0; padding: 0; font-size: var(--fs-xs); }
 	.analysis-run-question-snapshot { padding-top: var(--space-2); margin: 0; border-top: 1px solid var(--border); }
-	.analysis-run-context { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-context { display: grid; gap: var(--space-2); padding: var(--space-2) 0 0; border: 0; border-radius: 0; background: transparent; }
 	.analysis-run-context > header h5, .analysis-run-context-definitions h6, .analysis-run-evidence h5 { margin: 0; color: var(--text); font-size: var(--fs-sm); font-weight: 650; }
 	.analysis-run-context > header p, .analysis-run-evidence header p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-run-context-facts { display: grid; gap: var(--space-2); margin: 0; }
@@ -3168,7 +3209,7 @@
 	.analysis-run-context-list li { display: grid; gap: 2px; }
 	.analysis-run-context-list small { color: var(--text-faint); font-size: 11px; }
 	.analysis-run-source-provenance { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-	.analysis-run-source-state { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); }
+	.analysis-run-source-state { display: grid; align-content: start; gap: var(--space-2); min-width: 0; padding: var(--space-1) 0; border: 0; border-radius: 0; background: transparent; }
 	.analysis-run-source-state h6 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
 	.analysis-run-source-state .analysis-run-context-facts > div { grid-template-columns: minmax(110px, 0.4fr) minmax(0, 1fr); }
 	.analysis-run-context-definitions { display: grid; gap: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--border); }
@@ -3177,14 +3218,14 @@
 	.analysis-run-context-definitions li span, .analysis-run-context-definitions p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.analysis-run-evidence { display: grid; gap: var(--space-2); min-width: 0; }
 	.analysis-run-evidence :global(.evidence-body) { margin-top: 0; }
-	.analysis-run-assumptions { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-assumptions { display: grid; gap: var(--space-2); padding: var(--space-2) 0 0; border: 0; border-radius: 0; background: transparent; }
 	.analysis-run-assumptions h5 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
 	.analysis-run-assumptions p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-run-assumptions ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 	.analysis-run-assumptions li { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.analysis-run-assumptions li > span { min-width: 0; flex: 1; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.analysis-run-assumptions li :global(button) { flex: none; }
-	.analysis-run-answer { display: grid; gap: var(--space-2); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); }
+	.analysis-run-answer { display: grid; gap: var(--space-2); padding: var(--space-2) 0 0; border: 0; border-radius: 0; background: transparent; }
 	.analysis-run-answer h5 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.analysis-run-answer p { max-height: 320px; overflow: auto; margin: 0; font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.analysis-run-answer small { color: var(--text-faint); font-size: var(--fs-xs); }

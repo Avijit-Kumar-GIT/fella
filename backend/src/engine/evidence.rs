@@ -58,6 +58,12 @@ pub struct EvidenceItem {
     pub ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// Stable recovery category for a failed model-facing tool call. The
+    /// message remains available for model recovery; this category lets the
+    /// UI and diagnostics distinguish stale scope, missing tools, and runtime
+    /// failures without parsing prose.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
     /// Verifier disposition is distinct from a tool error: an execution may
     /// have succeeded while its result is excluded from this answer, or only
     /// one artifact produced from it (such as a chart) may be withheld.
@@ -305,6 +311,7 @@ mod tests {
             python_queries_complete: None,
             ms: 1,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }
     }
@@ -488,6 +495,7 @@ mod tests {
             python_queries_complete: Some(true),
             ms: 1,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         };
 

@@ -903,6 +903,46 @@ mod tests {
     }
 
     #[test]
+    fn inventory_pages_obey_character_cap_and_continue_by_returned_count() {
+        let root = Path::new("/workspace");
+        let sources: Vec<SourceInfo> = (0..50)
+            .map(|index| SourceInfo {
+                name: format!("{}.csv", "x".repeat(300) + &index.to_string()),
+                path: format!("/workspace/{}.csv", "x".repeat(300) + &index.to_string()),
+                kind: SourceKind::Csv,
+                view: Some(format!("table_{index}")),
+                row_count: Some(1),
+                columns: None,
+                size_bytes: 8,
+                mtime: 1,
+                synopsis: None,
+                note: None,
+            })
+            .collect();
+
+        let first = list_files_page(root, &sources, &[], FileListFilter::All, None, 0, 50);
+        let rendered = first.lines.join("\n");
+        assert!(rendered.chars().count() <= 12_000);
+        assert!(
+            first.lines.len() < 50,
+            "the long entries should hit the page cap"
+        );
+        assert_eq!(first.matching, 50);
+
+        let next = list_files_page(
+            root,
+            &sources,
+            &[],
+            FileListFilter::All,
+            None,
+            first.lines.len(),
+            50,
+        );
+        assert!(!next.lines.is_empty());
+        assert_eq!(next.offset, first.lines.len());
+    }
+
+    #[test]
     fn scan_inventories_five_thousand_files_and_reports_elapsed_time() {
         let tree = TempTree::new("scale");
         for directory in 0..100 {

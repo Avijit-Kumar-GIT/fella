@@ -6472,6 +6472,47 @@ mod jit_schema_tests {
             "the prompt should distinguish previews from full document contents"
         );
     }
+
+    #[test]
+    fn read_file_caps_document_text_and_reports_truncation() {
+        let ws = ScratchDir::new("read-file-cap-ws");
+        let data = ScratchDir::new("read-file-cap-data");
+        let contents = format!("{}TAIL", "x".repeat(READ_FILE_CHAR_CAP));
+        std::fs::write(ws.join("long-notes.txt"), &contents).unwrap();
+
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+        let (text, truncated) = engine.read_file("long-notes.txt").unwrap();
+
+        assert!(truncated);
+        assert_eq!(text.chars().count(), READ_FILE_CHAR_CAP);
+        assert!(!text.contains("TAIL"));
+    }
+
+    #[test]
+    fn sql_row_cap_keeps_total_count_and_truncation_signal() {
+        let ws = ScratchDir::new("sql-row-cap-ws");
+        let data = ScratchDir::new("sql-row-cap-data");
+        let rows = (0..1_001)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        std::fs::write(
+            ws.join("measurements.csv"),
+            format!("value\n{}\n", rows.join("\n")),
+        )
+        .unwrap();
+
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+        let result = engine.run_sql("SELECT value FROM measurements").unwrap();
+
+        assert_eq!(
+            result.rows.len(),
+            crate::engine::analytics::data::DEFAULT_ROW_CAP
+        );
+        assert_eq!(result.row_count, 1_001);
+        assert!(result.truncated);
+    }
 }
 
 #[cfg(test)]

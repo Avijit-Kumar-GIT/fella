@@ -1352,6 +1352,16 @@ test('Questions reflow inside a normal desktop split Tools pane', async ({ page 
 	expect(layout.coverageDirection).toBe('column');
 	expect(layout.coverageOverflow).toBe(false);
 	expect(layout.pageOverflow).toBe(false);
+
+	const questionPlan = page.getByRole('region', { name: 'Question plan' });
+	await expect(questionPlan.locator('.question-plan-heading')).toContainText('Analyze one Question at a time; subquestions are optional.');
+	await expect(questionPlan.getByRole('button', { name: 'Add main Question' })).toBeVisible();
+	await expect(page.getByText('Context (optional)', { exact: true })).toBeVisible();
+	const definitions = page.locator('.definition-disclosure');
+	await expect(definitions.locator('summary')).toContainText('Definitions & assumptions');
+	await expect(definitions.locator('summary')).toContainText('None saved');
+	expect(await definitions.evaluate((element) => element.open)).toBe(false);
+	await expect(page.getByRole('region', { name: 'Question coverage' })).toContainText('Add a main Question to see coverage.');
 });
 
 
@@ -2247,6 +2257,7 @@ test('Environment opens nested documents and individual workbook sheets without 
 		sources: [
 			{ name: 'orders.csv', path: `${workspacePath}\\data\\orders.csv`, kind: 'csv', view: 'orders', row_count: 12, size_bytes: 200, mtime: 1 },
 			{ name: 'analysis.txt', path: `${workspacePath}\\briefings\\analysis.txt`, kind: 'text', size_bytes: 90, mtime: 1 },
+			{ name: 'summary.pdf', path: `${workspacePath}\\briefings\\summary.pdf`, kind: 'pdf', size_bytes: 140, mtime: 1 },
 			{ name: 'Quarterly.xlsx · Q1', path: `${workspacePath}\\reports\\Quarterly.xlsx`, kind: 'xlsx', view: 'quarterly_q1', row_count: 8, size_bytes: 500, mtime: 1 },
 			{ name: 'Quarterly.xlsx · Q2', path: `${workspacePath}\\reports\\Quarterly.xlsx`, kind: 'xlsx', view: 'quarterly_q2', row_count: 9, size_bytes: 500, mtime: 1 }
 		]
@@ -2265,7 +2276,14 @@ test('Environment opens nested documents and individual workbook sheets without 
 	const tools = page.locator('.workspace-tools-pane');
 	await expect(tools).toBeVisible();
 	await expect(tools.getByRole('tabpanel', { name: 'analysis.txt' })).toContainText('Preview content for briefings/analysis.txt');
-	expect(await page.evaluate(() => window.__workspacePreviewCalls)).toEqual(['briefings/analysis.txt']);
+	await files.getByRole('button', { name: 'summary.pdf' }).click();
+	await expect(tools.getByRole('tabpanel', { name: 'summary.pdf' })).toContainText('Preview content for briefings/summary.pdf');
+	expect(await page.evaluate(() => window.__workspacePreviewCalls)).toEqual(['briefings/analysis.txt', 'briefings/summary.pdf']);
+	await files.getByRole('button', { name: 'data' }).click();
+	await files.getByRole('button', { name: 'orders.csv' }).click();
+	const csvPreview = tools.getByRole('tabpanel', { name: 'orders.csv' });
+	await expect(csvPreview.getByRole('table')).toBeVisible();
+	await expect(csvPreview).toContainText('Read-only sample from Fella’s normalized table');
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
 	await expect(composer).toBeVisible();
 
@@ -2294,7 +2312,9 @@ test('Environment refresh reports catalog changes and highlights saved results w
 		revision: 'refresh-r1',
 		sources: [
 			{ name: 'orders.csv', path: `${workspacePath}\\data\\orders.csv`, kind: 'csv', view: 'orders', row_count: 12, size_bytes: 200, mtime: 1 },
-			{ name: 'old.csv', path: `${workspacePath}\\archive\\old.csv`, kind: 'csv', view: 'old', row_count: 4, size_bytes: 80, mtime: 1 }
+			{ name: 'old.csv', path: `${workspacePath}\\archive\\old.csv`, kind: 'csv', view: 'old', row_count: 4, size_bytes: 80, mtime: 1 },
+			{ name: 'Quarterly.xlsx · Q1', path: `${workspacePath}\\reports\\Quarterly.xlsx`, kind: 'xlsx', view: 'quarterly_q1', row_count: 8, size_bytes: 500, mtime: 1, columns: [{ name: 'revenue', type: 'REAL', min: '10', max: '90' }] },
+			{ name: 'Quarterly.xlsx · Q2', path: `${workspacePath}\\reports\\Quarterly.xlsx`, kind: 'xlsx', view: 'quarterly_q2', row_count: 9, size_bytes: 500, mtime: 1, columns: [{ name: 'revenue', type: 'REAL', min: '10', max: '90' }] }
 		],
 		skipped: [{ name: 'incoming/readable.csv', reason: 'File was unavailable during indexing' }]
 	};
@@ -2304,7 +2324,9 @@ test('Environment refresh reports catalog changes and highlights saved results w
 		sources: [
 			{ ...beforeCatalog.sources[0], size_bytes: 240, mtime: 2 },
 			{ name: 'new.csv', path: `${workspacePath}\\data\\new.csv`, kind: 'csv', view: 'new', row_count: 3, size_bytes: 60, mtime: 2 },
-			{ name: 'readable.csv', path: `${workspacePath}\\incoming\\readable.csv`, kind: 'csv', view: 'readable', row_count: 5, size_bytes: 100, mtime: 2 }
+			{ name: 'readable.csv', path: `${workspacePath}\\incoming\\readable.csv`, kind: 'csv', view: 'readable', row_count: 5, size_bytes: 100, mtime: 2 },
+			{ ...beforeCatalog.sources[2], columns: [{ name: 'revenue', type: 'REAL', min: '10', max: '125' }] },
+			{ ...beforeCatalog.sources[3] }
 		],
 		skipped: [{ name: 'slides.pptx', reason: 'Unsupported file type' }]
 	};
@@ -2341,7 +2363,7 @@ test('Environment refresh reports catalog changes and highlights saved results w
 	await page.getByRole('button', { name: 'Environment', exact: true }).click();
 	await page.getByRole('button', { name: 'Refresh workspace files' }).click();
 	const summary = page.getByRole('status').filter({ has: page.getByText('Workspace checked', { exact: true }) });
-	await expect(summary).toContainText('2 added · 1 changed · 1 removed · 1 unavailable · 1 readable');
+	await expect(summary).toContainText('2 added · 2 changed · 1 removed · 1 unavailable · 1 readable');
 	await expect(summary).toContainText('1 saved Question answer and 1 Finding use an older catalog revision');
 	await expect(summary).toContainText('Catalog revision refresh-r2');
 	await expect(page.getByRole('region', { name: 'Workspace file hierarchy' }).getByRole('button', { name: 'slides.pptx' })).toHaveCount(0);
@@ -2350,6 +2372,23 @@ test('Environment refresh reports catalog changes and highlights saved results w
 		return sessionState.contexts?.find((item) => item.workspaceId === id)?.conversationId;
 	}, workspacePath);
 	expect(state).toBeTruthy();
+});
+
+
+test('Environment reports when saved-run freshness could not be verified', async ({ page }) => {
+	const workspacePath = 'C:\\FellaFixture\\unverified-refresh';
+	await installDesktopMock(page, {
+		fixtureFolders: [{ path: workspacePath, catalog: { workspace: workspacePath, revision: 'refresh-r1', sources: [] } }],
+		reindexedCatalog: { workspace: workspacePath, revision: 'refresh-r2', sources: [] }
+	});
+	await page.goto('/');
+	await page.getByRole('region', { name: 'Workspaces' }).getByRole('button', { name: 'Add repository' }).click();
+	await page.getByRole('button', { name: 'Environment', exact: true }).click();
+	await page.evaluate(() => { window.__workspaceInvestigationListFailure = true; });
+	await page.getByRole('button', { name: 'Refresh workspace files' }).click();
+	const summary = page.getByRole('status').filter({ has: page.getByText('Workspace checked', { exact: true }) });
+	await expect(summary).toContainText('Freshness could not be confirmed');
+	await expect(summary).not.toContainText('0 saved Question answers');
 });
 
 
@@ -3963,7 +4002,10 @@ test('Investigation Results keep transcript-only historical work outside current
 	await openInvestigationSection(page, 'Results');
 
 	const results = page.getByRole('region', { name: 'Current Investigation results' });
+	const keyFindings = results.getByRole('region', { name: 'Key Findings' });
 	await expect(results.locator('.results-finding')).toHaveCount(0);
+	await expect(keyFindings).toContainText('No reviewed Findings have been saved yet.');
+	await expect(keyFindings.getByRole('button', { name: 'Review an answer' })).toBeVisible();
 	await expect(results.locator('.results-question[data-question-status="incomplete"]')).toContainText('Only 10 of the requested 12 weeks are present.');
 	const unstartedQuestion = results.locator('.results-question[data-question-status="not_started"]');
 	await expect(unstartedQuestion).toContainText('Compare weekly sales by channel');
@@ -4010,6 +4052,26 @@ test('Investigation Results keep transcript-only historical work outside current
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect(page.locator('.msg.user').first().locator('.you-copy')).toHaveText('What do the weekly sales files show?');
 	await expect(page.locator('.msg.assistant[data-analysis-turn-id="fixture-turn"]')).toContainText('The initial scan found four relevant files and no single source of truth.');
+	const questionBeforeStaleReview = await page.evaluate(() => {
+		const question = window.__workspaceInvestigations()[0].questions.find((item) => item.text === 'What do the weekly sales files show?');
+		return { answer_status: question.answer_status, latest_analysis_turn_id: question.latest_analysis_turn_id };
+	});
+	const callsBeforeStaleReview = await page.evaluate(() => window.__workspaceAskCalls.length);
+	await openInvestigationSection(page, 'Results');
+	const staleNotice = page.getByRole('region', { name: 'Current Investigation results' }).locator('.results-freshness');
+	await staleNotice.getByRole('button', { name: 'Review affected Question' }).click();
+	const runPreview = page.getByRole('region', { name: 'Review this run' });
+	await expect(runPreview).toContainText('What do the weekly sales files show?');
+	const staleReview = page.locator('.question-stale-review');
+	await expect(staleReview).toContainText('sales-r1');
+	await expect(staleReview).toContainText('The saved answer and run are unchanged.');
+	await runPreview.getByRole('button', { name: 'Cancel' }).click();
+	const questionAfterStaleReview = await page.evaluate(() => {
+		const question = window.__workspaceInvestigations()[0].questions.find((item) => item.text === 'What do the weekly sales files show?');
+		return { answer_status: question.answer_status, latest_analysis_turn_id: question.latest_analysis_turn_id };
+	});
+	expect(questionAfterStaleReview).toEqual(questionBeforeStaleReview);
+	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(callsBeforeStaleReview);
 });
 
 
