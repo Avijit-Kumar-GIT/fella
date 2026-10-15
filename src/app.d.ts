@@ -11,6 +11,8 @@ declare global {
 				path: string,
 				onProgress: (progress: WorkspaceProgress) => void
 			): Promise<Catalog>;
+			/** Launches the operating system terminal at a workspace. No terminal I/O returns to Fella. */
+			openWorkspaceTerminal(path: string): Promise<{ opened: true }>;
 			ask(
 				params: {
 					conversationId: string;

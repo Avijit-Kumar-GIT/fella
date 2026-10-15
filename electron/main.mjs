@@ -1,10 +1,11 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
 import { mkdirSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary, isRegularFile } from './engine.mjs';
+import { openWorkspaceTerminal } from './terminal.mjs';
 import { checkAndApply } from './update.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -158,6 +159,18 @@ async function openExternal(url) {
 	}
 }
 
+function isTrustedAppFrame(event) {
+	if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false;
+	try {
+		const frameUrl = new URL(event.senderFrame.url);
+		if (frameUrl.protocol === 'fella:' && frameUrl.hostname === 'app') return true;
+		const devUrl = process.env.FELLA_ELECTRON_URL;
+		return Boolean(devUrl) && new URL(devUrl).origin === frameUrl.origin;
+	} catch {
+		return false;
+	}
+}
+
 app.whenReady().then(() => {
 	const buildRoot = app.isPackaged
 		? resolve(app.getAppPath(), 'build')
@@ -205,6 +218,17 @@ app.whenReady().then(() => {
 				}
 			})
 		);
+		ipcMain.handle('fella:open-workspace-terminal', async (event, workspacePath) => {
+			if (!isTrustedAppFrame(event)) throw new Error('Terminal launch is only available from Fella.');
+			if (typeof workspacePath !== 'string' || !workspacePath.trim()) {
+				throw new Error('Choose a workspace before opening a terminal.');
+			}
+			const canonicalPath = await realpath(workspacePath);
+			if (!(await stat(canonicalPath)).isDirectory()) {
+				throw new Error('The selected workspace is no longer an available folder.');
+			}
+			return openWorkspaceTerminal(canonicalPath);
+		});
 		ipcMain.handle('fella:set-window-appearance', (event, dark) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			if (owner) setWindowAppearance(owner, Boolean(dark));

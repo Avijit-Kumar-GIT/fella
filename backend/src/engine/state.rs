@@ -1588,6 +1588,7 @@ mod conversation_context_tests {
             "Summarize sales",
             "investigation-selected-source-notes",
             Some(&selection),
+            None,
         );
 
         assert!(context.learned.is_none());
@@ -3571,7 +3572,7 @@ impl EngineState {
     /// desktop shells the same context budget and provenance behavior.
     #[cfg(test)]
     pub(crate) fn context_packet(&self, question: &str, conversation_id: &str) -> ContextPacket {
-        self.context_packet_for_source_selection(question, conversation_id, None)
+        self.context_packet_for_source_selection(question, conversation_id, None, None)
     }
 
     fn context_packet_for_source_selection(
@@ -3579,6 +3580,7 @@ impl EngineState {
         question: &str,
         conversation_id: &str,
         selection: Option<&InvestigationSourceSelection>,
+        investigation_id: Option<&str>,
     ) -> ContextPacket {
         let user_context = self.user_context();
         let schema = self.schema_block_for_source_selection(selection);
@@ -3588,7 +3590,7 @@ impl EngineState {
         // selected for this Investigation. They may contain facts from an
         // excluded source, so keep them out of selected-source runs.
         let learned = (!selected_only)
-            .then(|| self.folder_memory_block())
+            .then(|| self.folder_memory_block(investigation_id))
             .flatten();
         let semantic_model = (!selected_only)
             .then(|| self.workspace_model_prompt_block())
@@ -3742,6 +3744,116 @@ impl EngineState {
         Some((path.display().to_string(), text))
     }
 
+    /// Typed, provenance-preserving facts learned for the current workspace.
+    pub fn folder_memory_facts(&self) -> Option<Vec<SemanticFact>> {
+        let path = self.memory_path()?;
+        let facts = SemanticMemory::load(&semantic_memory::facts_path_for(&path));
+        Some(facts.facts().to_vec())
+    }
+
+    /// Review or edit one learned fact without changing the workspace data.
+    /// An accepted suggestion can stay with one Investigation or be promoted
+    /// to workspace scope; its source turn and evidence remain attached.
+    pub fn resolve_folder_memory_fact(
+        &self,
+        fact_id: &str,
+        action: &str,
+        statement: Option<&str>,
+        target_investigation_id: Option<&str>,
+    ) -> EngineResult<Vec<SemanticFact>> {
+        let memory_path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
+        let facts_path = semantic_memory::facts_path_for(&memory_path);
+        let mut facts = SemanticMemory::load(&facts_path);
+        let original = facts
+            .facts()
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .cloned()
+            .ok_or_else(|| EngineError::msg("The learned fact is no longer available."))?;
+        if original.state == semantic_memory::FactState::Superseded {
+            return Err(EngineError::msg("Superseded knowledge cannot be changed."));
+        }
+        if let Some(target_id) = target_investigation_id {
+            let target = investigation::load(&self.data_dir, target_id)?;
+            if target.workspace_id != original.workspace {
+                return Err(EngineError::msg(
+                    "Knowledge can only be scoped to an Investigation in this workspace.",
+                ));
+            }
+        }
+
+        let at_ms = semantic_memory::now_ms();
+        match action {
+            "accept" => {
+                if original.authority != FactAuthority::ModelSuggestion
+                    || original.state != semantic_memory::FactState::Proposed
+                {
+                    return Err(EngineError::msg("Only a model suggestion can be accepted."));
+                }
+                if let Some(existing) = facts.fact_mut(fact_id) {
+                    existing.state = semantic_memory::FactState::Superseded;
+                    existing.updated_at_ms = at_ms;
+                }
+                let mut accepted = SemanticFact::new(SemanticFactInput {
+                    kind: original.kind,
+                    key: original.key.clone(),
+                    statement: original.statement.clone(),
+                    authority: FactAuthority::Confirmed,
+                    workspace: original.workspace.clone(),
+                    revision: original.revision.clone(),
+                    supporting_turn: original.supporting_turn.clone(),
+                    evidence_ids: original.evidence_ids.clone(),
+                    at_ms,
+                });
+                accepted.investigation_id = target_investigation_id.map(str::to_string);
+                accepted.origin_investigation_id = original
+                    .origin_investigation_id
+                    .clone()
+                    .or_else(|| original.investigation_id.clone());
+                accepted.supersedes.push(original.id.clone());
+                facts.upsert(accepted);
+            }
+            "edit" => {
+                let statement = statement.unwrap_or_default().trim();
+                if statement.is_empty() || statement.chars().count() > 1_000 {
+                    return Err(EngineError::msg(
+                        "Knowledge text must be non-empty and no longer than 1000 characters.",
+                    ));
+                }
+                if let Some(existing) = facts.fact_mut(fact_id) {
+                    existing.state = semantic_memory::FactState::Superseded;
+                    existing.updated_at_ms = at_ms;
+                }
+                let mut edited = SemanticFact::new(SemanticFactInput {
+                    kind: original.kind,
+                    key: original.key.clone(),
+                    statement: statement.to_string(),
+                    authority: FactAuthority::User,
+                    workspace: original.workspace.clone(),
+                    revision: original.revision.clone(),
+                    supporting_turn: original.supporting_turn.clone(),
+                    evidence_ids: original.evidence_ids.clone(),
+                    at_ms,
+                });
+                edited.investigation_id = target_investigation_id.map(str::to_string);
+                edited.origin_investigation_id = original
+                    .origin_investigation_id
+                    .clone()
+                    .or_else(|| original.investigation_id.clone());
+                edited.supersedes.push(original.id.clone());
+                facts.upsert(edited);
+            }
+            "remove" => {
+                facts.remove(fact_id);
+            }
+            _ => return Err(EngineError::msg("Unknown learned-knowledge action.")),
+        }
+
+        facts.save();
+        semantic_memory::sync_markdown_projection(&memory_path, &facts);
+        Ok(facts.facts().to_vec())
+    }
+
     /// Delete the current folder's learned notes (and its episode log).
     /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
     pub fn forget_folder_memory(&self) -> EngineResult<bool> {
@@ -3769,7 +3881,7 @@ impl EngineState {
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.
-    pub(crate) fn folder_memory_block(&self) -> Option<String> {
+    pub(crate) fn folder_memory_block(&self, investigation_id: Option<&str>) -> Option<String> {
         if !memory::enabled() {
             return None;
         }
@@ -3782,7 +3894,8 @@ impl EngineState {
         } else {
             mem.semantic_core()
         };
-        let typed_block = typed.prompt_block(self.workspace_revision().as_deref());
+        let typed_block =
+            typed.prompt_block(self.workspace_revision().as_deref(), investigation_id);
         match (legacy, typed_block) {
             (Some(legacy), Some(typed)) => Some(format!("{legacy}\n\n{typed}")),
             (Some(legacy), None) => Some(legacy),
@@ -3815,7 +3928,13 @@ impl EngineState {
     /// facts, not code snapshotted against one verifier pass; see
     /// `docs/ARCHITECTURE.md`. `prior_q` is the previous question in this
     /// conversation, if any.
-    async fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
+    async fn record_turn_memory(
+        &self,
+        prior_q: Option<&str>,
+        question: &str,
+        answer: &Answer,
+        investigation_id: Option<&str>,
+    ) {
         if !memory::writes_enabled() {
             return;
         }
@@ -3915,15 +4034,24 @@ impl EngineState {
             }
         }
 
-        for fact in observed_contract_facts(answer, &scope, revision, &evidence_ids, at_ms) {
+        for fact in observed_contract_facts(answer, &scope, revision.clone(), &evidence_ids, at_ms)
+        {
+            facts.upsert(fact);
+        }
+        for fact in proposed_contract_facts(
+            answer,
+            &scope,
+            revision,
+            &evidence_ids,
+            investigation_id,
+            at_ms,
+        ) {
             facts.upsert(fact);
         }
         mem.prune_tables(&self.known_views());
         mem.save();
-        if !facts.facts().is_empty() {
-            facts.save();
-            semantic_memory::sync_markdown_projection(&path, &facts);
-        }
+        facts.save();
+        semantic_memory::sync_markdown_projection(&path, &facts);
     }
 
     /// Decide whether a new correction updates an existing vocabulary note,
@@ -5008,6 +5136,9 @@ exactly, character for character, from the list below.";
             &analysis_question,
             conversation_id,
             source_selection,
+            investigation_context
+                .as_ref()
+                .map(|context| context.investigation_id.as_str()),
         );
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
@@ -5211,8 +5342,15 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), &analysis_question, &answer)
-                .await;
+            self.record_turn_memory(
+                prior_q.as_deref(),
+                &analysis_question,
+                &answer,
+                investigation_context
+                    .as_ref()
+                    .map(|context| context.investigation_id.as_str()),
+            )
+            .await;
         }
 
         // Distil this turn for the next question in the conversation - but not a
@@ -5890,6 +6028,335 @@ fn observed_contract_facts(
         }
     }
     facts
+}
+
+/// Store durable-looking pieces of the model's typed interpretation as
+/// proposals. They remain non-promptable until a user accepts them, and the
+/// Investigation that produced each proposal remains part of its provenance.
+fn proposed_contract_facts(
+    answer: &Answer,
+    scope: &str,
+    revision: Option<String>,
+    evidence_ids: &[String],
+    investigation_id: Option<&str>,
+    at_ms: u64,
+) -> Vec<SemanticFact> {
+    let Some(contract) = answer.contract.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut facts = Vec::new();
+    let mut propose = |key: String, statement: String| {
+        let statement = statement.trim();
+        if statement.is_empty() || facts.len() >= 24 {
+            return;
+        }
+        let mut fact = SemanticFact::new(SemanticFactInput {
+            kind: FactKind::Definition,
+            key,
+            statement: statement.chars().take(1_000).collect(),
+            authority: FactAuthority::ModelSuggestion,
+            workspace: scope.to_string(),
+            revision: revision.clone(),
+            supporting_turn: Some(answer.turn_id.clone()),
+            evidence_ids: evidence_ids.to_vec(),
+            at_ms,
+        });
+        fact.investigation_id = investigation_id.map(str::to_string);
+        fact.origin_investigation_id = investigation_id.map(str::to_string);
+        facts.push(fact);
+    };
+
+    for assumption in contract.assumptions.iter().take(12) {
+        let mut key_text = String::new();
+        for character in assumption.chars() {
+            if character.is_alphanumeric() {
+                key_text.extend(character.to_lowercase());
+            } else if !key_text.is_empty() && !key_text.ends_with('-') {
+                key_text.push('-');
+            }
+            if key_text.len() >= 64 {
+                break;
+            }
+        }
+        let key_text = key_text.trim_end_matches('-');
+        propose(
+            format!(
+                "assumption:{}",
+                if key_text.is_empty() {
+                    "general"
+                } else {
+                    key_text
+                }
+            ),
+            assumption.clone(),
+        );
+    }
+    if let Some(value_semantics) = contract.value_semantics.as_deref() {
+        propose(
+            "value-semantics".into(),
+            format!("Value semantics: {value_semantics}"),
+        );
+    }
+    if let Some(missing_policy) = contract.missing_policy.as_deref() {
+        propose(
+            "missing-value-policy".into(),
+            format!("Missing-value policy: {missing_policy}"),
+        );
+    }
+    if let Some(denominator) = contract.denominator.as_deref() {
+        propose("denominator".into(), format!("Denominator: {denominator}"));
+    }
+    for metric in contract.derived_metrics.iter().take(8) {
+        let operator = match metric.kind {
+            crate::engine::runtime::DerivedMetricKind::Ratio => "divides",
+            crate::engine::runtime::DerivedMetricKind::Difference => "subtracts",
+        };
+        propose(
+            format!("derived-metric:{}", metric.concept.to_lowercase()),
+            format!(
+                "{} {} {} from {}{}",
+                metric.concept,
+                operator,
+                metric.numerator,
+                metric.denominator,
+                metric
+                    .unit
+                    .as_deref()
+                    .map(|unit| format!(" (unit: {unit})"))
+                    .unwrap_or_default()
+            ),
+        );
+    }
+    facts
+}
+
+#[cfg(test)]
+mod proposed_contract_fact_tests {
+    use super::*;
+
+    fn answer_with_contract(contract: AnalysisContract) -> Answer {
+        Answer {
+            turn_id: "analysis-turn-1".into(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-1".into(),
+                turn_id: "analysis-turn-1".into(),
+                workspace_revision: Some("sales-r4".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: Some(contract),
+            grounding: None,
+            text: "The analysis is complete.".into(),
+            provenance: crate::engine::evidence::AnswerProvenance::default(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: VerificationStatus::NeedsReview,
+            clarification: None,
+            workspace: None,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn analysis_contract_suggestions_keep_investigation_and_evidence_provenance() {
+        let answer = answer_with_contract(AnalysisContract {
+            assumptions: vec!["Orders exclude test accounts".into()],
+            value_semantics: Some("positive values are gross merchandise revenue".into()),
+            missing_policy: Some("exclude rows with unknown order dates".into()),
+            denominator: Some("completed orders".into()),
+            derived_metrics: vec![crate::engine::runtime::ContractDerivedMetric {
+                concept: "average order value".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "net revenue".into(),
+                denominator: "completed orders".into(),
+                unit: Some("USD/order".into()),
+            }],
+            ..Default::default()
+        });
+
+        let facts = proposed_contract_facts(
+            &answer,
+            "/workspace/sales",
+            Some("sales-r4".into()),
+            &["evidence-1".into()],
+            Some("investigation-1"),
+            123,
+        );
+
+        assert_eq!(facts.len(), 5);
+        assert!(facts.iter().all(|fact| {
+            fact.authority == FactAuthority::ModelSuggestion
+                && fact.state == semantic_memory::FactState::Proposed
+                && fact.workspace == "/workspace/sales"
+                && fact.investigation_id.as_deref() == Some("investigation-1")
+                && fact.origin_investigation_id.as_deref() == Some("investigation-1")
+                && fact.revision.as_deref() == Some("sales-r4")
+                && fact.supporting_turn.as_deref() == Some("analysis-turn-1")
+                && fact.evidence_ids == vec!["evidence-1".to_string()]
+        }));
+        assert!(facts.iter().any(|fact| {
+            fact.key == "assumption:orders-exclude-test-accounts"
+                && fact.statement == "Orders exclude test accounts"
+        }));
+        assert!(facts.iter().any(|fact| {
+            fact.key == "derived-metric:average order value"
+                && fact.statement.contains("net revenue")
+        }));
+    }
+}
+
+#[cfg(test)]
+mod memory_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn accepting_and_editing_a_suggestion_preserves_its_scope_and_provenance() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-memory-resolution-{nonce}"));
+        let workspace_path = data_dir.join("workspace");
+        let other_workspace_path = data_dir.join("other-workspace");
+        std::fs::create_dir_all(&workspace_path).unwrap();
+        std::fs::create_dir_all(&other_workspace_path).unwrap();
+        let engine = EngineState::new(&data_dir).unwrap();
+        let memory_path = data_dir.join("memory/workspace.md");
+        {
+            let mut workspace = engine.workspace.lock().unwrap();
+            workspace.workspace = Some(workspace_path.clone());
+            workspace.memory_path = Some(memory_path.clone());
+        }
+        let local_investigation = investigation::create(
+            &data_dir,
+            workspace_path.to_str().unwrap(),
+            "Local analysis",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let other_investigation = investigation::create(
+            &data_dir,
+            workspace_path.to_str().unwrap(),
+            "Separate analysis",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let other_workspace_investigation = investigation::create(
+            &data_dir,
+            other_workspace_path.to_str().unwrap(),
+            "Different workspace",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut proposal = SemanticFact::new(SemanticFactInput {
+            kind: FactKind::Definition,
+            key: "value-semantics".into(),
+            statement: "Net merchandise revenue excludes shipping".into(),
+            authority: FactAuthority::ModelSuggestion,
+            workspace: workspace_path.to_str().unwrap().into(),
+            revision: Some("sales-r4".into()),
+            supporting_turn: Some("analysis-turn-1".into()),
+            evidence_ids: vec!["evidence-1".into()],
+            at_ms: 123,
+        });
+        proposal.investigation_id = Some(local_investigation.id.clone());
+        proposal.origin_investigation_id = Some(local_investigation.id.clone());
+        let proposal_id = proposal.id.clone();
+        let mut memory = SemanticMemory::load(&semantic_memory::facts_path_for(&memory_path));
+        memory.upsert(proposal);
+        memory.save();
+
+        let accepted = engine
+            .resolve_folder_memory_fact(&proposal_id, "accept", None, Some(&local_investigation.id))
+            .unwrap();
+        let confirmed = accepted
+            .iter()
+            .find(|fact| {
+                fact.authority == FactAuthority::Confirmed
+                    && fact.state == semantic_memory::FactState::Active
+            })
+            .unwrap();
+        assert_eq!(
+            confirmed.investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            confirmed.origin_investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            confirmed.supporting_turn.as_deref(),
+            Some("analysis-turn-1")
+        );
+        assert_eq!(confirmed.evidence_ids, vec!["evidence-1".to_string()]);
+        let confirmed_id = confirmed.id.clone();
+
+        engine
+            .resolve_folder_memory_fact(
+                &confirmed_id,
+                "edit",
+                Some("Net merchandise revenue excludes shipping and gift cards"),
+                Some(&local_investigation.id),
+            )
+            .unwrap();
+        let edited = engine.folder_memory_facts().unwrap();
+        let active = edited
+            .iter()
+            .find(|fact| fact.state == semantic_memory::FactState::Active)
+            .unwrap();
+        assert_eq!(active.authority, FactAuthority::User);
+        assert_eq!(
+            active.investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            active.origin_investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(active.supporting_turn.as_deref(), Some("analysis-turn-1"));
+        assert_eq!(active.evidence_ids, vec!["evidence-1".to_string()]);
+        let active_id = active.id.clone();
+
+        let rejected = engine.resolve_folder_memory_fact(
+            &active_id,
+            "edit",
+            Some("Cross-workspace change"),
+            Some(&other_workspace_investigation.id),
+        );
+        assert!(rejected.is_err());
+        assert!(engine.folder_memory_facts().unwrap().iter().any(|fact| {
+            fact.id == active_id && fact.state == semantic_memory::FactState::Active
+        }));
+        assert!(!engine
+            .folder_memory_facts()
+            .unwrap()
+            .iter()
+            .any(|fact| fact.state == semantic_memory::FactState::Active
+                && fact.investigation_id.as_deref() == Some(other_investigation.id.as_str())));
+
+        let remaining = engine
+            .resolve_folder_memory_fact(&active_id, "remove", None, None)
+            .unwrap();
+        assert!(!remaining.iter().any(|fact| fact.id == active_id));
+        assert!(remaining.iter().any(|fact| {
+            fact.id == proposal_id && fact.state == semantic_memory::FactState::Superseded
+        }));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
 }
 
 /// What to do with a new correction against the existing vocabulary list.

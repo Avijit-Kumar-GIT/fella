@@ -41,10 +41,12 @@ service.
 
 For analytics, a plausible answer is not good enough. The goal is to reach the
 right answer the first time, with as little unnecessary reasoning between the
-question and result as possible. Fella does not need file writes, shell
-commands, desktop control, or the ability to act on your behalf. When a
-question benefits from outside information, the intended route is bounded,
-read-only, and visible—not an unrestricted browser agent.
+question and result as possible. The model does not need file writes, shell
+commands, desktop control, or the ability to act on your behalf. If you want a
+shell, you can separately open your system terminal at the selected workspace;
+it runs with your normal system permissions, and Fella cannot see or control it.
+When a question benefits from outside information, the intended route is
+bounded, read-only, and visible—not an unrestricted browser agent.
 
 The result is an opinionated system: a model-led analysis loop with reviewed,
 read-only tools, deterministic execution where exact computation matters, and
@@ -60,7 +62,8 @@ computer understandable without making the reasoning needlessly complicated.
 | **Consistency** | A coherent model-led loop and reviewed tools keep the route from question to answer understandable. |
 | **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
 | **Efficiency** | Deliberate context and proportionate tool use keep wasted reasoning down without an arbitrary tool-count limit. |
-| **Read-only analysis** | Analysis tools can inspect and compute over mounted files, but cannot alter them, run shell commands, or take external actions. |
+| **Read-only analysis** | Model-facing analysis tools can inspect and compute over mounted files, but cannot alter source files, run shell commands, or take external actions. |
+| **User-started terminal** | Open the operating system's terminal at the selected workspace. It is not confined to that folder; Fella does not see or control the session. |
 | **Useful on real files** | Mount the folder when a question depends on it; ask in plain language and get an analysis or chart without building a warehouse or learning SQL first. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 

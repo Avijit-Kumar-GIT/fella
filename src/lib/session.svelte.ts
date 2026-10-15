@@ -180,7 +180,7 @@ function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 		? source.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
 			if (!rawTab || typeof rawTab !== 'object') return [];
 			const tab = rawTab as Record<string, unknown>;
-			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source'].includes(String(tab.kind))) return [];
+			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal'].includes(String(tab.kind))) return [];
 			return [{
 				id: tab.id,
 				kind: tab.kind as WorkspaceToolKind,
@@ -592,7 +592,7 @@ export class Conversation {
 
 export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
-export type WorkspaceToolKind = WorkspacePane | 'source';
+export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -1184,7 +1184,7 @@ class Session {
 	 *  workspace-wide and therefore has one reusable tab; each Investigation
 	 *  keeps its own linked conversation. */
 	openWorkspaceToolTab(
-		kind: WorkspacePane,
+		kind: WorkspaceToolKind,
 		investigationId: string | null = null,
 		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null
 	): WorkspaceToolTab | null {
@@ -1204,6 +1204,8 @@ class Session {
 		let tab: WorkspaceToolTab | null | undefined;
 		if (kind === 'context') {
 			tab = context.workspaceToolTabs.find((item) => item.kind === 'context');
+		} else if (kind === 'terminal') {
+			tab = context.workspaceToolTabs.find((item) => item.kind === 'terminal');
 		} else {
 			tab = tabByInvestigation;
 			if (!tab && tabByConversation && (!investigationId || !tabByConversation.investigationId)) {
@@ -1219,7 +1221,7 @@ class Session {
 		) return null;
 		if (!tab) {
 			tab = {
-				id: kind === 'context' ? 'context' : `investigation:${uid()}`,
+				id: kind === 'context' ? 'context' : kind === 'terminal' ? 'terminal' : `investigation:${uid()}`,
 				kind,
 				investigationId: kind === 'investigation' ? investigationId : null,
 				conversationId: kind === 'investigation' ? conversationId : null
@@ -1231,10 +1233,10 @@ class Session {
 			if (conversationId) tab.conversationId = conversationId;
 		}
 		context.activeWorkspaceToolTabId = tab.id;
-		context.workspacePane = kind;
+		context.workspacePane = kind === 'investigation' ? 'investigation' : 'context';
 		context.investigationId = kind === 'investigation' ? tab.investigationId ?? null : null;
 		context.workspacePaneOpen = true;
-		this.workspacePane = kind;
+		this.workspacePane = context.workspacePane;
 		this.workspaceToolChooserOpen = false;
 		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();

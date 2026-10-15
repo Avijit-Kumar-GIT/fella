@@ -4,7 +4,7 @@ description: "Teach Fella your vocabulary and understand what it remembers about
 icon: "brain"
 ---
 
-Fella can use context you write and vocabulary it learns from explicit corrections. Context can guide interpretation, but it is not evidence and cannot grant a tool or permission.
+Fella can use context you write, verified field bindings, and definitions it proposes while analyzing. Context can guide interpretation, but it is not evidence and cannot grant a tool or permission.
 
 ## `fella.md`
 
@@ -35,10 +35,10 @@ Folder memory lives as human-readable Markdown in Fella's application data direc
 /memory forget
 ```
 
-Automatic learning is deliberately narrow: an ordinary question teaches memory nothing. A follow-up recognized as a correction can add, update, or deduplicate a vocabulary note, using the active model to reconcile it with existing notes. Fella also records a bounded local episode log, but does not read that log back as memory or cache old query results as facts.
+Learning is limited to reusable semantics, not cached query plans. After an analysis, Fella can retain assumptions, value meanings, missing-value policies, denominators, derived metrics, and verified field bindings with the source turn and workspace revision. Contract-derived notes stay provisional in the Investigation that produced them and are presented back only as hypotheses to validate; other Investigations do not receive them. You can keep a suggestion local, edit it, dismiss it, or accept it for the whole workspace. A follow-up recognized as a correction can also add, update, or deduplicate a vocabulary note. Fella records a bounded local episode log, but does not read that log back as memory or cache old query results as facts.
 
 <Warning>
-  A correction may trigger an additional model request to reconcile vocabulary. With a hosted provider, that correction and the existing vocabulary notes are sent to the provider.
+  A correction may trigger an additional model request to reconcile vocabulary. With a hosted provider, that correction and the existing vocabulary notes are sent to the provider. Model-proposed analysis notes are not a confirmation of business meaning; validate them before sharing them across the workspace.
 </Warning>
 
 ## Context is not permission

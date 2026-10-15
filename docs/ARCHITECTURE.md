@@ -190,8 +190,11 @@ chart is not automatically a semantically correct chart.
 - **`fella.md`** is user-authored workspace guidance. It is separate from
   source data and editable only through an explicit user action.
 - **Semantic memory** is local and workspace-scoped. User-confirmed facts and
-  revision-valid observations may inform later interpretation; model
-  suggestions do not silently become authoritative definitions.
+  revision-valid observations may inform later interpretation. Model-proposed
+  contract definitions are retained with their Investigation, turn, and data
+  revision; an Investigation may reuse them only as explicitly unconfirmed
+  hypotheses, while workspace-wide reuse requires user acceptance. They never
+  become confirmed business definitions silently.
 - **Analysis records** retain the question, workspace revision, interpretation
   where present, execution trace, verification report, provenance, and result.
   Explicit reruns are linked to the original turn and execute against the
@@ -212,6 +215,11 @@ The primary implementation is in `context.rs`, `memory.rs`,
   not connect to anything or add tools.
 - Workspace operations are read-only. There is no agent tool for writing,
   moving, or deleting source files. Editing `fella.md` is an explicit UI action.
+- The user may open their operating system's terminal with the selected
+  workspace as its starting directory. This is not a sandbox: shell commands
+  run with the user's normal system permissions. The terminal is external to
+  Fella; no PTY or stdin/stdout/stderr channel is created, and Fella does not
+  observe, control, or manage the terminal session after launch.
 - Provider keys are stored in `auth.json` in the application-data directory,
   separate from the settings database and transcript.
 - `/update` is user-triggered in packaged builds. The Python guest has no

@@ -242,6 +242,32 @@ export interface ContextAssemblyAudit {
 	sections: ContextSectionAudit[];
 }
 
+export type SemanticFactKind = 'vocabulary' | 'definition' | 'field_binding' | 'preference';
+export type SemanticFactAuthority = 'user' | 'observed' | 'model_suggestion' | 'confirmed';
+export type SemanticFactState = 'active' | 'proposed' | 'superseded' | 'conflict';
+
+/** Workspace-scoped learned fact with its source turn, evidence, and freshness revision. */
+export interface SemanticFact {
+	id: string;
+	kind: SemanticFactKind;
+	key: string;
+	statement: string;
+	authority: SemanticFactAuthority;
+	state: SemanticFactState;
+	workspace: string;
+	/** Investigation that owns this fact's current scope, when it is not workspace-wide. */
+	investigation_id?: string;
+	/** The Investigation that originally produced the model suggestion, retained after promotion. */
+	origin_investigation_id?: string;
+	revision?: string;
+	supporting_turn?: string;
+	evidence_ids?: string[];
+	created_at_ms: number;
+	updated_at_ms: number;
+	supersedes?: string[];
+	conflicts_with?: string[];
+}
+
 export interface AnalysisContract {
 	interpretation: InterpretationStatus;
 	subject?: string;

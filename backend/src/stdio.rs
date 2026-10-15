@@ -291,6 +291,8 @@ async fn dispatch(
             | "run_sql_direct"
             | "reindex"
             | "memory_file"
+            | "memory_facts"
+            | "memory_fact_resolve"
             | "forget_memory"
             | "cancel"
             | "context_file"
@@ -364,6 +366,22 @@ async fn dispatch(
         }
         "reindex" => value_result(workspace_engine.reindex()),
         "memory_file" => serialized(workspace_engine.folder_memory_file()),
+        "memory_facts" => serialized(workspace_engine.folder_memory_facts()),
+        "memory_fact_resolve" => {
+            let fact_id: String = required(&request.params, "factId")?;
+            let action: String = required(&request.params, "action")?;
+            let statement = request.params.get("statement").and_then(Value::as_str);
+            let target_investigation_id = request
+                .params
+                .get("targetInvestigationId")
+                .and_then(Value::as_str);
+            value_result(workspace_engine.resolve_folder_memory_fact(
+                &fact_id,
+                &action,
+                statement,
+                target_investigation_id,
+            ))
+        }
         "forget_memory" => value_result(workspace_engine.forget_folder_memory()),
         "get_settings" => serialized(engine.settings()),
         "set_settings" => {

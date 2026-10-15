@@ -29,6 +29,7 @@ import type {
 	QueryResult,
 	RunLogEntry,
 	Settings,
+	SemanticFact,
 	SourceInfo,
 	WorkspaceModel,
 	UpdateStatus,
@@ -51,6 +52,14 @@ export async function pickFolder(): Promise<string | null> {
 /** Path to the bundled, fictional sample workspace, when running in Electron. */
 export async function sampleWorkspacePath(): Promise<string | null> {
 	return isElectron() ? window.fella?.sampleWorkspacePath() ?? null : null;
+}
+
+/** Open the OS terminal at the selected workspace. Fella never receives terminal I/O. */
+export async function openWorkspaceTerminal(workspacePath: string): Promise<void> {
+	if (!isElectron() || !window.fella) {
+		throw new Error('The system terminal is available in the desktop app.');
+	}
+	await window.fella.openWorkspaceTerminal(workspacePath);
 }
 
 /** Open an https URL in the user's default browser. No-op outside the app. */
@@ -122,6 +131,21 @@ export const ipc = {
 	reindex: (workspaceId?: string) => invoke<Catalog>('reindex', workspaceArgs(workspaceId)),
 	memoryFile: (workspaceId?: string) =>
 		invoke<[string, string | null] | null>('memory_file', workspaceArgs(workspaceId)),
+	memoryFacts: (workspaceId?: string) =>
+		invoke<SemanticFact[] | null>('memory_facts', workspaceArgs(workspaceId)),
+	resolveMemoryFact: (
+		factId: string,
+		action: 'accept' | 'edit' | 'remove',
+		workspaceId: string,
+		statement?: string,
+		targetInvestigationId?: string | null
+	) => invoke<SemanticFact[]>('memory_fact_resolve', {
+		factId,
+		action,
+		...(statement === undefined ? {} : { statement }),
+		...(targetInvestigationId === undefined ? {} : { targetInvestigationId }),
+		...workspaceArgs(workspaceId)
+	}),
 	forgetMemory: (workspaceId?: string) =>
 		invoke<boolean>('forget_memory', workspaceArgs(workspaceId)),
 

@@ -85,3 +85,60 @@ test('a stale Investigation selection cannot rebind or steal another tab', () =>
 		Object.assign(session, previous);
 	}
 });
+
+test('a workspace Terminal opens one durable tool tab without replacing the active conversation', () => {
+	const previous = {
+		workspaceWindows: session.workspaceWindows,
+		workspaceContexts: session.workspaceContexts,
+		conversations: session.conversations,
+		activeConversationIndex: session.activeConversationIndex,
+		activeWorkspaceId: session.activeWorkspaceId,
+		catalog: session.catalog,
+		activeInvestigationId: session.activeInvestigationId,
+		workspacePane: session.workspacePane,
+		workspaceView: session.workspaceView,
+		workspaceToolChooserOpen: session.workspaceToolChooserOpen
+	};
+
+	try {
+		const workspacePath = '/test/workspace-terminal';
+		const conversation = new Conversation('conversation-terminal');
+		conversation.workspaceScope = workspacePath;
+		const context = {
+			workspaceId: workspacePath,
+			conversationId: conversation.id,
+			workspacePane: 'investigation',
+			workspacePaneOpen: true,
+			workspaceToolTabs: [],
+			activeWorkspaceToolTabId: null
+		};
+		session.workspaceWindows = [{
+			id: workspacePath,
+			kind: 'repository',
+			path: workspacePath,
+			catalog: { workspace: workspacePath, sources: [] },
+			conversationId: conversation.id
+		}];
+		session.workspaceContexts = [context];
+		session.conversations = [conversation];
+		session.activeConversationIndex = 0;
+		session.activeWorkspaceId = workspacePath;
+		session.catalog = { workspace: workspacePath, sources: [] };
+		session.activeInvestigationId = null;
+		session.workspacePane = 'investigation';
+		session.workspaceView = 'ask';
+		session.workspaceToolChooserOpen = true;
+
+		const first = session.openWorkspaceToolTab('terminal');
+		const second = session.openWorkspaceToolTab('terminal');
+		assert.equal(first?.id, 'terminal');
+		assert.equal(second?.id, first?.id);
+		assert.equal(context.workspaceToolTabs.length, 1);
+		assert.equal(context.activeWorkspaceToolTabId, 'terminal');
+		assert.equal(context.workspacePane, 'context');
+		assert.equal(session.activeChat.id, conversation.id);
+		assert.equal(session.catalog.workspace, workspacePath);
+	} finally {
+		Object.assign(session, previous);
+	}
+});

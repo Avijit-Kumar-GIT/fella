@@ -21,7 +21,13 @@ rather than including a working exploit.
   writes, moves, or deletes anything there, and the model never emits a file.
   The user may explicitly edit the root `fella.md` context file from the
   Workspace surface; that editor is separate from the agent and is the only
-  workspace write in the personal release.
+  workspace write performed by Fella itself. The separately launched terminal
+  follows the user's normal system permissions.
+- **User-started terminal.** From a selected workspace, you can launch your
+  system terminal with that folder as its starting directory. It runs outside
+  Fella with your normal system permissions; it is not restricted to the
+  workspace. Fella creates no interactive terminal session or I/O channel and
+  cannot read commands/output or control the process after launch.
 - **BYOK model access.** The only model network call the base app makes on its
   own is the request to the provider you chose with your own API key.
   `/update` reaches GitHub only when you type the command, never automatically

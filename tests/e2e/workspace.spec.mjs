@@ -279,6 +279,8 @@ async function installDesktopMock(
 		const archivedConversations = new Map();
 		const investigations = new Map();
 		const workspaceContextFiles = new Map();
+		const workspaceMemoryFiles = new Map();
+		const workspaceSemanticFacts = new Map();
 		const workspaceContextSaveCalls = [];
 		const analysisTurns = new Map();
 		const questionRecords = new Map();
@@ -395,6 +397,11 @@ async function installDesktopMock(
 		window.__workspaceContextSaveCalls = workspaceContextSaveCalls;
 		window.__workspaceQuestionSaveFailure = false;
 		window.__workspaceContextFor = (workspaceId) => workspaceContextFiles.get(workspaceId) ?? null;
+		window.__workspaceSeedKnowledge = (workspaceId, { memoryFile = null, facts = [] } = {}) => {
+			if (memoryFile) workspaceMemoryFiles.set(workspaceId, memoryFile);
+			workspaceSemanticFacts.set(workspaceId, facts.map((fact) => ({ ...fact })));
+		};
+		window.__workspaceFactsFor = (workspaceId) => workspaceSemanticFacts.get(workspaceId) ?? [];
 		window.__workspaceInvestigations = () => [...investigations.values()];
 		window.__workspaceInvestigationListCalls = 0;
 		window.__workspaceInvestigationListPending = 0;
@@ -425,7 +432,13 @@ async function installDesktopMock(
 		window.__remainingArchiveIds = () => [...archivedConversations.keys()];
 		window.__replayStatusCalls = 0;
 		window.__analysisTurnLoadCalls = [];
+		window.__workspaceTerminalLaunches = [];
 		window.fella = {
+			openWorkspaceTerminal: async (path) => {
+				window.__workspaceTerminalLaunches.push(path);
+				if (window.__workspaceTerminalFailure) throw new Error('Fixture terminal launch failure');
+				return { opened: true };
+			},
 			invoke: async (command, args = {}) => {
 				switch (command) {
 					case 'app_ready': return 1;
@@ -434,6 +447,34 @@ async function installDesktopMock(
 						return workspaceContextFiles.has(args.workspaceId)
 							? [`${args.workspaceId}\\fella.md`, workspaceContextFiles.get(args.workspaceId)]
 							: null;
+					case 'memory_file':
+						return workspaceMemoryFiles.has(args.workspaceId)
+							? [`${args.workspaceId}\\memory.md`, workspaceMemoryFiles.get(args.workspaceId)]
+							: null;
+					case 'memory_facts':
+						return workspaceSemanticFacts.get(args.workspaceId) ?? [];
+					case 'memory_fact_resolve': {
+						const facts = workspaceSemanticFacts.get(args.workspaceId) ?? [];
+						const original = facts.find((fact) => fact.id === args.factId);
+						if (!original) throw new Error('The learned fact is no longer available.');
+						let updated;
+						if (args.action === 'remove') {
+						updated = facts.filter((fact) => fact.id !== args.factId);
+						} else {
+						const accepted = {
+							...original,
+							id: `${original.id}-updated-${Date.now()}`,
+							statement: args.action === 'edit' ? args.statement : original.statement,
+							authority: args.action === 'edit' ? 'user' : 'confirmed',
+							state: 'active',
+							investigation_id: args.targetInvestigationId ?? undefined,
+							supersedes: [original.id]
+						};
+						updated = facts.map((fact) => fact.id === args.factId ? { ...fact, state: 'superseded' } : fact).concat(accepted);
+						}
+						workspaceSemanticFacts.set(args.workspaceId, updated);
+						return updated;
+					}
 					case 'investigations_list': {
 						window.__workspaceInvestigationListCalls += 1;
 						window.__workspaceInvestigationListPending += 1;
@@ -2160,7 +2201,7 @@ test('Tools toggles the pane; empty panes and the add button show the tool choos
 	await expect(page.getByTestId('workspace-tool-investigations')).toHaveCSS('min-height', '34px');
 	await expect(page.getByTestId('workspace-tool-new-investigation')).toHaveCount(0);
 	await expect(page.getByTestId('workspace-tool-context')).toBeVisible();
-	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
+	await expect(page.getByTestId('workspace-tool-terminal')).toBeEnabled();
 	await expect(tools.getByRole('tablist', { name: 'Open workspace tools' })).toHaveCount(0);
 	await page.getByTestId('workspace-tool-investigations').click();
 	const investigationsMenu = page.getByRole('menu');
@@ -5093,6 +5134,171 @@ test('sidebar controls share aligned gutters and a consistent row rhythm', async
 });
 
 
+test('Terminal opens the OS terminal at the selected workspace without embedding a session', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await setWorkspaceToolsOpen(page, true);
+	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
+	await page.getByTestId('workspace-tool-terminal').click();
+
+	await expect(page.getByRole('heading', { name: 'Terminal', exact: true })).toBeVisible();
+	await expect(page.getByText(folders[0].path, { exact: true })).toBeVisible();
+	await expect(page.getByText(/runs outside Fella/i)).toBeVisible();
+	await page.getByRole('button', { name: 'Open terminal', exact: true }).click();
+	await expect(page.locator('.terminal-status')).toHaveText('Terminal opened at this workspace.');
+
+	expect(await page.evaluate(() => window.__workspaceTerminalLaunches)).toEqual([folders[0].path]);
+	await expect(page.locator('.terminal-session-output')).toHaveCount(0);
+});
+
+
+test('workspace knowledge keeps provenance visible and scopes accepted model suggestions', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Define net merchandise revenue.');
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
+
+	const investigationId = await page.evaluate(() => window.__workspaceInvestigations()[0].id);
+	await page.evaluate(({ workspaceId, investigationId }) => {
+		const now = Date.now();
+		window.__workspaceUpdateInvestigation(investigationId, {
+			title: 'Northstar revenue definition',
+			definitions: [{
+				id: 'definition-net-revenue',
+				investigation_id: investigationId,
+				kind: 'definition',
+				text: 'Net merchandise revenue excludes shipping.',
+				revision: 1,
+				history: [],
+				status: 'active',
+				created_at_ms: now,
+				updated_at_ms: now
+			}]
+		});
+		window.__workspaceSeedKnowledge(workspaceId, {
+			memoryFile: '# Learned notes\n\n## Vocabulary\n- AOV means revenue per completed order.\n\n## Semantic facts\n- generated projection',
+			facts: [{
+				id: 'fact-revenue-proposal',
+				kind: 'definition',
+				key: 'value-semantics',
+				statement: 'Net revenue excludes shipping.',
+				authority: 'model_suggestion',
+				state: 'proposed',
+				workspace: workspaceId,
+				investigation_id: investigationId,
+				origin_investigation_id: investigationId,
+				revision: 'sales-r1',
+				supporting_turn: 'analysis-turn-net-revenue',
+				evidence_ids: ['evidence-net-revenue'],
+				created_at_ms: now,
+				updated_at_ms: now,
+				supersedes: [],
+				conflicts_with: []
+			}, {
+				id: 'fact-account-proposal',
+				kind: 'definition',
+				key: 'population',
+				statement: 'Exclude test accounts from active-customer metrics.',
+				authority: 'model_suggestion',
+				state: 'proposed',
+				workspace: workspaceId,
+				investigation_id: investigationId,
+				origin_investigation_id: investigationId,
+				revision: 'sales-r1',
+				supporting_turn: 'analysis-turn-population',
+				evidence_ids: ['evidence-population'],
+				created_at_ms: now,
+				updated_at_ms: now,
+				supersedes: [],
+				conflicts_with: []
+			}, {
+				id: 'fact-refund-proposal',
+				kind: 'definition',
+				key: 'refund-population',
+				statement: 'Exclude fully refunded orders from completed-order counts.',
+				authority: 'model_suggestion',
+				state: 'proposed',
+				workspace: workspaceId,
+				investigation_id: investigationId,
+				origin_investigation_id: investigationId,
+				revision: 'sales-r1',
+				supporting_turn: 'analysis-turn-refunds',
+				evidence_ids: ['evidence-refunds'],
+				created_at_ms: now,
+				updated_at_ms: now,
+				supersedes: [],
+				conflicts_with: []
+			}]
+		});
+	}, { workspaceId: folders[0].path, investigationId });
+
+	await openWorkspaceContextTool(page);
+	const proposal = page.getByTestId('workspace-knowledge-fact-fact-revenue-proposal');
+	await expect(proposal).toContainText('Suggested by Fella');
+	await expect(proposal).toContainText('This Investigation');
+	await expect(proposal).toContainText('Provisional context in this Investigation');
+	await expect(page.getByRole('heading', { name: 'Vocabulary' })).toBeVisible();
+	await expect(page.getByText('AOV means revenue per completed order.')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Northstar revenue definition' })).toBeVisible();
+	await expect(page.getByText('Net merchandise revenue excludes shipping.', { exact: true })).toBeVisible();
+
+	await proposal.getByText('Source and status').click();
+	await expect(proposal).toContainText('analysis-turn-net-revenue');
+	await expect(proposal).toContainText('evidence-net-revenue');
+	await proposal.getByRole('button', { name: 'Keep in this Investigation' }).click();
+
+	const accepted = page.locator('.knowledge-fact').filter({ hasText: 'Net revenue excludes shipping.' });
+	await expect(accepted).toContainText('Confirmed by you');
+	await expect(accepted).toContainText('Investigation knowledge');
+	const persisted = await page.evaluate((workspaceId) => window.__workspaceFactsFor(workspaceId), folders[0].path);
+	expect(persisted).toEqual(expect.arrayContaining([
+		expect.objectContaining({
+			authority: 'confirmed',
+			state: 'active',
+			investigation_id: investigationId,
+			origin_investigation_id: investigationId,
+			supporting_turn: 'analysis-turn-net-revenue',
+			evidence_ids: ['evidence-net-revenue']
+		})
+	]));
+
+	const secondProposal = page.getByTestId('workspace-knowledge-fact-fact-account-proposal');
+	await secondProposal.getByRole('button', { name: 'Use across workspace' }).click();
+	const promoted = page.locator('.knowledge-fact').filter({ hasText: 'Exclude test accounts from active-customer metrics.' });
+	await expect(promoted).toContainText('Confirmed by you');
+	await expect(promoted).toContainText('This workspace');
+	const promotedFact = await page.evaluate((workspaceId) => window.__workspaceFactsFor(workspaceId), folders[0].path);
+	const promotedRecord = promotedFact.find((fact) =>
+		fact.authority === 'confirmed' &&
+		fact.state === 'active' &&
+		fact.origin_investigation_id === investigationId &&
+		fact.supporting_turn === 'analysis-turn-population'
+	);
+	expect(promotedRecord).toMatchObject({
+		authority: 'confirmed',
+		state: 'active',
+		origin_investigation_id: investigationId,
+		supporting_turn: 'analysis-turn-population',
+		evidence_ids: ['evidence-population']
+	});
+	expect(promotedRecord.investigation_id).toBeUndefined();
+
+	const thirdProposal = page.getByTestId('workspace-knowledge-fact-fact-refund-proposal');
+	await thirdProposal.getByRole('button', { name: 'Edit' }).click();
+	await thirdProposal.getByRole('textbox', { name: 'Edit knowledge: refund-population' }).fill('Exclude refunded orders from completed-order counts.');
+	await thirdProposal.getByRole('button', { name: 'Save in Investigation' }).click();
+	const edited = page.locator('.knowledge-fact').filter({ hasText: 'Exclude refunded orders from completed-order counts.' });
+	await expect(edited).toContainText('Edited by you');
+	await expect(edited).toContainText('This Investigation');
+	await edited.getByText('Source and status').click();
+	await expect(edited).toContainText('analysis-turn-refunds');
+	await expect(edited).toContainText('evidence-refunds');
+});
+
+
 test('Investigation list failures stay distinct from empty state and can be retried', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
@@ -5309,7 +5515,7 @@ test('Sidebar keeps chat and file navigation separate; workspace tools open from
 	const investigations = page.getByTestId('workspace-tool-investigations');
 	await expect(investigations).toHaveAttribute('aria-expanded', 'false');
 	await expect(chooser.getByRole('button', { name: 'Data & context' })).toBeVisible();
-	await expect(chooser.getByRole('button', { name: /Terminal/ })).toBeDisabled();
+	await expect(page.getByTestId('workspace-tool-terminal')).toBeEnabled();
 	await investigations.click();
 	await expect(investigations).toHaveAttribute('aria-expanded', 'true');
 	await expect(page.getByTestId('workspace-tool-current-conversation')).toBeVisible();

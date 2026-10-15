@@ -23,6 +23,10 @@ contextBridge.exposeInMainWorld('fella', {
 			.finally(() => listeners.delete(requestId));
 	},
 
+	openWorkspaceTerminal(path) {
+		return ipcRenderer.invoke('fella:open-workspace-terminal', path);
+	},
+
 	ask(params, onEvent) {
 		const requestId = `ask-${nextAskId++}`;
 		listeners.set(requestId, onEvent);

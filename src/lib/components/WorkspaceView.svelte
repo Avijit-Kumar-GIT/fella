@@ -7,6 +7,7 @@
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
 	import InvestigationBriefView from './InvestigationBriefView.svelte';
+	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 
 	let workspacePath = $derived(session.catalog.workspace);
@@ -190,6 +191,7 @@
 	function tabLabel(tab: WorkspaceToolTab): string {
 		if (tab.kind === 'context') return 'Data & context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
+		if (tab.kind === 'terminal') return 'Terminal';
 		return investigations.find((item) => item.id === tab.investigationId)?.title.trim() || 'Investigation';
 	}
 </script>
@@ -210,7 +212,15 @@
 							title={tabLabel(tab)}
 							onclick={() => void activateTab(tab)}
 						>
-							<Icon name={tab.kind === 'context' ? 'table' : tab.kind === 'source' ? 'file' : 'bookmark'} size={14} />
+							{#if tab.kind === 'context'}
+								<Icon name="table" size={14} />
+							{:else if tab.kind === 'source'}
+								<Icon name="file" size={14} />
+							{:else if tab.kind === 'terminal'}
+								<span class="workspace-terminal-tab-icon" aria-hidden="true">›_</span>
+							{:else}
+								<Icon name="bookmark" size={14} />
+							{/if}
 							<span>{tabLabel(tab)}</span>
 						</button>
 						<button
@@ -339,16 +349,17 @@
 					<Icon name="chevron-right" size={16} />
 				</button>
 				<button
-					class="workspace-tool-option workspace-tool-option-unavailable"
+					class="workspace-tool-option"
 					type="button"
-					disabled
-					aria-label="Terminal. Shell access is not available in this version."
+					data-testid="workspace-tool-terminal"
+					onclick={() => session.openWorkspaceToolTab('terminal')}
 				>
 					<span class="workspace-tool-option-icon workspace-terminal-icon" aria-hidden="true">›_</span>
 					<span class="workspace-tool-option-copy">
 						<strong>Terminal</strong>
-						<small>Not available in this version</small>
+						<small>Open your system terminal at this workspace</small>
 					</span>
+					<Icon name="chevron-right" size={16} />
 				</button>
 			</div>
 			{#if chooserError}<p class="workspace-tool-error" role="alert">{chooserError}</p>{/if}
@@ -360,6 +371,8 @@
 				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />
+			{:else if activeTab.kind === 'terminal'}
+				<TerminalToolView />
 			{:else}
 				<InvestigationBriefView />
 			{/if}
@@ -557,7 +570,6 @@
 	.workspace-tool-option:disabled { color: var(--text-faint); cursor: not-allowed; }
 	.workspace-tool-error { margin: 6px 10px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-tool-error { color: var(--danger, #b42318); }
-	.workspace-tool-option-unavailable { min-height: 44px; }
 	.workspace-terminal-icon { font-family: var(--mono); font-size: 15px; font-weight: 600; }
 	.workspace-tabs-bar {
 		display: flex;
@@ -611,6 +623,7 @@
 	.workspace-tool-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.workspace-tool-tab.active { color: var(--text); font-weight: 550; }
 	.workspace-tool-tab :global(svg) { flex: none; color: var(--text-faint); }
+	.workspace-terminal-tab-icon { color: var(--text-faint); font-family: var(--mono); font-size: 11px; font-weight: 650; }
 	.workspace-tool-tab:hover,
 	.workspace-tool-tab-close:hover,
 	.workspace-tool-add:hover { background: var(--sidebar-hover); color: var(--text); }
