@@ -24,7 +24,7 @@
 	let displayTitle = $derived.by(() => {
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
 		if (session.workspaceView === 'settings') return 'Fella';
-		return folder ? 'Fella' : 'Focus';
+		return folder ? 'Fella' : 'Conversation';
 	});
 
 

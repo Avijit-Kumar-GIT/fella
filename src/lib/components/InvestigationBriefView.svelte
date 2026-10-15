@@ -1698,14 +1698,19 @@
 <section class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown}>
 	<header class="page-head">
 		<div>
-			<h1 id="investigation-title">Investigation</h1>
-			<p>One request, the data behind it, and the results Fella produces.</p>
+			<h1 id="investigation-title">{selected?.title ?? 'Investigation'}</h1>
+			{#if !selected}<p>One request, the data behind it, and the results Fella produces.</p>{/if}
 		</div>
+		{#if selected}
+			<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
+				<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
+			</Button>
+		{/if}
 	</header>
 	{#if workspacePath && !loading && !investigationLoadError && !selected}
 		<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-empty-heading">
 			<header class="investigation-document-heading">
-				<div><h2 id="investigation-data-empty-heading">Data</h2><p>See which files are available to analyze.</p></div>
+				<div><h2 id="investigation-data-empty-heading">Workspace data</h2><p>Files and fields available in this workspace.</p></div>
 			</header>
 			<InvestigationSourceReadiness
 				{workspacePath}
@@ -1740,16 +1745,6 @@
 		{#if selected}
 			<div class="investigation-content">
 				<div class="brief-editor">
-					<div class="editor-heading">
-						<div>
-							<h2>{selected.title}</h2>
-						</div>
-						<div class="editor-actions">
-							<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
-								<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
-							</Button>
-						</div>
-					</div>
 					{#if conversationError}
 						<p class="analysis-run-error" role="alert">{conversationError}</p>
 					{/if}
@@ -1846,7 +1841,7 @@
 					>
 					<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-heading">
 						<header class="investigation-document-heading">
-							<div><h3 id="investigation-data-heading">Data</h3><p>Choose which sources this Investigation can use.</p></div>
+							<div><h3 id="investigation-data-heading">Investigation sources</h3><p>Choose which workspace files this Investigation can use.</p></div>
 						</header>
 						<InvestigationSourceReadiness
 							{workspacePath}
@@ -1863,13 +1858,7 @@
 						tabindex="0"
 						hidden={investigationSection !== 'questions'}
 					>
-					<section class="analyst-work-plan" aria-labelledby="work-plan-title">
-						<header class="work-plan-heading">
-							<div>
-								<h3 id="work-plan-title">Questions</h3>
-								<p>Start with the request. Add smaller questions when they help.</p>
-							</div>
-						</header>
+					<section class="analyst-work-plan" aria-labelledby="question-plan-title">
 						<div class="optional-context-heading">
 							<p>Context (optional)</p>
 							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
@@ -1885,9 +1874,6 @@
 						<header class="question-heading">
 							<div>
 								<p>Fella records the version used by each run.</p>
-							</div>
-							<div class="question-save">
-								<span role={(error || autosaveError) && definitionsDirty ? 'alert' : 'status'}>{(error || autosaveError) && definitionsDirty ? error || autosaveError : (saving || autosaving) && definitionsDirty ? 'Saving…' : definitionsDirty ? hasBlankDefinition ? 'Complete blank fields to save' : 'Changes save automatically' : 'Saved'}</span>
 							</div>
 						</header>
 						{#if definitions.length}
@@ -1927,7 +1913,6 @@
 						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
-								<p>The original request is the main Question. Add a breakdown only when useful.</p>
 							</div>
 							<div class="question-save">
 								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
@@ -1969,7 +1954,6 @@
 							<header>
 								<div>
 									<h4>Coverage</h4>
-									<p>See what’s answered, where data is missing, and what needs attention.</p>
 								</div>
 								<dl class="question-coverage-counts">
 									<div data-coverage="answered"><dt>Answered</dt><dd>{coverage.answered}</dd></div>
@@ -2897,14 +2881,15 @@
 		overflow: auto;
 		overscroll-behavior: contain;
 	}
-	.page-head,
-	.editor-heading {
+	.page-head {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-4);
 	}
 	.page-head { margin-bottom: var(--space-5); }
+	.page-head > div { min-width: 0; }
+	.page-head h1 { overflow-wrap: anywhere; }
 	.investigation-nav {
 		position: sticky;
 		top: 0;
@@ -2981,8 +2966,6 @@
 	.page-head p { margin-top: var(--space-1); color: var(--text-dim); }
 	.investigation-content { min-width: 0; }
 	.brief-editor { min-width: 0; }
-	.editor-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-3) 0 var(--space-4); }
-	.editor-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
 	.investigation-document-section { display: grid; min-width: 0; gap: var(--space-4); padding: var(--space-6) 0; }
 	.investigation-document-heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-4); }
 	.investigation-document-heading > div { display: grid; min-width: 0; gap: 3px; }
@@ -2995,8 +2978,8 @@
 	.investigation-share-section .report-export-status { max-width: none; }
 	.brief-summary { display: grid; gap: var(--space-4); padding: var(--space-5); margin-top: var(--space-2); border: 0; border-radius: var(--radius-window); background: var(--bg-inset); }
 	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-	.brief-summary h3, .work-plan-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.brief-summary > header p, .work-plan-heading p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
+	.brief-summary h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
+	.brief-summary > header p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-6); margin: 0; }
 	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
 	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
@@ -3020,7 +3003,6 @@
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
 	.analyst-work-plan { display: grid; gap: var(--space-4); padding: var(--space-6) 0; }
-	.work-plan-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.optional-context-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
 	.optional-context-heading > p { font-weight: 600; }
 	.definition-disclosure, .investigation-history { min-width: 0; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
@@ -3031,7 +3013,7 @@
 	.definition-disclosure > summary > span, .investigation-history > summary > span { flex: 1; }
 	.definition-disclosure > summary small, .investigation-history > summary small { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 400; }
 	.definition-editor { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
-	.definition-editor .question-heading p, .definition-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
+	.definition-empty { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); }
 	.definition-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 	.definition-item { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); }
 	.definition-item-heading, .definition-item-meta { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
@@ -3053,7 +3035,7 @@
 	.question-coverage { display: grid; gap: var(--space-4); padding: var(--space-4); border: 0; border-radius: var(--radius-window); background: var(--bg-inset); }
 	.question-coverage > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); }
 	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
-	.question-coverage > header p, .question-coverage-message { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.question-coverage-message { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.question-coverage-counts { display: grid; grid-template-columns: repeat(4, minmax(64px, auto)); gap: var(--space-2); margin: 0; }
 	.question-coverage-counts > div { display: grid; gap: 2px; }
 	.question-coverage-counts dt { color: var(--text-faint); font-size: 10px; }
@@ -3251,6 +3233,8 @@
 		.page-head { align-items: flex-start; flex-direction: column; }
 		.investigation-document-heading { align-items: flex-start; flex-direction: column; }
 		.question-heading { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
+		.question-coverage > header { flex-direction: column; }
+		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 		.question-save { width: 100%; min-width: 0; max-width: none; flex-basis: auto; justify-content: flex-start; }
 		.question-plan-actions { justify-content: flex-start; }
 		.question-empty-state { align-items: flex-start; flex-direction: column; }

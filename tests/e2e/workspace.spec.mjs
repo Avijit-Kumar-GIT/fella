@@ -181,7 +181,7 @@ async function waitForQuestionPlanSaved(page) {
 }
 
 async function waitForDefinitionsSaved(page) {
-	await expect(page.locator('.definition-editor .question-save')).toHaveText('Saved');
+	await waitForQuestionPlanSaved(page);
 }
 
 async function expectQuestionRunSettled(page) {
@@ -1121,7 +1121,7 @@ test('sidebar conversation links restore the selected conversation without hidin
 	await expect(page.getByRole('button', { name: `Open conversation: ${secondQuestion}` })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 	await expectSidebarConversationFocused(page, firstQuestion);
 
 	await openWorkspaceContextTool(page);
@@ -1138,7 +1138,7 @@ test('sidebar conversation links restore the selected conversation without hidin
 });
 
 
-test('sidebar conversation links switch workspace and open its saved conversation in Focus', async ({ page }) => {
+test('sidebar conversation links switch workspace and open its saved conversation in Conversation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	await addSalesWorkspace(page);
@@ -1209,7 +1209,7 @@ test('long Investigation content remains reachable by keyboard and pointer scrol
 	await page.getByRole('button', { name: 'Open workspace northwind-sales' }).click();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await openInvestigationSection(page, 'Results');
-	await expect(page.locator('.editor-heading h2')).toHaveText(longTitle);
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText(longTitle);
 
 	const scrollRegion = page.locator('.investigation-page');
 	// Scope to the visible Key Findings inventory; the claim is also repeated in collapsed analysis history.
@@ -1270,6 +1270,38 @@ test('long Investigation content remains reachable by keyboard and pointer scrol
 	expect(sourceListPosition.lastItemBottom).toBeLessThanOrEqual(sourceListPosition.bottom);
 	await expect(sourceList.getByText(finalSourceName, { exact: true })).toBeVisible();
 	expect(await sourceList.getByText(finalSourceName, { exact: true }).evaluate((element) => getComputedStyle(element).whiteSpace)).not.toBe('nowrap');
+});
+
+test('Questions reflow inside a normal desktop split Tools pane', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.setViewportSize({ width: 1440, height: 900 });
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	await setWorkspaceToolsOpen(page, true);
+	await createInvestigationFromChooser(page);
+	await openInvestigationSection(page, 'Questions');
+
+	const layout = await page.evaluate(() => {
+		const pane = document.querySelector('.workspace-tools-pane');
+		const plan = pane?.querySelector('.question-plan-heading');
+		const coverage = pane?.querySelector('.question-coverage');
+		const coverageHeader = coverage?.querySelector(':scope > header');
+		return {
+			paneWidth: pane?.getBoundingClientRect().width ?? 0,
+			containerType: pane ? getComputedStyle(pane).containerType : '',
+			planDirection: plan ? getComputedStyle(plan).flexDirection : '',
+			coverageDirection: coverageHeader ? getComputedStyle(coverageHeader).flexDirection : '',
+			coverageOverflow: Boolean(coverage && coverage.scrollWidth > coverage.clientWidth + 1),
+			pageOverflow: Boolean(pane && pane.scrollWidth > pane.clientWidth + 1)
+		};
+	});
+	expect(layout.paneWidth).toBeGreaterThan(280);
+	expect(layout.paneWidth).toBeLessThan(900);
+	expect(layout.containerType).toContain('inline-size');
+	expect(layout.planDirection).toBe('column');
+	expect(layout.coverageDirection).toBe('column');
+	expect(layout.coverageOverflow).toBe(false);
+	expect(layout.pageOverflow).toBe(false);
 });
 
 
@@ -1337,9 +1369,10 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	await expect(workspaceContext).toContainText('northwind-sales');
 	await expect(page.getByRole('button', { name: 'Open investigation brief in northwind-sales' })).toBeVisible();
 	await openWorkspaceTools(page);
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
 	await expect(workspaceContext).toContainText('northwind-sales');
-	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
+	const investigationTitle = page.locator('.investigation-page > .page-head h1');
+	await expect(investigationTitle).toHaveText('Summarize cohort retention');
+	await expect(page.locator('.investigation-page h1')).toHaveCount(1);
 	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
 	await expect(openConversation).toBeVisible();
 	const linked = await page.evaluate(() => window.__workspaceInvestigations()[0]);
@@ -1350,7 +1383,7 @@ test('an Investigation opens its canonical workspace conversation', async ({ pag
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 	await expect(page.locator('.workspace-pane-toggle')).toBeVisible();
 	await openWorkspaceTools(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('Summarize cohort retention');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('Summarize cohort retention');
 	expect(await page.evaluate(() => window.__workspaceAskCalls.length)).toBe(1);
 });
 
@@ -1361,7 +1394,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(1);
 	const first = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations()[0];
@@ -1377,7 +1410,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(1);
 	await openWorkspaceTools(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 
 	await page.getByTestId('workspace-tool-add').click();
 	await expect(page.getByTestId('workspace-tool-chooser')).toBeVisible();
@@ -1385,7 +1418,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await openInvestigationsDropdown(page);
 	await expect(page.getByTestId(`workspace-investigation-option-${first.id}`)).toBeVisible();
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation 2');
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigations().length)).toBe(2);
 	const second = await page.evaluate(() => {
 		const record = window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2');
@@ -1396,7 +1429,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	expect(second.conversationId).toBeTruthy();
 	expect(second.conversationId).not.toBe(first.conversationId);
 	expect(second.activeConversationId).toBe(second.conversationId);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation 2');
 	await expect(page.getByRole('navigation', { name: 'Workspace investigations' })).toHaveCount(0);
 	await expect(page.getByRole('tab', { name: 'New investigation', exact: true })).toBeVisible();
 	await expect(page.getByRole('tab', { name: 'New investigation 2', exact: true })).toHaveAttribute('aria-selected', 'true');
@@ -1410,14 +1443,14 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 
 	await openWorkspaceTools(page);
 	await page.getByRole('tab', { name: 'New investigation', exact: true }).click();
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversationId);
 	await closeWorkspaceTools(page);
 	await expect(page.locator('.msg.user').filter({ hasText: firstPrompt })).toHaveCount(1);
 	await expect(page.locator('.msg.user').filter({ hasText: secondPrompt })).toHaveCount(0);
 
 	await openWorkspaceTools(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await expect(page.getByRole('button', { name: `Open conversation: ${secondPrompt}` })).toBeVisible();
 	await page.getByRole('button', { name: `Open conversation: ${secondPrompt}` }).click();
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
@@ -1425,7 +1458,7 @@ test('Investigation tool tabs keep their own conversations aligned when switchin
 	await expect(page.locator('.workspace-pane-toggle')).toHaveAttribute('aria-expanded', 'false');
 	await openWorkspaceTools(page);
 	await page.getByRole('tab', { name: 'New investigation 2', exact: true }).click();
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation 2');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(second.conversationId);
 });
 
@@ -1436,12 +1469,12 @@ test('rapid Investigation tab switching preserves each tab identity', async ({ p
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	const first = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation'));
 
 	await page.getByTestId('workspace-tool-add').click();
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation 2');
 	const second = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2'));
 	expect(first?.conversation_id).toBeTruthy();
 	expect(second?.conversation_id).toBeTruthy();
@@ -1469,7 +1502,7 @@ test('rapid Investigation tab switching preserves each tab identity', async ({ p
 	await expect.poll(() => page.evaluate(() => window.__workspaceInvestigationListPending)).toBe(0, { timeout: 5000 });
 
 	await expect(page.getByRole('tab', { name: 'New investigation', exact: true })).toHaveAttribute('aria-selected', 'true');
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await expect.poll(() => page.evaluate((workspacePath) => {
 		const state = JSON.parse(localStorage.getItem('fella:workspace-contexts') || '{}');
 		const pane = state.contexts?.find((item) => item.workspaceId === workspacePath);
@@ -1533,11 +1566,11 @@ test('switching Investigation tabs stays responsive while a previous conversatio
 	await addSalesWorkspace(page);
 	await setWorkspaceToolsOpen(page, true);
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	const first = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation'));
 	await page.getByTestId('workspace-tool-add').click();
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation 2');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation 2');
 	const second = await page.evaluate(() => window.__workspaceInvestigations().find((item) => item.title === 'New investigation 2'));
 	expect(first?.conversation_id).toBeTruthy();
 	expect(second?.conversation_id).toBeTruthy();
@@ -1552,7 +1585,7 @@ test('switching Investigation tabs stays responsive while a previous conversatio
 	const firstTab = page.getByRole('tab', { name: 'New investigation', exact: true });
 	await firstTab.click();
 	await expect(firstTab).toHaveAttribute('aria-selected', 'true');
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await expect.poll(() => focusedWorkspaceConversationId(page, folders[0].path)).toBe(first.conversation_id);
 	await expect.poll(() => page.evaluate(() => window.__workspaceConversationListPending)).toBe(0);
 	await expect(firstTab).toHaveAttribute('aria-selected', 'true');
@@ -1598,7 +1631,7 @@ test('Investigation work plan keeps the brief concise and opens editing and hist
 	await expect(brief).toContainText('Finance lead');
 	await expect(brief).toContainText('A concise weekly sales report');
 	await openInvestigationSection(page, 'Questions');
-	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
 	expect(await definitions.evaluate((element) => element.open)).toBe(false);
 	await openInvestigationSection(page, 'Analysis');
 	expect(await history.evaluate((element) => element.open)).toBe(false);
@@ -1718,7 +1751,7 @@ test('a Question runs in its linked conversation without merging sibling Questio
 	await openWorkspaceTools(page);
 	await page.getByTestId('workspace-tool-add').click();
 	await createInvestigationFromChooser(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('New investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('New investigation');
 	await openInvestigationSection(page, 'Questions');
 	await page.getByRole('button', { name: 'Add main Question' }).click();
 	const mainQuestion = 'How many sales rows are available?';
@@ -1817,7 +1850,7 @@ test('an Investigation restores its canonical conversation and Analyze keeps cha
 	await expect(page.getByRole('combobox', { name: 'Ask about northwind-sales' })).toBeVisible();
 	await expect.poll(() => focusedWorkspaceConversationId(page, workspaceId)).toBe(conversationId);
 	await openWorkspaceTools(page);
-	await expect(page.locator('.editor-heading h2')).toHaveText('Weekly sales investigation');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('Weekly sales investigation');
 
 	// This record has a durable canonical conversation ID but no archived chat,
 	// matching an Investigation created on an empty Focus chat before restart.
@@ -1873,7 +1906,7 @@ test('Investigation tool tabs resume the same completed record', async ({ page }
 	const firstChoice = page.getByTestId(`workspace-investigation-option-${firstId}`);
 	await expect(firstChoice).toContainText('0/1 answered · 1 need attention');
 	await firstChoice.click();
-	await expect(page.locator('.editor-heading h2')).toHaveText('First return-to-work question');
+	await expect(page.locator('.investigation-page > .page-head h1')).toHaveText('First return-to-work question');
 	await openInvestigationSection(page, 'Questions');
 	await expect(page.getByRole('textbox', { name: 'Main question' })).toHaveValue('First return-to-work question');
 	const openConversation = page.getByRole('button', { name: 'Open conversation', exact: true });
@@ -1926,7 +1959,7 @@ test('the optional workspace tools pane preserves Investigation scope, Questions
 		const investigation = window.__workspaceInvestigations()[0];
 		return { id: investigation.id, questionId: investigation.questions[0].id };
 	});
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 	await openInvestigationSection(page, 'Questions');
 	const mainQuestion = page.getByRole('textbox', { name: 'Main question' });
 	await mainQuestion.fill('Measure weekly net sales');
@@ -2220,7 +2253,7 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await page.evaluate((id) => window.__workspaceSetRunLinks(id, ['prior-analysis-turn']), investigationId);
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await openInvestigationSection(page, 'Questions');
-	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
 
 	await page.getByRole('textbox', { name: 'Main question' }).fill('Measure conversion by channel');
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
@@ -2261,11 +2294,9 @@ test('an analyst can edit the main Question and linked subquestions without rewr
 	await page.getByRole('button', { name: 'Send' }).click();
 	await expect(page.getByRole('log', { name: 'conversation' }).getByText('Scoped to C:\\FellaFixture\\northwind-sales.', { exact: true }).filter({ visible: true }).last()).toBeVisible();
 	const nextAsk = await page.evaluate(() => window.__workspaceAskCalls.at(-1));
-	expect(nextAsk.question).toContain('Compare conversion by device');
-	expect(nextAsk.question).not.toContain('Compare conversion over time');
-	expect(nextAsk.question.indexOf('Compare conversion by region')).toBeLessThan(nextAsk.question.indexOf('Compare conversion by device'));
-	expect(nextAsk.question).toContain('Main Question: Measure conversion by channel');
-	expect(nextAsk.question).toContain('Which device has the strongest change?');
+	expect(nextAsk.question).toBe('Which device has the strongest change?');
+	expect(nextAsk.questionId).toBeNull();
+	expect(nextAsk.investigationId).toBe(investigationId);
 	// The message renderer adds a presentation-only "You asked:" prefix. The
 	// actual contract is that the original request remains visible and the
 	// private Investigation-plan context stays out of the transcript.
@@ -2300,7 +2331,7 @@ test('a Question can narrow its source set and launches a run linked to that Que
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await openInvestigationSection(page, 'Questions');
-	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
 
 	await page.getByRole('button', { name: 'Add subquestion' }).click();
 	await page.getByRole('textbox', { name: 'Subquestion 1' }).fill('Compare refund rates with sales');
@@ -3503,7 +3534,7 @@ test('Investigation results summarize saved work, render linked charts, and keep
 
 	const brief = page.getByRole('tabpanel', { name: 'Brief' }).getByRole('region', { name: 'Brief', exact: true });
 	const results = page.getByRole('region', { name: 'Current Investigation results' });
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Analysis', exact: true })).toBeVisible();
 	await expect(page.locator('.investigation-view-switch')).toHaveCount(0);
 	await openInvestigationSection(page, 'Brief');
@@ -4174,7 +4205,7 @@ test('suggested Question breakdown autosaves as durable child records', async ({
 	await expect(page.getByText('Scoped to C:\\FellaFixture\\northwind-sales.')).toBeVisible();
 	await page.getByRole('button', { name: 'Open investigation brief in northwind-sales' }).click();
 	await openInvestigationSection(page, 'Questions');
-	await expect(page.getByRole('heading', { name: 'Questions', exact: true })).toBeVisible();
+	await expect(page.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
 
 	const askCountBeforeSuggestion = await page.evaluate(() => window.__workspaceAskCalls.length);
 	const originalRequest = await page.evaluate(() => window.__workspaceAskCalls[0].question);
@@ -4210,7 +4241,7 @@ test('suggested Question breakdown autosaves as durable child records', async ({
 		text: 'Check the trend over time',
 		status: 'active'
 	});
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 });
 
 
@@ -4385,7 +4416,7 @@ test('Investigation shows source readiness and opens source details in place', a
 	await expect(fieldProfile).toContainText('measured from the loaded rows only');
 	await sourceFieldSearch.fill('');
 	await expect(fieldProfile.locator('tbody tr')).toHaveCount(3);
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 });
 
 
@@ -4706,7 +4737,7 @@ test('shared workspace tabs and modal/menu primitives preserve keyboard interact
 	await briefTab.focus();
 	await page.keyboard.press('ArrowRight');
 	await expect(dataTab).toHaveAttribute('aria-selected', 'true');
-	await expect(page.getByRole('heading', { name: 'Data', exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Investigation sources', exact: true })).toBeVisible();
 
 	await openWorkspaceContextTool(page);
 	await expect(page.getByRole('textbox', { name: 'Workspace guide' })).toBeVisible();
@@ -4911,7 +4942,7 @@ test('workspace context read failures stay distinct from a blank note and can be
 });
 
 
-test('Sidebar icon actions use shared compact buttons and Add repository opens Focus', async ({ page }) => {
+test('Sidebar icon actions use shared compact buttons and Add repository opens Conversation', async ({ page }) => {
 	await installDesktopMock(page);
 	await page.goto('/');
 	const collapse = page.getByRole('button', { name: 'Collapse sidebar' });
@@ -4980,7 +5011,7 @@ test('Sidebar workspace tools use shared buttons and preserve Investigation and 
 	await investigation.click();
 	await openInvestigationSection(page, 'Data');
 	await expect(page.getByRole('heading', { name: 'Data available' })).toBeVisible();
-	await expect(page.getByRole('heading', { name: 'Investigation', exact: true })).toBeVisible();
+	await expect(page.locator('.workspace-tools-pane').getByRole('heading', { level: 1 })).toBeVisible();
 	await createProject.click();
 	await expect(page.getByRole('heading', { name: 'Create a project' })).toBeVisible();
 	await page.getByRole('textbox', { name: 'Name' }).fill('Sales review');
@@ -5146,8 +5177,8 @@ test('Analysis capabilities describe current tools and preserve the table depend
 	await expect(capabilities.getByRole('switch')).toHaveCount(4);
 	await expect(capabilities).toContainText('Inspect schemas and field profiles');
 	await expect(capabilities).toContainText('read-only SQL, including joins and grouped totals');
-	await expect(capabilities).toContainText('catalogued text and PDFs');
-	await expect(capabilities).toContainText('read data through Fella’s read-only SQL bridge');
+	await expect(capabilities).toContainText('Search supported text and text-based PDFs; no OCR.');
+	await expect(capabilities).toContainText('Run sandboxed calculations using read-only data results.');
 	await expect(capabilities).toContainText('validated charts from table results');
 	await expect(capabilities.getByText('Always included')).toBeVisible();
 	await expect(capabilities).toContainText('Investigation Questions, definitions, and source scope');
@@ -5204,6 +5235,20 @@ test('Settings actions use shared buttons and folder selection still works', asy
 	});
 	await page.goto('/');
 	await page.getByRole('button', { name: 'Settings' }).click();
+	const settingsGrid = page.locator('.settings-grid');
+	await expect(settingsGrid).toHaveCSS('max-width', '840px');
+	for (const title of ['Model', 'Appearance', 'Workspace', 'Analysis capabilities', 'Run log']) {
+		await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+	}
+	await expect(page.locator('.capability-details')).not.toHaveAttribute('open');
+	const settingsLayout = await page.evaluate(() => ({
+		gridWidth: document.querySelector('.settings-grid')?.getBoundingClientRect().width ?? 0,
+		horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+		sectionRules: [...document.querySelectorAll('.settings-card')].filter((card) => getComputedStyle(card).borderTopStyle === 'solid').length
+	}));
+	expect(settingsLayout.gridWidth).toBeLessThanOrEqual(840);
+	expect(settingsLayout.horizontalOverflow).toBe(false);
+	expect(settingsLayout.sectionRules).toBe(4);
 	const runEntry = page.locator('.run-log-entry');
 	await expect(runEntry).toHaveCount(1);
 	const runEntryToggle = runEntry.getByRole('button');
@@ -5462,7 +5507,8 @@ test('Projects curate Findings, visualizations, definitions, and open Questions 
 	await expect(curated).toContainText('Explain weekly sales · revision 3 · run analysis-sales-curation');
 	await expect(curated).toContainText('Explain weekly sales · run analysis-sales-curation · evidence evidence-sales-chart');
 	await expect(curated).toContainText('Explain weekly sales · revision 2');
-	await expect(curated).toContainText('Explain weekly sales · incomplete');
+	await expect(curated).toContainText('Explain weekly sales · Partial answer');
+	await expect(curated).toContainText('Regional detail is not available.');
 
 	let stored = await page.evaluate(() => JSON.parse(localStorage.getItem('fella:projects') ?? '[]'));
 	expect(stored).toHaveLength(1);
@@ -5609,6 +5655,35 @@ test('a quick workspace question stays low-ceremony while keeping its answer evi
 	await expect(details).toHaveAttribute('aria-expanded', 'false');
 	await expect(answer).toContainText(answerText);
 	await expect(composer).toBeVisible();
+});
+
+test('freeform workspace follow-ups stay ordinary asks, not Question runs', async ({ page }) => {
+	const firstQuestion = 'What were total net sales in Q3?';
+	const followUp = 'What about Q4?';
+	await installDesktopMock(page, { directAnswerText: 'Net sales totaled $1,240.' });
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	const composer = page.getByRole('combobox', { name: 'Ask about northwind-sales' });
+	await composer.fill(firstQuestion);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.assistant').last()).toContainText('Net sales totaled $1,240.');
+	await composer.fill(followUp);
+	await page.getByRole('button', { name: 'Send' }).click();
+	await expect(page.locator('.msg.user').filter({ hasText: followUp })).toHaveCount(1);
+	await expect(page.locator('.msg.assistant').last()).toContainText('Net sales totaled $1,240.');
+
+	const state = await page.evaluate(() => ({
+		asks: window.__workspaceAskCalls,
+		investigations: window.__workspaceInvestigations()
+	}));
+	expect(state.asks).toHaveLength(2);
+	expect(state.asks.map((ask) => ask.question)).toEqual([firstQuestion, followUp]);
+	expect(state.asks.every((ask) => ask.questionId === null)).toBe(true);
+	expect(state.asks[1].conversationId).toBe(state.asks[0].conversationId);
+	expect(state.asks[1].investigationId).toBe(state.asks[0].investigationId);
+	expect(state.investigations).toHaveLength(1);
+	expect(state.investigations[0].questions).toHaveLength(1);
+	expect(state.investigations[0].questions[0].text).toBe(firstQuestion);
 });
 
 

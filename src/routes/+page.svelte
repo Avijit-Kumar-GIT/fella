@@ -247,7 +247,7 @@
 			'/auth',
 			'/history',
 			'/new',
-			'/focus',
+			'/plain',
 			'/context'
 		];
 		session.setWorkspaceView('ask');
@@ -480,6 +480,8 @@
 	.workspace-tools-pane {
 		grid-column: 2;
 		grid-row: 1;
+		container-name: investigation-pane;
+		container-type: inline-size;
 		background: var(--workspace-canvas);
 	}
 	.workspace-tools-pane[hidden] { display: none !important; }

@@ -48,6 +48,62 @@ checks that make that work useful and inspectable.
   When a user asks a connected model a question, that provider receives the
   prompt and any context or tool results used to answer it.
 
+## Conversation and Question contract
+
+A Conversation is the place for ordinary asks and follow-ups. In a mounted
+Workspace, its first user request creates the Workspace's Investigation and
+links that Investigation to the same Conversation. Later freeform messages
+remain ordinary asks in that Conversation: they preserve conversational
+continuity, but do not silently create saved Questions, select a Question, or
+claim that a Question-specific analysis run happened. The original request and
+the saved Investigation context remain available to the model as background;
+each reply should address the user's immediate message rather than combine
+sibling Questions into one request.
+
+The explicit **Analyze** action on a saved Question is different: it starts a
+run linked to that one Question. For example, “What were total net sales in
+Q3?” followed by “What about Q4?” is a pair of freeform Conversation asks.
+Choosing **Analyze** on “What was total net sales in Q4?” from the saved
+Question plan runs that Question and records its Question/run relationship.
+General chat without a mounted Workspace remains unbound and does not create an
+Investigation. This keeps chat low-ceremony without weakening the durable
+Question and provenance model.
+
+## Shipped file and runtime boundaries
+
+The mounted folder is the input boundary. Fella does not edit, move, or delete
+source files. Supported spreadsheets are ingested sheet-by-sheet as queryable
+tables; supported delimited and JSON records are queryable tables; supported
+text and extractable-text PDFs are searchable/readable document sources. A
+catalog entry, an analysis input, a UI preview, and an export are distinct
+capabilities:
+
+| File/source type | Catalog and analysis | In-app preview | Export or limitation |
+| --- | --- | --- | --- |
+| CSV, TSV, TAB; JSON, NDJSON, JSONL | Tabular sources are loaded into the local SQLite analytics database; query through bounded read-only SQL. | Tabular source preview shows up to five rows. | Chart data can be downloaded as CSV; source files are not rewritten. |
+| XLSX, XLSM, XLSB, XLS | Supported sheets are ingested as individual queryable tables. | A sheet's table can use the same five-row preview; this is not a full workbook viewer. | No workbook round-trip/editing. |
+| TXT, TEXT, MD, MARKDOWN, LOG; PDF | Text is searchable/readable as documents. PDF requires an extractable text layer; there is no OCR. | Document reading is through analysis/source details, not a general full-file viewer. | No DOCX or PPTX ingestion or viewer is shipped. |
+| PARQUET, PQ | Catalog recognizes the extension, but analysis requires a custom build with the optional DuckDB feature; standard release builds do not include it. | No tabular preview in the standard release. | Not supported in standard release builds. |
+
+Investigation handoff exports a reviewable Markdown report. Chart artifacts can
+be downloaded as PNG and their data as CSV. Fella does not currently provide
+general-purpose document previews or source-file editing/round-tripping.
+Provider calls are made from the local Rust sidecar directly to the provider
+selected by the user. Prompts and relevant context or tool results (which can
+include document text or data rows) may leave the device. SQL is single-
+statement and read-only, query results are bounded, and Python runs in a
+sandbox without filesystem, network, or subprocess access. Provider retention
+and training practices remain governed by that provider.
+
+Recipient collaboration is not part of the shipped handoff. The current
+portable report and chart/data exports should be tested with actual recipients
+first. Hosted sharing, multi-user permissions, and approval workflows remain
+deferred unless observed handoff work establishes a concrete need. Likewise,
+connectors, unattended scheduling, broad web research, multi-agent
+orchestration, autonomous source-file writing, enterprise governance, and a
+full code-first notebook remain outside the committed scope absent validated
+demand and an explicit product/safety decision.
+
 ## Current scope
 
 The maintained desktop app is Electron with a Svelte UI and a local Rust

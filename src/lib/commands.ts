@@ -69,7 +69,7 @@ showing the exact steps it took. You never need these commands, but here they ar
   /update          check for a newer version of Fella and install it
   /mcp             experimental and inert; no connectors are enabled
   /new             start a new conversation in this workspace
-  /focus           hide navigation and the header for a plain view (again to undo)
+  /plain           hide navigation and the header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
   /history         list your saved conversations, /history <n> to reopen one
   /retry           ask the last question again
@@ -79,7 +79,7 @@ keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P searc
       Ctrl/Cmd+N new conversation · Ctrl/Cmd+Shift+A new conversation
       Ctrl/Cmd+Shift+S Investigation data · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
-      Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
+      Ctrl/Cmd+Shift+F plain view · Esc stop a run / hide details`;
 
 export const SLASH_COMMANDS = [
 	'/open',
@@ -96,7 +96,7 @@ export const SLASH_COMMANDS = [
 	'/update',
 	'/mcp',
 	'/new',
-	'/focus',
+	'/plain',
 	'/clear',
 	'/history',
 	'/retry',
@@ -121,7 +121,7 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/update': 'check for a newer version of Fella and install it',
 	'/mcp': 'experimental and inert; no connectors are enabled',
 	'/new': 'start a new conversation in this workspace',
-	'/focus': 'hide navigation and the header for a plain view',
+	'/plain': 'hide navigation and the header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
 	'/history': 'list your saved conversations, /history <n> to reopen one',
 	'/retry': 'ask the last question again',
@@ -541,12 +541,13 @@ async function runCommand(text: string): Promise<void> {
 			session.newConversation();
 			return;
 
-		case '/focus':
+		case '/plain':
+		case '/focus': // legacy alias
 			session.focus = !session.focus;
 			session.addSystem(
 				session.focus
-					? 'Focus mode on. The app header is hidden. /focus again to bring it back.'
-					: 'Focus mode off.'
+					? 'Plain view on. The app header is hidden. Type /plain again to bring it back.'
+					: 'Plain view off.'
 			);
 			return;
 

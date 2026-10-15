@@ -28,8 +28,8 @@
 		detail: string;
 	}[] = [
 		{ key: 'table_analysis', label: 'Table analysis', detail: 'Inspect schemas and field profiles; query with read-only SQL, including joins and grouped totals.' },
-		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search and read catalogued text and PDFs, with passages tied to their source.' },
-		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed statistics and calculations; read data through Fella’s read-only SQL bridge.' },
+		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search supported text and text-based PDFs; no OCR.' },
+		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed calculations using read-only data results.' },
 		{ key: 'visualizations', label: 'Visualizations', detail: 'Create validated charts from table results, with source lineage.' }
 	];
 
@@ -193,7 +193,7 @@
 			<div class="card-head">
 				<div>
 					<h2 id="model-title">Model</h2>
-					<p>Analysis runs locally. The model provider receives prompts and the context or tool results needed, including relevant text or data rows.</p>
+					<p>Fella reads mounted files on this device. Your model provider receives prompts and relevant context or tool results, including text or data rows.</p>
 				</div>
 			</div>
 			<div class="current-row">
