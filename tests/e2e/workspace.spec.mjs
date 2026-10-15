@@ -1713,6 +1713,10 @@ test('Investigation navigation opens one focused section at a time', async ({ pa
 		availableWidth: element.parentElement.getBoundingClientRect().width
 	}));
 	expect(navigationWidth.width).toBeLessThan(navigationWidth.availableWidth);
+	const wideTabRows = await tabs.getByRole('tab').evaluateAll((elements) =>
+		new Set(elements.map((element) => Math.round(element.getBoundingClientRect().top))).size
+	);
+	expect(wideTabRows).toBe(1);
 
 	for (const section of ['Data', 'Questions', 'Analysis', 'Results', 'Share']) {
 		const panel = await openInvestigationSection(page, section);
@@ -1724,6 +1728,26 @@ test('Investigation navigation opens one focused section at a time', async ({ pa
 	const toolsToggle = page.locator('.workspace-pane-toggle');
 	await expect(toolsToggle).toHaveAttribute('aria-expanded', 'true');
 	await expect(page.getByRole('region', { name: 'Conversation' })).toBeVisible();
+
+	await page.setViewportSize({ width: 1000, height: 800 });
+	const compactNavigation = await tabs.evaluate((element) => {
+		const nav = element.getBoundingClientRect();
+		const pane = element.closest('.workspace-tools-pane').getBoundingClientRect();
+		const tabRects = [...element.querySelectorAll('[role="tab"]')].map((tab) => tab.getBoundingClientRect());
+		return {
+			display: getComputedStyle(element).display,
+			width: nav.width,
+			paneWidth: pane.width,
+			rows: new Set(tabRects.map((rect) => Math.round(rect.top))).size,
+			columns: new Set(tabRects.map((rect) => Math.round(rect.left))).size,
+			contained: tabRects.every((rect) => rect.left >= nav.left && rect.right <= nav.right)
+		};
+	});
+	expect(compactNavigation.paneWidth).toBeLessThanOrEqual(460);
+	expect(compactNavigation.display).toBe('grid');
+	expect(compactNavigation.rows).toBe(2);
+	expect(compactNavigation.columns).toBe(3);
+	expect(compactNavigation.contained).toBe(true);
 });
 
 

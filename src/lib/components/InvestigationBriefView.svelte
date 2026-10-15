@@ -2895,13 +2895,25 @@
 		top: 0;
 		z-index: 4;
 		display: flex;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 		min-width: 0;
 		width: max-content;
 		max-width: 100%;
 		margin: 0 0 var(--space-4);
 		overflow: visible;
 		background: var(--bg);
+	}
+	@container investigation-pane (max-width: 430px) {
+		.investigation-nav {
+			display: grid;
+			grid-template-columns: repeat(3, minmax(0, 1fr));
+			width: 100%;
+		}
+	}
+	@container investigation-pane (max-width: 280px) {
+		.investigation-nav {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
 	}
 	.investigation-tab-panel { min-width: 0; }
 	.investigation-tab-panel[hidden] { display: none; }
