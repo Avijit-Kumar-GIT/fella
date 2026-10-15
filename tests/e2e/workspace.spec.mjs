@@ -5179,6 +5179,11 @@ test('Shell opens at the workspace, can switch installed shells, and stays isola
 
 	const surface = page.getByTestId('terminal-surface');
 	await expect(surface.locator('.xterm')).toBeVisible();
+	const terminalFont = await surface.locator('.xterm-char-measure-element').first().evaluate((element) => {
+		return getComputedStyle(element).fontFamily;
+	});
+	expect(terminalFont).toContain('Geist Mono');
+	expect(terminalFont).not.toContain('var(--mono)');
 	await expect(page.locator('.terminal-location code')).toHaveText('C:\\FellaFixture\\northwind-sales');
 	await expect(page.locator('.terminal-location code')).toHaveAttribute('title', workspacePath);
 	await expect(page.locator('.terminal-connection')).toHaveText('Connected');

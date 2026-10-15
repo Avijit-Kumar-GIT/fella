@@ -59,6 +59,13 @@
 		};
 	}
 
+	function terminalFontFamily(): string {
+		return (
+			getComputedStyle(terminalHost).getPropertyValue('--mono').trim() ||
+			'ui-monospace, "SFMono-Regular", "Cascadia Code", Consolas, monospace'
+		);
+	}
+
 	function displayWorkspacePath(path: string | null): string {
 		if (!path) return '';
 		return path.replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\/, '');
@@ -157,8 +164,9 @@
 			allowProposedApi: false,
 			convertEol: false,
 			cursorBlink: true,
-			fontFamily: 'var(--mono)',
+			fontFamily: terminalFontFamily(),
 			fontSize: 13,
+			letterSpacing: 0,
 			lineHeight: 1.35,
 			scrollback: 5000,
 			theme: terminalTheme()
