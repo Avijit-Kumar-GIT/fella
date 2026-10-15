@@ -1695,6 +1695,7 @@ test('Investigation work plan keeps the brief concise and opens editing and hist
 
 test('Investigation navigation opens one focused section at a time', async ({ page }) => {
 	await installDesktopMock(page);
+	await page.setViewportSize({ width: 1440, height: 900 });
 	await page.goto('/');
 	await addSalesWorkspace(page);
 	await page.getByRole('combobox', { name: 'Ask about northwind-sales' }).fill('Explain weekly sales performance');
@@ -1707,6 +1708,11 @@ test('Investigation navigation opens one focused section at a time', async ({ pa
 	await expect(page.getByRole('tabpanel', { name: 'Brief' })).toBeVisible();
 	await expect(page.getByRole('tabpanel', { name: 'Questions' })).toBeHidden();
 	await expect(page.locator('.investigation-nav')).toHaveCSS('border-radius', '999px');
+	const navigationWidth = await tabs.evaluate((element) => ({
+		width: element.getBoundingClientRect().width,
+		availableWidth: element.parentElement.getBoundingClientRect().width
+	}));
+	expect(navigationWidth.width).toBeLessThan(navigationWidth.availableWidth);
 
 	for (const section of ['Data', 'Questions', 'Analysis', 'Results', 'Share']) {
 		const panel = await openInvestigationSection(page, section);
@@ -4944,7 +4950,7 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 		expect(await action.evaluate((element) => getComputedStyle(element).justifyContent)).toBe('flex-start');
 		const bounds = await action.boundingBox();
 		expect(bounds).not.toBeNull();
-		expect(bounds.height).toBeLessThanOrEqual(32);
+		expect(bounds.height).toBe(32);
 	}
 
 	await search.focus();
@@ -4957,6 +4963,43 @@ test('Sidebar navigation actions use shared buttons and retain compact keyboard 
 
 	await settings.click();
 	await expect(settings).toHaveAttribute('aria-current', 'page');
+});
+
+
+test('sidebar controls share aligned gutters and a consistent row rhythm', async ({ page }) => {
+	await installDesktopMock(page);
+	await page.goto('/');
+	await addSalesWorkspace(page);
+	const geometry = await page.evaluate(() => {
+		const bounds = (selector) => {
+			const rect = document.querySelector(selector).getBoundingClientRect();
+			return { left: rect.left, right: rect.right, height: rect.height };
+		};
+		return {
+			workspace: bounds('.workspace-switcher-trigger'),
+			modeSwitch: bounds('.sidebar-mode-switch'),
+			modeOption: bounds('.sidebar-mode-option'),
+			newConversation: bounds('.sidebar .nav-row'),
+			workspaceRow: bounds('.repository-row'),
+			sectionAction: bounds('.section-action'),
+			footerAction: bounds('.sidebar-footer .nav-row')
+		};
+	});
+	expect(geometry.modeSwitch.left).toBe(geometry.workspace.left);
+	expect(geometry.modeSwitch.right).toBe(geometry.workspace.right);
+	expect(geometry.workspace.height).toBe(36);
+	expect(geometry.modeOption.height).toBe(28);
+	expect(geometry.newConversation.height).toBe(32);
+	expect(geometry.workspaceRow.height).toBe(32);
+	expect(geometry.sectionAction.height).toBe(32);
+	expect(geometry.footerAction.height).toBe(32);
+
+	await page.getByRole('button', { name: 'Environment', exact: true }).click();
+	const environmentHeading = page.getByRole('heading', { name: 'Environment', exact: true });
+	const headingLeft = await environmentHeading.evaluate((element) => element.getBoundingClientRect().left);
+	expect(headingLeft).toBe(geometry.workspace.left);
+	const fileRow = page.locator('.environment-browser .tree-row').first();
+	if (await fileRow.count()) await expect(fileRow).toHaveCSS('min-height', '32px');
 });
 
 

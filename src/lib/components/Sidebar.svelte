@@ -554,7 +554,7 @@
 		width: 260px;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-1);
+		gap: 0;
 		padding: 0 var(--space-2) var(--space-2);
 		--sidebar-hover: color-mix(in srgb, var(--text) 4%, var(--sidebar-surface));
 		--sidebar-selected: color-mix(in srgb, var(--text) 7%, var(--sidebar-surface));
@@ -568,7 +568,7 @@
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 		gap: 2px;
-		margin: 0 var(--space-2);
+		margin: var(--space-1) var(--space-2);
 		padding: 3px;
 		border: 1px solid var(--border);
 		border-radius: 999px;
@@ -576,8 +576,9 @@
 	}
 	.sidebar-mode-switch :global(button) {
 		display: inline-flex;
+		height: 28px;
 		min-width: 0;
-		min-height: 29px;
+		min-height: 28px;
 		align-items: center;
 		justify-content: center;
 		gap: 6px;
@@ -627,32 +628,36 @@
 	}
 	.nav-section {
 		display: grid;
-		gap: 1px;
-		padding: var(--space-3) var(--space-1) var(--space-2);
+		gap: var(--space-1);
+		padding: var(--space-1) 0;
 	}
 	.repository-section {
 		flex: 1;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		gap: 1px;
-		padding: var(--space-2) var(--space-1);
+		gap: var(--space-1);
+		padding: var(--space-2) 0;
 	}
 	.section-head {
 		display: flex;
 		align-items: center;
-		min-height: 24px;
+		min-height: 32px;
 	}
 	.section-head .nav-heading {
 		flex: 1;
 		padding: 0 var(--space-2);
-		line-height: 24px;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+		line-height: 32px;
+		letter-spacing: .01em;
 	}
 	.section-head :global(.section-action) {
 		display: grid;
 		place-items: center;
-		width: 28px;
-		height: 28px;
+		width: 32px;
+		height: 32px;
 		padding: 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
@@ -671,27 +676,27 @@
 		display: grid;
 		align-content: start;
 		grid-auto-rows: max-content;
-		gap: 1px;
+		gap: 0;
 		overflow-y: auto;
 	}
 	.repository {
 		min-width: 0;
 	}
-	.repository + .repository { margin-top: 3px; }
+	.repository + .repository { margin-top: var(--space-1); }
 	.repository-row-wrap {
 		position: relative;
 	}
 	.repository-row-wrap :global(.repository-disclosure) {
 		position: absolute;
 		z-index: 1;
-		top: 6px;
+		top: 4px;
 		left: 4px;
 		display: grid;
 		place-items: center;
-		width: 18px;
-		min-width: 18px;
-		height: 20px;
-		min-height: 20px;
+		width: 24px;
+		min-width: 24px;
+		height: 24px;
+		min-height: 24px;
 		padding: 0;
 		border-radius: var(--radius-chip);
 		background: transparent;
@@ -844,7 +849,7 @@
 		height: auto;
 		min-height: 32px;
 		gap: 6px;
-		padding: 7px var(--space-2);
+		padding: 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		background: transparent;
 		color: var(--text-dim);
@@ -864,7 +869,7 @@
 		justify-content: flex-start;
 		gap: var(--space-2);
 		height: auto;
-		min-height: 28px;
+		min-height: 32px;
 		padding: 4px var(--space-2);
 		border-radius: var(--radius-sm);
 		color: var(--text-dim);
@@ -897,8 +902,8 @@
 		gap: 6px;
 		width: 100%;
 		height: auto;
-		min-height: 30px;
-		padding: 4px 52px 4px 0;
+		min-height: 32px;
+		padding: 4px 58px 4px 0;
 		border-radius: var(--radius-sm);
 		text-align: left;
 		font: inherit;
@@ -936,7 +941,7 @@
 	}
 	.row-actions {
 		position: absolute;
-		top: 2px;
+		top: 4px;
 		right: 6px;
 		display: none;
 		align-items: center;
@@ -963,7 +968,7 @@
 	.sidebar-footer {
 		flex: none;
 		display: grid;
-		gap: 1px;
-		padding: var(--space-1) var(--space-1) var(--space-2);
+		gap: var(--space-1);
+		padding: var(--space-2) 0 0;
 	}
 </style>

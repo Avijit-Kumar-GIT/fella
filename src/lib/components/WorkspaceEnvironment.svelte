@@ -235,12 +235,13 @@
 </section>
 
 <style>
-	.environment-browser { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding: var(--space-2) var(--space-1); }
+	.environment-browser { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding: var(--space-2) 0; }
 	.environment-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
+	.environment-header :global(button) { width: 32px; height: 32px; }
 	.environment-header h2 { margin: 0; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 600; }
 	.environment-header p { margin: 2px 0 0; color: var(--text-faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.environment-scroll { flex: 1; min-height: 0; overflow: auto; padding-bottom: var(--space-2); }
-	.tree-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; min-height: 28px; padding: 4px 6px; padding-left: calc(6px + var(--tree-depth) * 14px); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-xs); text-align: left; cursor: pointer; }
+	.tree-row { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; min-height: 32px; padding: 4px var(--space-2); padding-left: calc(var(--space-2) + var(--tree-depth) * 14px); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-sm); text-align: left; cursor: pointer; }
 	.tree-row:hover { background: var(--sidebar-hover); color: var(--text); }
 	.tree-row.selected, .tree-row[aria-current='page'] { background: var(--sidebar-selected); color: var(--text); }
 	.tree-row > :global(svg) { flex: none; color: var(--text-faint); }

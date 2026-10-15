@@ -113,11 +113,12 @@
 	}
 	:global(.workspace-switcher-trigger) {
 		width: 100%;
+		height: 36px;
 		min-width: 0;
 		display: flex;
 		align-items: center;
 		gap: 9px;
-		padding: 8px 10px;
+		padding: 6px 10px;
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
 		background: var(--surface);
@@ -179,5 +180,5 @@
 		white-space: nowrap;
 	}
 	.workspace-switcher.compact { width: 190px; padding: 0; }
-	:global(.workspace-switcher.compact .workspace-switcher-trigger) { min-height: 30px; padding: 5px 8px; }
+	:global(.workspace-switcher.compact .workspace-switcher-trigger) { height: 30px; min-height: 30px; padding: 5px 8px; }
 </style>

@@ -2897,7 +2897,8 @@
 		display: flex;
 		flex-wrap: wrap;
 		min-width: 0;
-		width: 100%;
+		width: max-content;
+		max-width: 100%;
 		margin: 0 0 var(--space-4);
 		overflow: visible;
 		background: var(--bg);
