@@ -297,7 +297,7 @@
 			{/if}
 		</div>
 		{#if catalog}
-			<div class="catalog-meta" aria-label="Current source catalog metadata">
+			<details class="catalog-details"><summary>Catalog details</summary><div class="catalog-meta" aria-label="Current source catalog metadata">
 				<span class="catalog-revision" data-testid="current-catalog-revision">
 					Catalog revision
 					{#if catalog.revision}<code title={catalog.revision}>{catalog.revision}</code>{:else}<span>not recorded</span>{/if}
@@ -305,17 +305,12 @@
 				{#if catalog.indexed_at_ms}
 					<span class="indexed-at">Indexed {new Date(catalog.indexed_at_ms).toLocaleDateString()}</span>
 				{/if}
-			</div>
+			</div><p class="readiness-caveat">Loaded files and profiled rows are not proof that a source answers this Investigation.</p></details>
 		{/if}
 	</header>
-	{#if catalog}
-		<p class="readiness-caveat">
-			These observations describe loaded files and their profiled rows; they do not confirm that a source answers the Investigation.
-		</p>
-	{/if}
 	{#if catalog && investigation}
 		<fieldset class="scope-controls" disabled={selectionSaving}>
-			<legend>Investigation scope · future runs</legend>
+			<legend>Sources for future runs</legend>
 			<label>
 				<input
 					type="radio"
@@ -339,7 +334,7 @@
 					? `${uniqueSourcePaths().length} cataloged`
 					: `${selectedFileCount()} of ${uniqueSourcePaths().length} selected`}
 			</span>
-			<small>These files are eligible for future Questions. Saved runs keep their recorded scope.</small>
+			<small>Saved runs keep their original source scope.</small>
 		</fieldset>
 		{#if selectionError}
 			<p class="scope-error" role="alert">{selectionError}</p>
@@ -393,6 +388,7 @@
 							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 							<span class="source-main">
 								<strong>{source.name}</strong>
+								<small class="source-relative-path" title={source.path}>{relativePath(source.path)}</small>
 								<small>{kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
 							</span>
 							<span class="source-readiness-label" data-state={isReady(source) ? 'ready' : 'disabled'}>{readinessLabel(source)}</span>
@@ -540,6 +536,10 @@
 </section>
 
 <style>
+	.catalog-details { font-size: var(--fs-xs); color: var(--text-dim); }
+	.catalog-details > summary { cursor: pointer; }
+	.catalog-details .catalog-meta { margin-top: 8px; }
+	.source-relative-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.source-readiness { padding: var(--space-4) 0; border-bottom: 1px solid var(--border); }
 	.readiness-heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.readiness-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }

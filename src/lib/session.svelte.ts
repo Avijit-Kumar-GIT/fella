@@ -648,6 +648,13 @@ class Session {
 	historyVersion = $state<number>(0);
 	/** Bumped when the ask path automatically creates/resolves an Investigation. */
 	investigationsVersion = $state<number>(0);
+	/** Presentation labels, hydrated from durable Investigations; never transcript edits. */
+	investigationNames = $state<Record<string, string>>({});
+	rememberInvestigationNames(records: readonly { title: string; conversation_id?: string | null }[]): void {
+		for (const record of records) {
+			if (record.conversation_id && record.title.trim()) this.investigationNames[record.conversation_id] = record.title.trim();
+		}
+	}
 	/** Bumped for Investigation record edits that update the workspace picker summary. */
 	workspaceInvestigationSummaryVersion = $state<number>(0);
 	/** Investigation currently selected in the Investigation view, scoped to the active Workspace. */

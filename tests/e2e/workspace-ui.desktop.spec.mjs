@@ -1,5 +1,5 @@
 import { test, expect, _electron as electron } from '@playwright/test';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -7,7 +7,7 @@ import { join, resolve } from 'node:path';
 // No live model, user profile, backend grading, or existing test is modified.
 const root = resolve('.');
 const request = 'What changed in total revenue between Q3 and Q4, excluding cancelled orders and including refunds under the current merchandise policy?';
-let app, page, folderA, folderB, firstInvestigation, secondInvestigation;
+let app, page, folderA, folderB, firstInvestigation, secondInvestigation, dataDir;
 
 async function chooseWorkspace(label) {
 	await page.getByRole('button', { name: /^Switch workspace\. Current:/ }).click();
@@ -32,6 +32,7 @@ async function screenshot(name) { await page.screenshot({ path: test.info().outp
 
 test.beforeEach(async () => {
 	const profile = await mkdtemp(join(tmpdir(), 'fella-ui-acceptance-'));
+	dataDir = profile;
 	folderA = join(profile, 'northstar'); folderB = join(profile, 'housing');
 	for (const folder of [folderA, folderB]) {
 		await mkdir(folder);
@@ -61,7 +62,17 @@ test.beforeEach(async () => {
 	await page.getByRole('button', { name: /^Open conversation: What changed in total revenue/ }).click();
 	await expect(page.getByRole('log', { name: 'conversation' })).toContainText('First analysis answer.');
 });
-test.afterEach(async () => { await app?.close(); });
+test.afterEach(async () => {
+	if (page && test.info().status !== test.info().expectedStatus) {
+		const state = await page.evaluate(() => ({
+			views: Object.fromEntries(Object.entries(localStorage).filter(([key]) => key.startsWith('fella:tool-view:'))),
+			tabs: [...document.querySelectorAll('.workspace-tool-tab')].map(element => ({ text: element.textContent, selected: element.getAttribute('aria-selected') })),
+			section: document.querySelector('[aria-label="Investigation sections"] [aria-selected="true"]')?.textContent
+		})).catch(() => null);
+		await writeFile(test.info().outputPath('navigation-state.json'), JSON.stringify(state, null, 2));
+	}
+	await app?.close();
+});
 
 test('workspace UI: sidebar scopes Chats and Files and keeps other workspaces in the picker', async () => {
 	const sidebar = page.locator('.sidebar');
@@ -224,4 +235,174 @@ test('workspace UI: picker keyboard focus and global search remain available acr
 	await page.getByRole('button', { name: /^How much is rent\?/ }).click();
 	await expect(page.getByRole('log', { name: 'conversation' })).toContainText('Housing answer.');
 	await expect(page.getByRole('button', { name: 'Switch workspace. Current: housing', exact: true })).toBeVisible();
+});
+
+// Follow-up v1: acceptance criteria are recorded before candidate execution in
+// docs/testing/WORKSPACE-UI-FOLLOWUP-2026-10-16.md. Original cases are unchanged.
+async function seedSavedRun() {
+	const catalog = await page.evaluate(() => window.fella.invoke('get_catalog'));
+	const run = {
+		id: 'ui-saved-run', conversation_id: 'ui-one', question: request,
+		workspace: folderA, workspace_revision: catalog.revision,
+		context_refs: [], prior_turn_refs: [], state: 'accepted',
+		plan: { strategy: 'direct_tools', steps: ['Inspect sales', 'Compare quarters'] },
+		trace: { id: 'ui-trace', turn_id: 'ui-saved-run', workspace_revision: catalog.revision, steps: [] },
+		verification: { status: 'needs_review', checks: [] },
+		result: { text: '**Revenue increased.**\n\n- Q3: 10\n- Q4: 20\n\n[Unsafe](javascript:alert(1))<script>alert(1)</script>', status: 'needs_review', evidence: [], verification: [] }
+	};
+	const directory = join(dataDir, 'analysis', 'turns'); await mkdir(directory, { recursive: true });
+	const path = join(directory, `${run.id}.json`); await writeFile(path, JSON.stringify(run));
+	await page.evaluate(({ id, runId }) => window.fella.invoke('investigation_link_analysis_turns', { investigationId: id, analysisTurnIds: [runId] }), { id: firstInvestigation.id, runId: run.id });
+	return { run, path };
+}
+
+test('follow-up UI: name and rename Investigations without changing analytical identity', async () => {
+	await openInvestigation(firstInvestigation.id);
+	const before = await page.evaluate(id => window.fella.invoke('investigation_load', { investigationId: id }), firstInvestigation.id);
+	await page.getByRole('button', { name: 'Rename Investigation', exact: true }).click();
+	const dialog = page.getByRole('dialog', { name: 'Rename Investigation', exact: true });
+	await dialog.getByRole('textbox', { name: 'Investigation name', exact: true }).fill('  Northstar revenue · Q3–Q4 2025  ');
+	await dialog.getByRole('button', { name: 'Save name', exact: true }).click();
+	await expect(dialog).toBeHidden();
+	await expect(page.getByRole('tab', { name: 'Northstar revenue · Q3–Q4 2025', exact: true })).toBeVisible();
+	const after = await page.evaluate(id => window.fella.invoke('investigation_load', { investigationId: id }), firstInvestigation.id);
+	expect(after.title).toBe('Northstar revenue · Q3–Q4 2025');
+	for (const field of ['id', 'workspace_id', 'brief', 'brief_source_message_id', 'conversation_id', 'questions', 'source_selection', 'status', 'analysis_turn_ids']) expect(after[field]).toEqual(before[field]);
+	await page.reload();
+	await expect(page.getByRole('heading', { name: after.title, exact: true })).toBeVisible();
+	await page.getByRole('button', { name: 'Add tool tab', exact: true }).click();
+	await page.getByTestId('workspace-tool-investigations').click();
+	await page.getByTestId(`workspace-investigation-option-${after.id}`).click();
+	await expect(page.getByRole('heading', { name: after.title, exact: true })).toBeVisible();
+	await screenshot('named-investigation');
+});
+
+test('follow-up UI: create a named Investigation with its own conversation', async () => {
+	await openInvestigation(firstInvestigation.id);
+	await page.getByRole('button', { name: 'Add tool tab', exact: true }).click();
+	await page.getByTestId('workspace-tool-investigations').click();
+	await page.getByTestId('workspace-tool-new-investigation').click();
+	const dialog = page.getByRole('dialog', { name: 'New Investigation', exact: true });
+	const name = dialog.getByRole('textbox', { name: 'Investigation name', exact: true });
+	await name.fill('   '); await expect(dialog.getByRole('button', { name: 'Create Investigation', exact: true })).toBeDisabled();
+	await name.fill('Customer retention'); await dialog.getByRole('button', { name: 'Create Investigation', exact: true }).click();
+	await expect(dialog).toBeHidden(); await expect(page.getByRole('heading', { name: 'Customer retention', exact: true })).toBeVisible();
+	const saved = await page.evaluate(async () => (await window.fella.invoke('investigations_list')).find(item => item.title === 'Customer retention'));
+	expect(saved.workspace_id).toBe(folderA); expect(saved.conversation_id).toBeTruthy(); expect(saved.conversation_id).not.toBe('ui-one');
+	await page.getByRole('tab', { name: request, exact: true }).click();
+	await expect(page.getByRole('log', { name: 'conversation' })).toContainText('First analysis answer.');
+});
+
+test('follow-up UI: tab-owned sections and scroll survive context, Investigations, and Settings', async () => {
+	await page.evaluate(async ({ id, root }) => window.fella.invoke('investigation_update_questions', { investigationId: id, questions: [ { id: root.id, text: root.text }, ...Array.from({ length: 6 }, (_, index) => ({ id: `q-ui-${index}`, parent_id: root.id, text: `Which product category explains the quarter-to-quarter revenue change in region ${index + 1}?` })) ] }), { id: firstInvestigation.id, root: firstInvestigation.questions[0] });
+	await openInvestigation(firstInvestigation.id);
+	const sections = page.getByRole('tablist', { name: 'Investigation sections' });
+	await sections.getByRole('tab', { name: 'Questions', exact: true }).click();
+	await page.locator('.investigation-page').evaluate(element => { element.scrollTop = 260; });
+	await expect.poll(() => page.locator('.investigation-page').evaluate(element => element.scrollTop)).toBe(260);
+	await addContext();
+	await page.getByRole('tab', { name: request, exact: true }).click();
+	await expect(sections.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await expect.poll(() => page.locator('.investigation-page').evaluate(element => element.scrollTop)).toBe(260);
+	await openInvestigation(secondInvestigation.id);
+	await sections.getByRole('tab', { name: 'Results', exact: true }).click();
+	await page.getByRole('tab', { name: request, exact: true }).click();
+	await expect(sections.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await page.getByRole('button', { name: 'Settings', exact: true }).click();
+	await page.getByRole('button', { name: 'Back to conversation', exact: true }).click();
+	await expect(sections.getByRole('tab', { name: 'Questions', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await expect.poll(() => page.locator('.investigation-page').evaluate(element => element.scrollTop)).toBe(260);
+});
+
+test('follow-up UI: safe answer-first rendering and open-run continuity', async () => {
+	await seedSavedRun(); await openInvestigation(firstInvestigation.id);
+	await page.getByRole('tablist', { name: 'Investigation sections' }).getByRole('tab', { name: 'Questions', exact: true }).click();
+	await page.getByRole('button', { name: 'Review existing analysis', exact: true }).click();
+	const run = page.getByRole('region', { name: 'Saved analysis run', exact: true });
+	const answer = run.getByRole('region', { name: 'Recorded answer', exact: true });
+	await expect(answer.locator('strong')).toHaveText('Revenue increased.');
+	await expect(answer.locator('script,a[href^="javascript:"]')).toHaveCount(0);
+	await expect(run.locator('.analysis-run-technical')).not.toHaveAttribute('open', '');
+	expect(await answer.evaluate(element => Boolean(element.compareDocumentPosition(document.querySelector('.analysis-run-technical')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+	await addContext(); await page.getByRole('tab', { name: request, exact: true }).click();
+	await expect(answer.locator('strong')).toHaveText('Revenue increased.');
+	await expect(page.getByRole('tablist', { name: 'Investigation sections' }).getByRole('tab', { name: 'Analysis', exact: true })).toHaveAttribute('aria-selected', 'true');
+	await screenshot('answer-first-review');
+});
+
+test('follow-up UI: save reactive Question links; retain answer on failure and retry without regrading', async () => {
+	const { run, path } = await seedSavedRun(); const original = await readFile(path, 'utf8');
+	await openInvestigation(firstInvestigation.id);
+	await page.getByRole('tablist', { name: 'Investigation sections' }).getByRole('tab', { name: 'Questions', exact: true }).click();
+	await page.getByRole('button', { name: 'Review existing analysis', exact: true }).click();
+	const detail = page.getByRole('region', { name: 'Saved analysis run', exact: true });
+	const links = detail.getByRole('group', { name: 'Questions this run addresses', exact: true });
+	await links.getByRole('checkbox').check();
+	await rename(path, `${path}.unavailable`);
+	try {
+		await links.getByRole('button', { name: 'Save Question links', exact: true }).click();
+		await expect(links.getByRole('alert')).toContainText("Couldn't save Question links");
+		await expect(detail.getByRole('region', { name: 'Recorded answer', exact: true })).toContainText('Revenue increased.');
+		await expect(links.getByRole('checkbox')).toBeChecked();
+	} finally { await rename(`${path}.unavailable`, path); }
+	await links.getByRole('button', { name: 'Save Question links', exact: true }).click();
+	await expect(links.getByRole('status')).toContainText('Question links saved');
+	const question = await page.evaluate(id => window.fella.invoke('investigation_question_load', { questionId: id }), firstInvestigation.questions[0].id);
+	expect(question.analysis_turn_ids).toContain(run.id); expect(question.answer_status).toBe('not_started'); expect(question.latest_analysis_turn_id ?? null).toBeNull();
+	expect(await readFile(path, 'utf8')).toBe(original);
+	await screenshot('saved-question-links');
+});
+
+test('follow-up UI: tab overview reaches independent context views and shared scope is clear', async () => {
+	await openInvestigation(firstInvestigation.id); for (let i = 0; i < 4; i++) await addContext();
+	await expect(page.locator('.context-page')).toContainText('All context tabs show this workspace’s shared guide and knowledge.');
+	await page.getByRole('button', { name: 'Open tabs', exact: true }).click();
+	await expect(page.getByRole('menuitem', { name: /Shared workspace guide and knowledge/ })).toHaveCount(4);
+	await page.getByRole('menuitem', { name: new RegExp(`^What changed in total revenue`) }).click();
+	await expect(page.getByRole('tablist', { name: 'Investigation sections' })).toBeVisible();
+});
+
+test('follow-up UI: preview controls filter only sampled rows and preserve a visible column', async () => {
+	await page.getByRole('button', { name: 'Files', exact: true }).click(); await page.locator('.tree-file').filter({ hasText: 'sales.csv' }).click();
+	const table = page.getByRole('region', { name: 'First 25 rows of sales.csv', exact: true });
+	await expect(table).toContainText('Q3'); await page.getByRole('textbox', { name: 'Filter preview rows', exact: true }).fill('Q4');
+	await expect(table).not.toContainText('Q3'); await expect(table).toContainText('Q4');
+	await page.getByRole('button', { name: 'Columns', exact: true }).click(); await page.getByRole('menuitemcheckbox', { name: 'quarter', exact: true }).click();
+	await expect(page.getByRole('menuitemcheckbox', { name: 'amount', exact: true })).toBeDisabled(); await page.keyboard.press('Escape');
+	await expect(table.getByRole('columnheader', { name: 'quarter', exact: true })).toHaveCount(0);
+	await page.getByRole('button', { name: 'Expand file preview', exact: true }).click(); await expect(page.getByRole('region', { name: 'Conversation', exact: true })).toBeHidden();
+});
+
+test('follow-up UI: report leads with the deliverable and retains coverage and supporting records', async () => {
+	await seedSavedRun(); await openInvestigation(firstInvestigation.id);
+	await page.getByRole('tablist', { name: 'Investigation sections' }).getByRole('tab', { name: 'Share', exact: true }).click();
+	await page.getByRole('button', { name: 'Review report', exact: true }).click();
+	const dialog = page.getByRole('dialog', { name: 'Review report', exact: true });
+	await expect(dialog.getByRole('region', { name: 'Report coverage status', exact: true })).toContainText('1 unresolved Question');
+	const report = dialog.getByRole('region', { name: 'Markdown report preview', exact: true });
+	await expect(report).not.toContainText('Audience: Not specified'); await expect(report).not.toContainText('Constraints: None recorded');
+	expect(await report.evaluate(element => Boolean(element.compareDocumentPosition(document.querySelector('.handoff-records')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+	await expect(dialog.locator('.handoff-records')).not.toHaveAttribute('open', '');
+	// Footer copy must retain a readable measure even with a long derived name.
+	const footerStatus = dialog.getByRole('status').filter({ hasText: 'Report preview ready.' });
+	expect((await footerStatus.boundingBox()).width).toBeGreaterThanOrEqual(140);
+	expect((await footerStatus.boundingBox()).height).toBeLessThan(44);
+	await screenshot('report-first-preview');
+});
+
+test('follow-up UI: guide reading, explicit editing, and autosave retain workspace instructions', async () => {
+	await openInvestigation(firstInvestigation.id); await addContext();
+	const context = page.locator('.context-page');
+	await expect(context).toContainText('Amounts are USD.');
+	await expect(context.getByRole('textbox', { name: 'Workspace guide', exact: true })).toHaveCount(0);
+	await context.getByRole('button', { name: 'Edit guide', exact: true }).click();
+	await context.getByRole('textbox', { name: 'Workspace guide', exact: true }).fill('Revenue excludes cancelled orders.\n\n**Currency:** USD.');
+	await context.getByRole('button', { name: 'Done', exact: true }).click();
+	await expect(context.getByRole('textbox', { name: 'Workspace guide', exact: true })).toHaveCount(0);
+	await expect.poll(() => readFile(join(folderA, 'fella.md'), 'utf8')).toBe('Revenue excludes cancelled orders.\n\n**Currency:** USD.');
+	await page.getByRole('tab', { name: request, exact: true }).click();
+	await page.getByRole('tab', { name: 'Workspace context', exact: true }).click();
+	await expect(context).toContainText('Revenue excludes cancelled orders.');
+	await expect(context.locator('.guide-reading strong')).toHaveText('Currency:');
+	await screenshot('context-reading');
 });

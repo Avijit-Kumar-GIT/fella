@@ -2608,6 +2608,15 @@ impl EngineState {
         investigation::update_brief(&self.data_dir, id, brief, reviewed_message_id)
     }
 
+    /// Naming changes presentation, not the Investigation's analytical state.
+    pub fn investigation_rename(&self, id: &str, title: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::rename(&self.data_dir, id, title)
+    }
+
     /// Replace the ordered, analyst-editable Question plan. Existing run
     /// records are independent and remain unchanged.
     pub fn investigation_update_questions(

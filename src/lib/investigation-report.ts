@@ -300,11 +300,11 @@ export function buildInvestigationReport(
 		'',
 		`- Workspace: ${workspaceLabel(investigation.workspace_id)}`,
 		`- Goal: ${investigation.brief.goal || 'Not recorded'}`,
-		`- Audience: ${investigation.brief.audience || 'Not specified'}`,
-		`- Desired output: ${investigation.brief.desired_output || 'Not specified'}`,
+		...(investigation.brief.audience ? [`- Audience: ${investigation.brief.audience}`] : []),
+		...(investigation.brief.desired_output ? [`- Desired output: ${investigation.brief.desired_output}`] : []),
 		...(investigation.brief.constraints.length
 			? [`- Constraints: ${investigation.brief.constraints.join('; ')}`]
-			: ['- Constraints: None recorded']),
+			: []),
 		'',
 		'## Investigation scope',
 		'',

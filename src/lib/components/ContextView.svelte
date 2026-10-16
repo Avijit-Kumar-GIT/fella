@@ -9,6 +9,8 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import Icon from './Icon.svelte';
+	import MarkdownContent from './MarkdownContent.svelte';
+	let guideEditing = $state(false);
 
 	let contents = $state('');
 	let savedContents = $state('');
@@ -297,26 +299,26 @@
 		<div class="editor-card">
 			<div class="knowledge-section-intro">
 				<h2>Workspace guide</h2>
-				<p>Applies across this folder. Use it for business meaning, conventions, and rules you want Fella to follow.</p>
+				<p>Definitions and instructions for this workspace.</p>
 			</div>
 			<div class="editor-head">
 				<div>
 					<strong>fella.md</strong>
-					{#if path}<p>{path}</p>{/if}
 				</div>
 				<div class="editor-actions">
-					{#if contents.trim() === ''}
+					{#if guideEditing && contents.trim() === ''}
 						<Button variant="link" size="sm" type="button" onclick={useTemplate}>Use a template</Button>
 					{/if}
-					<Button type="button" disabled={saving || loading || contents === savedContents} onclick={() => void save()}>
-						<Icon name="check" size={16} />
-						{saving ? 'Saving…' : error && contents !== savedContents ? 'Retry save' : 'Save'}
-					</Button>
+					{#if guideEditing}
+						<Button variant="ghost" size="sm" disabled={saving || loading} onclick={async () => { await save(); if (!error) guideEditing = false; }}>{error ? 'Retry save' : 'Done'}</Button>
+					{:else}
+						<Button variant="outline" size="sm" disabled={loading} onclick={() => (guideEditing = true)}><Icon name="pencil" size={14} />{contents.trim() ? 'Edit guide' : 'Add guide'}</Button>
+					{/if}
 				</div>
 			</div>
 			{#if loading}
 				<div class="loading"><Spinner size={28} /><span>Loading your workspace guide…</span></div>
-			{:else}
+			{:else if guideEditing}
 				<Textarea
 					class="guide-textarea"
 					bind:value={contents}
@@ -324,17 +326,20 @@
 					placeholder="Explain important fields, definitions, or context Fella should know…"
 					oninput={scheduleSave}
 				/>
+			{:else if contents.trim()}
+				<div class="guide-reading"><MarkdownContent text={contents} /></div>
+			{:else}
+				<p class="knowledge-empty">Add business meaning or rules Fella should follow.</p>
 			{/if}
-			<div class="editor-foot">
-				<span>{error || (saving ? 'Saving to the workspace…' : contents === savedContents ? 'Saved locally in this folder' : 'Changes save automatically')}</span>
-				<span>Only you can edit this file.</span>
-			</div>
+			{#if guideEditing || error}<div class="editor-foot" role={error ? 'alert' : 'status'}><span>{error || (saving ? 'Saving…' : contents === savedContents ? 'Saved in fella.md' : 'Changes save automatically')}</span></div>{/if}
+			{#if path}<details class="guide-location"><summary>File location</summary><p>{path}</p></details>{/if}
 		</div>
+		{#if session.workspaceToolTabs.filter(tab => tab.kind === 'context').length > 1}<p class="shared-context-note">All context tabs show this workspace’s shared guide and knowledge.</p>{/if}
 
 		<section class="knowledge-section" aria-labelledby="learned-knowledge-title" data-testid="workspace-knowledge">
 			<header class="knowledge-section-intro">
 				<h2 id="learned-knowledge-title">Learned from analysis</h2>
-				<p>Fella builds working definitions and logic as it analyzes. Investigation notes stay provisional there; review a suggestion before sharing it across the workspace.</p>
+				<p>Investigation notes stay provisional until you choose to share them across this workspace.</p>
 			</header>
 			{#if knowledgeLoading}
 				<div class="knowledge-loading"><Spinner size={20} /><span>Loading workspace knowledge…</span></div>
@@ -413,11 +418,10 @@
 						<ul>{#each historicalFacts as fact (fact.id)}<li><strong>{fact.key}</strong> — {fact.statement} <span>· {authorityLabel(fact.authority)} · revision {displayRevision(fact.revision)}</span></li>{/each}</ul>
 					</details>
 				{/if}
-				{#if memoryPath}<p class="knowledge-storage-note">Fella's learned notes are stored locally for this workspace.</p>{/if}
 			{/if}
 		</section>
 
-		<section class="knowledge-section investigation-knowledge" aria-labelledby="investigation-definitions-title" data-testid="workspace-investigation-definitions">
+		{#if knowledgeLoading || investigationsWithDefinitions.length}<section class="knowledge-section investigation-knowledge" aria-labelledby="investigation-definitions-title" data-testid="workspace-investigation-definitions">
 			<header class="knowledge-section-intro">
 				<h2 id="investigation-definitions-title">Investigation definitions</h2>
 				<p>Definitions and assumptions apply only to their Investigation; they do not silently become workspace-wide rules.</p>
@@ -446,12 +450,16 @@
 			{:else}
 				<p class="knowledge-empty">No Investigation definitions saved in this workspace.</p>
 			{/if}
-		</section>
+		</section>{/if}
 	{/if}
 
 </section>
 
 <style>
+	.guide-reading { padding: 12px 0; font-size: var(--fs-sm); }
+	.guide-location, .shared-context-note { color: var(--text-faint); font-size: var(--fs-xs); }
+	.guide-location > summary { cursor: pointer; }
+	.guide-location p { overflow-wrap: anywhere; font-family: var(--mono); }
 	.context-page {
 		flex: 1;
 		min-height: 0;
@@ -578,7 +586,6 @@
 	.knowledge-history { margin-top: var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
 	.knowledge-history ul { font-size: var(--fs-xs); }
 	.knowledge-history li span { color: var(--text-faint); }
-	.knowledge-storage-note { margin: var(--space-3) 0 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.investigation-knowledge { margin-bottom: var(--space-6); }
 	.investigation-knowledge-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.investigation-definition-list { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
@@ -602,16 +609,6 @@
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 		font-weight: 600;
-	}
-	.editor-head p {
-		max-width: 100%;
-		margin: 3px 0 0;
-		color: var(--text-faint);
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 	}
 	.editor-actions {
 		display: flex;

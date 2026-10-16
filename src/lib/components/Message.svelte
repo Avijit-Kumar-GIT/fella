@@ -6,7 +6,7 @@
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
-	import { renderMarkdown } from '$lib/markdown';
+	import MarkdownContent from './MarkdownContent.svelte';
 	import { enterUp } from '$lib/motion';
 	import { isRenderableChartEvidence } from '$lib/workbench';
 
@@ -58,9 +58,6 @@
 	}
 
 	let composition = $derived(composeAnswer(split.body));
-	let bodyHtml = $derived(renderMarkdown(split.body));
-	let leadHtml = $derived(renderMarkdown(composition.lead));
-	let remainderHtml = $derived(renderMarkdown(composition.remainder));
 
 	// A chart is selected from evidence, independent of whether the model's text
 	// references it. Correctness shouldn't depend on a small model correctly
@@ -182,7 +179,7 @@
 			<div class="background">{split.background}</div>
 		{/if}
 		{#if hasVisualAnswer}
-			<div class="text rich answer-lead">{@html leadHtml}</div>
+			<div class="text rich answer-lead"><MarkdownContent text={composition.lead} /></div>
 			<div class="answer-visuals" aria-label="Visual answer">
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
 					{#if e.chart}
@@ -207,14 +204,14 @@
 				{/each}
 			</div>
 			{#if composition.remainder}
-				<div class="text rich answer-supporting">{@html remainderHtml}</div>
+				<div class="text rich answer-supporting"><MarkdownContent text={composition.remainder} /></div>
 			{/if}
 		{:else}
 			<div class="text rich" class:pending={message.pending}>
 				{#if message.answer?.clarification}
 					<p class="clarification-transcript-note">Choose an option below to continue.</p>
 				{:else}
-					{@html bodyHtml}
+					<MarkdownContent text={split.body} />
 				{/if}
 				{#if message.pending}<span class="thinking" aria-hidden="true"></span>{/if}
 			</div>

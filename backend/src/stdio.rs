@@ -494,6 +494,11 @@ async fn dispatch(
                 &source_message_id,
             ))
         }
+        "investigation_rename" => {
+            let investigation_id: String = required(&request.params, "investigationId")?;
+            let title: String = required(&request.params, "title")?;
+            value_result(engine.investigation_rename(&investigation_id, &title))
+        }
         "investigation_update_brief" => {
             let investigation_id: String = required(&request.params, "investigationId")?;
             let brief = required(&request.params, "brief")?;

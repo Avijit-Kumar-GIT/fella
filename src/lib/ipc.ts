@@ -123,7 +123,11 @@ async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T
 	if (!isElectron() || !window.fella) {
 		throw new Error(`ipc: "${cmd}" is unavailable outside the Electron app`);
 	}
-	return window.fella.invoke<T>(cmd, args);
+	// Rust commands use a JSON protocol. Snapshot here, before crossing the
+	// context-isolated Electron bridge: Svelte's nested state proxies are not
+	// structured-cloneable (including arrays used by Question/run linking).
+	const payload = args === undefined ? undefined : JSON.parse(JSON.stringify(args));
+	return window.fella.invoke<T>(cmd, payload);
 }
 
 function workspaceArgs(workspaceId?: string | null): Record<string, unknown> {
@@ -219,6 +223,9 @@ export const ipc = {
 		sourceMessageId?: string,
 		conversationId?: string
 	) => invoke<Investigation>('investigation_create', { workspaceId, title, initialRequest, sourceMessageId, conversationId }),
+	/** Rename presentation only; preserve analytical state and original requests. */
+	investigationRename: (investigationId: string, title: string) =>
+		invoke<Investigation>('investigation_rename', { investigationId, title }),
 	/** Mark complete only if every active Investigation Question is fully answered. */
 	investigationMarkComplete: (investigationId: string) =>
 		invoke<Investigation>('investigation_mark_complete', { investigationId }),

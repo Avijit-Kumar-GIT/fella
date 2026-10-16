@@ -20,6 +20,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
+	import MarkdownContent from './MarkdownContent.svelte';
 
 	let {
 		investigation,
@@ -668,12 +669,12 @@
 							{#if run}<span class="results-historical-outcome">{historicalRunOutcome(run)}</span>{/if}
 						</header>
 						{#if run}
-							<p class="results-historical-answer-preview">{run.result.text}</p>
+							<div class="results-historical-answer-preview"><MarkdownContent text={run.result.text} /></div>
 							<details class="results-supporting">
 								<summary>Review saved answer, evidence &amp; provenance</summary>
 								<div class="results-historical-detail">
 									<h5>Recorded answer</h5>
-									<p class="results-historical-answer">{run.result.text || 'No answer text was recorded.'}</p>
+									<div class="results-historical-answer"><MarkdownContent text={run.result.text || 'No answer text was recorded.'} /></div>
 									<h5>Run provenance</h5>
 									<dl class="results-historical-provenance">
 										<div><dt>Workspace</dt><dd>{run.workspace || investigation.workspace_id}</dd></div>
@@ -729,7 +730,7 @@
 								<summary>Read transcript answer</summary>
 								<div class="results-historical-detail">
 									<h5>Original request</h5><p>{transcript.prompt || 'Request text is not available in the loaded transcript.'}</p>
-									<h5>Transcript answer</h5><p class="results-historical-answer">{transcript.answer || 'Answer text is not available in the loaded transcript.'}</p>
+									<h5>Transcript answer</h5><div class="results-historical-answer"><MarkdownContent text={transcript.answer || 'Answer text is not available in the loaded transcript.'} /></div>
 								</div>
 							</details>
 							<Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(turnId)}>Open transcript answer</Button>
@@ -754,7 +755,7 @@
 				{#each unresolvedQuestions as question (question.id)}
 					<li class="results-question" data-question-status={question.answer_status}>
 						<div class="results-question-heading"><Badge variant={questionStatusVariant(question)}>{questionStatusLabel(question)}</Badge><strong>{question.text}</strong></div>
-						<p>{questionReason(question)}</p>
+						<p>{!question.latest_analysis_turn_id && investigation.analysis_turn_ids?.length ? 'Saved analysis is available to review. It is not assigned as this Question’s answer.' : questionReason(question)}</p>
 						<div class="results-question-actions">
 							{#if question.latest_analysis_turn_id && loadingRunIds.includes(question.latest_analysis_turn_id)}
 								<span role="status">Loading saved answer…</span>
@@ -762,13 +763,13 @@
 								{#if transcriptRunFor(question.latest_analysis_turn_id)}
 									{@const transcript = transcriptRunFor(question.latest_analysis_turn_id)!}
 									<span role="status">Canonical run unavailable. Transcript copy only; evidence and verification are unavailable.</span>
-									<details class="results-answer-detail"><summary>Read transcript copy (not canonical)</summary><div>{transcript.answer}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details>
+									<details class="results-answer-detail"><summary>Read transcript copy (not canonical)</summary><MarkdownContent text={transcript.answer} /><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details>
 								{:else}<span role="alert">Saved answer unavailable: {runErrors[question.latest_analysis_turn_id]}</span>{/if}
 								<Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry</Button>
 							{:else if question.latest_analysis_turn_id && runs[question.latest_analysis_turn_id]}
 								<details class="results-answer-detail">
 									<summary>Open latest saved answer</summary>
-									<div>{runs[question.latest_analysis_turn_id].result.text}</div>
+									<MarkdownContent text={runs[question.latest_analysis_turn_id].result.text} />
 									<Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(question.latest_analysis_turn_id!)}>Open analysis record</Button>
 								</details>
 							{/if}
@@ -805,9 +806,9 @@
 						<strong>{question.text}</strong>
 						<span>{questionStatusLabel(question)}</span>
 						{#if loadingRunIds.includes(question.latest_analysis_turn_id!)}<p role="status">Loading saved answer…</p>
-						{:else if runErrors[question.latest_analysis_turn_id!] && transcriptRunFor(question.latest_analysis_turn_id!)}{@const transcript = transcriptRunFor(question.latest_analysis_turn_id!)!}<p role="status">Canonical run unavailable; transcript copy only.</p><details><summary>Read transcript copy</summary><div>{transcript.answer}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details><Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry saved run</Button>
+						{:else if runErrors[question.latest_analysis_turn_id!] && transcriptRunFor(question.latest_analysis_turn_id!)}{@const transcript = transcriptRunFor(question.latest_analysis_turn_id!)!}<p role="status">Canonical run unavailable; transcript copy only.</p><details><summary>Read transcript copy</summary><MarkdownContent text={transcript.answer} /><Button type="button" variant="ghost" size="sm" onclick={() => onopenlegacy(question.latest_analysis_turn_id)}>Open transcript answer</Button></details><Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry saved run</Button>
 						{:else if runErrors[question.latest_analysis_turn_id!]}<p role="alert">Saved answer unavailable: {runErrors[question.latest_analysis_turn_id!]}</p><Button type="button" variant="ghost" size="sm" onclick={() => retryRun(question.latest_analysis_turn_id!)}>Retry</Button>
-						{:else if runs[question.latest_analysis_turn_id!]}<details><summary>Read answer</summary><div>{runs[question.latest_analysis_turn_id!].result.text}</div><Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(question.latest_analysis_turn_id!)}>Open analysis record</Button></details>{/if}
+						{:else if runs[question.latest_analysis_turn_id!]}<details><summary>Read answer</summary><MarkdownContent text={runs[question.latest_analysis_turn_id!].result.text} /><Button type="button" variant="ghost" size="sm" onclick={() => onopenrun(question.latest_analysis_turn_id!)}>Open analysis record</Button></details>{/if}
 					</li>
 				{/each}
 			</ul>
@@ -924,7 +925,7 @@
 	.results-question-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 	.results-question-actions > span { color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.results-answer-detail { flex-basis: 100%; font-size: var(--fs-xs); }
-	.results-answer-detail > div, .results-answer-index details details > div { max-height: 280px; overflow: auto; margin: var(--space-2) 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+	.results-answer-detail :global(.answer-prose), .results-answer-index :global(.answer-prose) { max-height: 280px; overflow: auto; margin: var(--space-2) 0; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text); }
 	.results-complete { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--text-dim); font-size: var(--fs-sm); }
 	.results-complete :global(svg) { color: var(--success, #15803d); }
 	.results-answer-index { padding-top: 0; border-top: 0; }

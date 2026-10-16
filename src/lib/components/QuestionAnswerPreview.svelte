@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { ipc } from '$lib/ipc';
+	import MarkdownContent from './MarkdownContent.svelte';
 	import type { AnalysisTurn, InvestigationQuestion, InvestigationQuestionAnswerStatus } from '$lib/types';
 
 	let {
@@ -115,9 +116,9 @@
 					<Button type="button" variant="outline" size="sm" onclick={() => void loadAnswer()}>Retry</Button>
 				</div>
 			{:else if run}
-				<div class="question-answer-output" aria-label="Saved response for {questionLabel}">{run.result.text}</div>
+				<div class="question-answer-output" aria-label="Saved response for {questionLabel}"><MarkdownContent text={run.result.text} /></div>
 				<footer>
-					<span>Run <code>{run.id}</code></span>
+					<span>Saved analysis</span>
 					<Button type="button" variant="ghost" size="sm" onclick={openSavedRun}>Open run details</Button>
 				</footer>
 			{/if}
@@ -134,7 +135,6 @@
 	.question-answer-output { max-height: 280px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.question-answer footer { justify-content: flex-end; flex-wrap: wrap; }
 	.question-answer footer > span { margin-right: auto; }
-	.question-answer code { font-size: var(--fs-xs); }
 	.question-answer-state, .question-answer-error { margin: 0; font-size: var(--fs-xs); }
 	.question-answer-error { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); color: var(--danger, #b42318); overflow-wrap: anywhere; }
 	.question-answer-error p { margin: 0; }

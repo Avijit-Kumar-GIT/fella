@@ -186,6 +186,7 @@
 		<div>
 			<h1 id="settings-title">Settings</h1>
 		</div>
+		<Button variant="ghost" size="sm" onclick={() => session.setWorkspaceView('ask')}><Icon name="ask" size={14} />Back to conversation</Button>
 	</header>
 
 	<div class="settings-grid">

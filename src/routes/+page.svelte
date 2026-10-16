@@ -337,7 +337,7 @@
 							{#snippet tools()}
 								{#if scopedWorkspaceActive}
 									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen}>
-										<WorkspaceView />
+										<WorkspaceView onexpand={() => (toolsExpanded = true)} />
 									</div>
 								{/if}
 								{#if showRightPane && !session.workspacePaneOpen}

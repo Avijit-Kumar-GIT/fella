@@ -2291,6 +2291,23 @@ fn write_record(data_dir: &Path, record: &Investigation) -> EngineResult<()> {
     write_raw_record(data_dir, &stored)
 }
 
+/// A name is presentation, not a revision to the analytical brief or coverage.
+pub fn rename(data_dir: &Path, id: &str, title: &str) -> EngineResult<Investigation> {
+    let title = title.trim();
+    if title.is_empty() || title.chars().count() > 120 || title.chars().any(char::is_control) {
+        return Err(EngineError::msg(
+            "Investigation name must contain 1–120 characters on one line",
+        ));
+    }
+    let mut record = load(data_dir, id)?;
+    if record.title != title {
+        record.title = title.to_owned();
+        record.updated_at_ms = now_ms().max(record.updated_at_ms.saturating_add(1));
+        write_record(data_dir, &record)?;
+    }
+    Ok(record)
+}
+
 pub fn update_brief(
     data_dir: &Path,
     id: &str,
@@ -2647,6 +2664,44 @@ mod tests {
         assert_eq!(load(&data_dir, &created.id).unwrap(), created);
         assert_eq!(list(&data_dir).unwrap(), vec![created.clone()]);
 
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn rename_changes_only_the_name_and_activity_timestamp() {
+        let data_dir = scratch();
+        let mut original = create(
+            &data_dir,
+            "/work/analysis",
+            "New investigation",
+            Some("What changed in revenue?"),
+            Some("original-message"),
+            Some("linked-chat"),
+        )
+        .unwrap();
+        original.status = InvestigationStatus::Complete;
+        write_record(&data_dir, &original).unwrap();
+        let renamed = rename(&data_dir, &original.id, "  Revenue · Q3–Q4 2025  ").unwrap();
+        let mut expected = original.clone();
+        expected.title = "Revenue · Q3–Q4 2025".to_owned();
+        expected.updated_at_ms = renamed.updated_at_ms;
+        assert!(renamed.updated_at_ms > original.updated_at_ms);
+        assert_eq!(renamed, expected);
+        assert_eq!(load(&data_dir, &original.id).unwrap(), renamed);
+        assert_eq!(
+            rename(&data_dir, &original.id, &renamed.title).unwrap(),
+            renamed
+        );
+        for invalid in [
+            "".to_owned(),
+            "  ".to_owned(),
+            "x".repeat(121),
+            "name\nsecond line".to_owned(),
+        ] {
+            assert!(rename(&data_dir, &original.id, &invalid).is_err());
+            assert_eq!(load(&data_dir, &original.id).unwrap(), renamed);
+        }
+        assert!(rename(&data_dir, &original.id, &"界".repeat(120)).is_ok());
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

@@ -2,13 +2,17 @@
 	import { ipc } from '$lib/ipc';
 	import type { QueryResult, SourceInfo } from '$lib/types';
 	import { Spinner } from '$lib/components/ui/spinner';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
 
 	let {
 		source,
 		workspacePath,
-		revision
-	}: { source: SourceInfo | null; workspacePath: string | null; revision: string | null } = $props();
+		revision,
+		onexpand
+	}: { source: SourceInfo | null; workspacePath: string | null; revision: string | null; onexpand?: () => void } = $props();
 
 	let rows = $state<QueryResult | null>(null);
 	let documentText = $state('');
@@ -16,6 +20,10 @@
 	let loading = $state(false);
 	let error = $state('');
 	let generation = 0;
+	let query = $state('');
+	let hiddenColumns = $state<number[]>([]);
+	let visibleColumns = $derived((rows?.columns ?? []).map((name, index) => ({ name, index })).filter(column => !hiddenColumns.includes(column.index)));
+	let matchingRows = $derived((rows?.rows ?? []).filter(row => !query.trim() || row.some(value => valueText(value).toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()))));
 
 	function relativePath(path: string): string {
 		const root = workspacePath?.replace(/[/\\]+$/, '') ?? '';
@@ -39,6 +47,7 @@
 		const catalogRevision = revision;
 		const request = ++generation;
 		rows = null;
+		query = ''; hiddenColumns = [];
 		documentText = '';
 		truncated = false;
 		error = '';
@@ -78,7 +87,7 @@
 			<div class="source-metadata" aria-label="Source metadata">
 				<span>{source.kind.toUpperCase()}</span>
 				{#if source.view}<span>{new Intl.NumberFormat().format(source.row_count ?? 0)} rows</span>{/if}
-				<span>Catalog {revision ?? 'revision unavailable'}</span>
+				<details><summary>Details</summary><span>Catalog {revision ?? 'revision unavailable'}</span></details>
 			</div>
 		</header>
 		{#if loading}
@@ -89,19 +98,32 @@
 				<p>{error}</p>
 			</div>
 		{:else if source.view && rows}
+			<div class="table-controls">
+				<Input aria-label="Filter preview rows" bind:value={query} placeholder="Find in this sample…" />
+				<DropdownMenu.Root>
+					<DropdownMenu.Trigger class="source-columns-trigger">Columns <Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
+					<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content source-columns-menu" align="end">
+						{#each rows.columns as column, index (index)}
+							<DropdownMenu.CheckboxItem class="fella-ui-menu-item" checked={!hiddenColumns.includes(index)} disabled={visibleColumns.length === 1 && !hiddenColumns.includes(index)} onCheckedChange={(checked) => { hiddenColumns = checked ? hiddenColumns.filter(item => item !== index) : [...hiddenColumns, index]; }} closeOnSelect={false}>{column}{#if !hiddenColumns.includes(index)}<Icon name="check" size={14} />{/if}</DropdownMenu.CheckboxItem>
+						{/each}
+					</DropdownMenu.Content></DropdownMenu.Portal>
+				</DropdownMenu.Root>
+				{#if onexpand}<Button variant="ghost" size="sm" aria-label="Expand file preview" onclick={onexpand}><Icon name="arrow-up-right" size={14} /></Button>{/if}
+			</div>
 			<!-- The region is focusable so keyboard users can scroll the wide read-only table. -->
 			<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 			<div class="table-scroll" role="region" tabindex="0" aria-label="First 25 rows of {source.name}">
 				<table>
-					<thead><tr>{#each rows.columns as column (column)}<th scope="col">{column}</th>{/each}</tr></thead>
+					<thead><tr>{#each visibleColumns as column (column.index)}<th scope="col">{column.name}</th>{/each}</tr></thead>
 					<tbody>
-						{#each rows.rows as row, rowIndex (rowIndex)}
-							<tr>{#each row as cell, columnIndex (`${rowIndex}-${columnIndex}`)}<td title={valueText(cell)}>{valueText(cell)}</td>{/each}</tr>
+						{#each matchingRows as row, rowIndex (rowIndex)}
+							<tr>{#each visibleColumns as column (column.index)}<td title={valueText(row[column.index])}>{valueText(row[column.index])}</td>{/each}</tr>
 						{/each}
+						{#if !matchingRows.length}<tr><td colspan={visibleColumns.length}>No matching rows in this sample.</td></tr>{/if}
 					</tbody>
 				</table>
 			</div>
-			<p class="source-footnote">Read-only sample from Fella’s normalized table · {rows.rows.length} of {source.row_count ?? 'unknown'} rows. The original file is unchanged.</p>
+			<p class="source-footnote">Read-only sample · {query.trim() ? `${matchingRows.length} matching of ${rows.rows.length} sampled rows` : `${rows.rows.length} of ${source.row_count ?? 'unknown'} rows`}. The original file is unchanged.</p>
 		{:else if documentText.startsWith('(this PDF has no selectable text')}
 			<div class="source-message" role="status">
 				<strong>This PDF has no selectable text</strong>
@@ -125,6 +147,11 @@
 </section>
 
 <style>
+	.table-controls { display: flex; align-items: center; gap: 8px; min-width: 0; }
+	.table-controls :global(input) { min-width: 0; flex: 1; }
+	:global(.source-columns-trigger) { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+	:global(.source-columns-menu) { max-height: 360px; overflow: auto; }
+	.source-metadata details summary { cursor: pointer; }
 	.source-view { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; gap: var(--space-4); padding: var(--space-5); overflow: auto; }
 	.source-head { display: grid; gap: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
 	.source-title-row { display: flex; min-width: 0; align-items: flex-start; gap: var(--space-3); }

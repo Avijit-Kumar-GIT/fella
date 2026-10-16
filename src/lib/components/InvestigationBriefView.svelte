@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { onDestroy, tick } from 'svelte';
+	import { onDestroy, tick, untrack } from 'svelte';
+	import { readInvestigationView, saveInvestigationView, type InvestigationSection } from '$lib/investigation-view-state';
 	import { firstActualQuestion, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -7,12 +8,12 @@
 	import { Select } from '$lib/components/ui/select';
 	import { analyzeInvestigationQuestion } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { Input } from '$lib/components/ui/input';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { analysisTurnIdsAfterSourceMessage } from '$lib/investigation-runs';
 	import { investigationQuestionStatusDetail } from '$lib/investigation-question-status';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { buildInvestigationReport, investigationReportFilename, type InvestigationReportRuns } from '$lib/investigation-report';
-	import { renderMarkdown } from '$lib/markdown';
 	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import { runStateLabel } from '$lib/run-progress';
 	import { isRenderableChartEvidence } from '$lib/workbench';
@@ -42,6 +43,20 @@
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
 	import InvestigationResultsView from './InvestigationResultsView.svelte';
 	import Chart from './Chart.svelte';
+	import MarkdownContent from './MarkdownContent.svelte';
+
+	let { viewKey = '' }: { viewKey?: string } = $props();
+	// Freeze the keyed instance's owner before its parent switches live tab props.
+	const stableViewKey = untrack(() => viewKey);
+	const initialView = readInvestigationView(stableViewKey);
+	const sectionScroll = { ...initialView.scroll };
+	let scroller = $state<HTMLElement>();
+	let restoringScroll = false;
+	let viewRestoreGeneration = 0;
+	let nameOpen = $state(false);
+	let nameDraft = $state('');
+	let nameError = $state('');
+	let naming = $state(false);
 
 	type HandoffChart = {
 		key: string;
@@ -56,7 +71,6 @@
 		filename: string;
 		charts: HandoffChart[];
 	};
-	type InvestigationSection = 'brief' | 'data' | 'questions' | 'analysis' | 'results' | 'share';
 	const investigationSections: { id: InvestigationSection; label: string }[] = [
 		{ id: 'brief', label: 'Brief' },
 		{ id: 'data', label: 'Sources' },
@@ -68,7 +82,7 @@
 
 	let investigations = $state<Investigation[]>([]);
 	let selectedId = $state<string | null>(null);
-	let investigationSection = $state<InvestigationSection>('brief');
+	let investigationSection = $state<InvestigationSection>(initialView.section);
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
 	let loadedConversationId: string | null = null;
@@ -104,6 +118,8 @@
 	let openAnalysisTurnId = $state<string | null>(null);
 	let analysisTurnLoadingId = $state<string | null>(null);
 	let analysisTurnError = $state('');
+	let questionLinksError = $state('');
+	let questionLinksStatus = $state('');
 	let questionLinksDraft = $state<string[]>([]);
 	let savingQuestionLinks = $state(false);
 	let findingClaimDraft = $state('');
@@ -154,10 +170,48 @@
 		const id = selected?.id ?? '';
 		if (id === disclosureInvestigationId) return;
 		disclosureInvestigationId = id;
-		definitionsOpen = false;
-		historyOpen = true;
+		if (!id) return;
+		definitionsOpen = initialView.definitionsOpen;
+		historyOpen = initialView.historyOpen;
 		editingQuestionIds = [];
+		if (initialView.openRunId && selected && analysisRunIds(selected).includes(initialView.openRunId)) {
+			void untrack(() => openAnalysisRun(initialView.openRunId!, false));
+		}
 	});
+
+	function rememberView(): void {
+		if (!selected) return;
+		saveInvestigationView(stableViewKey, { section: investigationSection, scroll: sectionScroll, openRunId: openAnalysisTurnId, definitionsOpen, historyOpen });
+	}
+	function rememberScroll(): void {
+		if (!selected || loading || restoringScroll || !scroller) return;
+		sectionScroll[investigationSection] = scroller.scrollTop;
+		rememberView();
+	}
+	$effect(() => {
+		const id = selected?.id, section = investigationSection, busy = loading || analysisTurnLoadingId !== null;
+		if (!id || busy || !scroller) return;
+		const generation = ++viewRestoreGeneration;
+		restoringScroll = true;
+		void tick().then(() => {
+			if (generation !== viewRestoreGeneration || !scroller) return;
+			scroller.scrollTop = sectionScroll[section] ?? 0;
+			requestAnimationFrame(() => { if (generation === viewRestoreGeneration) restoringScroll = false; });
+		});
+		untrack(rememberView);
+	});
+
+	async function renameInvestigation(): Promise<void> {
+		const item = selected;
+		if (!item || naming || !nameDraft.trim()) return;
+		naming = true; nameError = '';
+		try {
+			const updated = await ipc.investigationRename(item.id, nameDraft);
+			acceptInvestigationUpdate(updated);
+			nameOpen = false;
+		} catch (cause) { nameError = cause instanceof Error ? cause.message : String(cause); }
+		finally { naming = false; }
+	}
 	let openAnalysisTurn = $derived(openAnalysisTurnId ? analysisTurns[openAnalysisTurnId] ?? null : null);
 	let questionLinksDirty = $derived.by(() => {
 		if (!openAnalysisTurnId) return false;
@@ -277,6 +331,7 @@
 	});
 
 	onDestroy(() => {
+		rememberView();
 		clearTimeout(autosaveTimer);
 		if (selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
@@ -473,7 +528,6 @@
 		const sameWorkspace = path === loadedWorkspace;
 		const conversationChanged = conversationId !== loadedConversationId;
 		const versionChanged = version !== loadedInvestigationsVersion;
-		if (path !== loadedWorkspace || conversationChanged) investigationSection = 'brief';
 		if (path !== loadedWorkspace && selected && (dirty || questionsDirty || definitionsDirty)) {
 			void saveEditableDrafts(selected.id);
 		}
@@ -698,6 +752,7 @@
 	}
 
 	function acceptInvestigationUpdate(updated: Investigation): void {
+		session.rememberInvestigationNames([updated]);
 		investigations = investigations.map((item) => item.id === updated.id ? updated : item);
 		session.investigationsVersion += 1;
 		session.workspaceInvestigationSummaryVersion += 1;
@@ -1039,11 +1094,12 @@
 		return `${count} source${count === 1 ? '' : 's'} selected for this Question`;
 	}
 
-	async function openAnalysisRun(turnId: string): Promise<void> {
-		investigationSection = 'analysis';
+	async function openAnalysisRun(turnId: string, navigate = true): Promise<void> {
+		if (navigate) investigationSection = 'analysis';
 		historyOpen = true;
 		openAnalysisTurnId = turnId;
 		analysisTurnError = '';
+		questionLinksError = ''; questionLinksStatus = '';
 		questionLinksDraft = questionIdsForRun(turnId);
 		if (!analysisTurns[turnId]) {
 			analysisTurnLoadingId = turnId;
@@ -1059,6 +1115,7 @@
 		} else {
 			prepareFindingDraft(analysisTurns[turnId]);
 		}
+		if (!navigate) return;
 		await tick();
 		const detail = document.getElementById('saved-analysis-run-detail');
 		detail?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1348,7 +1405,7 @@
 	async function saveAnalysisRunQuestions(): Promise<void> {
 		if (!selected || !openAnalysisTurnId || savingQuestionLinks || !questionLinksDirty) return;
 		savingQuestionLinks = true;
-		analysisTurnError = '';
+		questionLinksError = ''; questionLinksStatus = '';
 		try {
 			const updated = await ipc.investigationSetAnalysisTurnQuestions(
 				selected.id,
@@ -1357,8 +1414,9 @@
 			);
 			acceptInvestigationUpdate(updated);
 			questionLinksDraft = questionIdsForRun(openAnalysisTurnId, updated);
+			questionLinksStatus = 'Question links saved. Answer coverage is unchanged.';
 		} catch (cause) {
-			analysisTurnError = cause instanceof Error ? cause.message : String(cause);
+			questionLinksError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
 			savingQuestionLinks = false;
 		}
@@ -1710,10 +1768,11 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-<section class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown}>
+<section bind:this={scroller} class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown} onscroll={rememberScroll}>
 	<header class="page-head">
-		<div>
+		<div class="investigation-title-row">
 			<h1 id="investigation-title">{selected?.title ?? 'Investigation'}</h1>
+			{#if selected}<Button variant="ghost" size="icon" aria-label="Rename Investigation" title="Rename Investigation" onclick={() => { nameDraft = selected!.title; nameError = ''; nameOpen = true; }}><Icon name="pencil" size={14} /></Button>{/if}
 			{#if !selected}<p>One request, the data behind it, and the results Fella produces.</p>{/if}
 		</div>
 		{#if selected && selected.conversation_id !== session.activeChat.id}
@@ -1796,9 +1855,9 @@
 						</header>
 						<dl>
 							<div><dt>Goal</dt><dd>{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</dd></div>
-							<div><dt>Audience</dt><dd>{audience.trim() || 'Not specified'}</dd></div>
-							<div><dt>Deliverable</dt><dd>{desiredOutput.trim() || 'Not specified'}</dd></div>
-							<div><dt>Constraints</dt><dd>{constraintsText.split('\n').map((line) => line.trim()).filter(Boolean).join(' · ') || 'None specified'}</dd></div>
+							{#if audience.trim()}<div><dt>Audience</dt><dd>{audience}</dd></div>{/if}
+							{#if desiredOutput.trim()}<div><dt>Deliverable</dt><dd>{desiredOutput}</dd></div>{/if}
+							{#if constraintsText.trim()}<div><dt>Constraints</dt><dd>{constraintsText.split('\n').map((line) => line.trim()).filter(Boolean).join(' · ')}</dd></div>{/if}
 						</dl>
 						{#if selected.brief_source_message_id}
 							<p class="brief-source-note">The original request is preserved in the conversation. Editing this brief does not change it.</p>
@@ -2446,6 +2505,8 @@
 							<span>{analysisRunIds(selected).length} linked</span>
 						</header>
 						{#if analysisRunIds(selected).length}
+							<details class="analysis-run-chooser" open={!openAnalysisTurnId}>
+								<summary>Saved runs · {analysisRunIds(selected).length}</summary>
 							<ol class="analysis-run-list">
 								{#each analysisRunIds(selected) as turnId, index (turnId)}
 									{@const timestamp = analysisRunTimestamp(turnId)}
@@ -2470,6 +2531,7 @@
 									</li>
 								{/each}
 							</ol>
+							</details>
 						{:else}
 							<p class="analysis-runs-empty">No saved analysis runs are linked yet.</p>
 						{/if}
@@ -2479,20 +2541,41 @@
 								<header>
 									<div>
 										<h4>Saved analysis run</h4>
-										<p>{analysisRunSummary(openAnalysisTurnId)}</p>
 									</div>
 									{#if openAnalysisTurn?.conversation_id && selected.conversation_id === openAnalysisTurn.conversation_id}
-										<Button type="button" variant="outline" size="sm" onclick={() => void openSelectedConversation(openAnalysisTurnId!)}>
+										<Button type="button" variant="outline" size="sm" class="analysis-run-open-chat" onclick={() => void openSelectedConversation(openAnalysisTurnId!)}>
 											<Icon name="ask" size={14} />Open conversation result
 										</Button>
 									{/if}
-									<Button type="button" variant="ghost" aria-label="Close saved analysis run" onclick={() => (openAnalysisTurnId = null)}>Close</Button>
+									<Button type="button" variant="ghost" size="icon" class="analysis-run-close" aria-label="Close saved analysis run" onclick={() => (openAnalysisTurnId = null)}><Icon name="x" size={14} /></Button>
 								</header>
 								{#if analysisTurnLoadingId === openAnalysisTurnId}
 									<p role="status">Loading the saved run…</p>
 								{:else if analysisTurnError}
 									<p class="analysis-run-error" role="alert">Couldn't load or update this run: {analysisTurnError}</p>
 								{:else if openAnalysisTurn}
+									<section class="analysis-run-answer" aria-label="Recorded answer">
+										<h5>Recorded answer</h5>
+										<MarkdownContent text={openAnalysisTurn.result.text} />
+										<small>Saved model answer · not an analyst-reviewed Finding.</small>
+									</section>
+									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
+										<legend>Questions this run addresses</legend>
+										{#if selected.questions?.length}
+											{#each selected.questions as question (question.id)}
+												<label>
+													<input type="checkbox" checked={questionLinksDraft.includes(question.id)} disabled={savingQuestionLinks || questionsDirty || question.latest_analysis_turn_id === openAnalysisTurn.id} onchange={(event) => setQuestionRunLink(question.id, event.currentTarget.checked)} />
+													<span><strong>{questionHeading(question.id)}</strong><small title={question.text}>{question.text}</small></span>
+												</label>
+											{/each}
+											<Button type="button" variant="outline" size="sm" disabled={!questionLinksDirty || savingQuestionLinks || questionsDirty} onclick={() => void saveAnalysisRunQuestions()}>{savingQuestionLinks ? 'Saving links…' : 'Save Question links'}</Button>
+											<small>Linking preserves this run. It does not mark a Question answered.</small>
+										{:else}<p>No active Questions to link.</p>{/if}
+										{#if questionLinksError}<p class="analysis-run-error" role="alert">Couldn't save Question links: {questionLinksError}. Your saved answer is unchanged. Try saving again.</p>{/if}
+										{#if questionLinksStatus}<p role="status">{questionLinksStatus}</p>{/if}
+									</fieldset>
+									<details class="analysis-run-technical">
+									<summary>Run details and source scope</summary>
 									<dl class="analysis-run-facts">
 										<div><dt>State</dt><dd>{runStateLabel(openAnalysisTurn.state)}</dd></div>
 										<div><dt>Method</dt><dd>{openAnalysisTurn.plan.strategy.replaceAll('_', ' ')}</dd></div>
@@ -2654,11 +2737,7 @@
 											{/if}
 										</section>
 									</section>
-									<section class="analysis-run-answer" aria-label="Recorded answer">
-										<h5>Recorded answer</h5>
-										<p class="analysis-run-result">{openAnalysisTurn.result.text}</p>
-										<small>This is the answer saved with this run. Analyst-reviewed Findings are identified separately.</small>
-									</section>
+									</details>
 									<RunTimeline
 										turn={openAnalysisTurn}
 										bodyId={`investigation-run-evidence-${openAnalysisTurn.id}`}
@@ -2674,27 +2753,6 @@
 											expanded={true}
 										/>
 									</section>
-									<fieldset class="analysis-run-question-links" disabled={savingQuestionLinks || questionsDirty}>
-										<legend>Questions this run addresses</legend>
-										{#if selected.questions?.length}
-											{#each selected.questions as question (question.id)}
-												<label>
-													<input
-														type="checkbox"
-														checked={questionLinksDraft.includes(question.id)}
-														disabled={savingQuestionLinks || questionsDirty || question.latest_analysis_turn_id === openAnalysisTurn.id}
-														onchange={(event) => setQuestionRunLink(question.id, event.currentTarget.checked)}
-													/>
-													<span><strong>{questionHeading(question.id)}</strong><small>{question.text}</small></span>
-												</label>
-											{/each}
-											<Button type="button" variant="outline" size="sm" disabled={!questionLinksDirty || savingQuestionLinks || questionsDirty} onclick={() => void saveAnalysisRunQuestions()}>
-												{savingQuestionLinks ? 'Saving links…' : 'Save Question links'}
-											</Button>
-										{:else}
-											<p>This Investigation has no active Questions to link.</p>
-										{/if}
-									</fieldset>
 					<section class="finding-capture" aria-labelledby="finding-capture-title">
 						<header>
 							<h5 id="finding-capture-title">Save or revise a Finding</h5>
@@ -2845,6 +2903,21 @@
 		{/if}
 	{/if}
 
+	<Dialog.Root bind:open={nameOpen}>
+		<Dialog.Portal>
+			<Dialog.Overlay class="fella-ui-dialog-overlay" />
+			<Dialog.Content class="fella-ui-dialog-content investigation-name-dialog">
+				<Dialog.Title>Rename Investigation</Dialog.Title>
+				<Dialog.Description>A short name for tabs and navigation. Your original request stays unchanged.</Dialog.Description>
+				<form onsubmit={(event) => { event.preventDefault(); void renameInvestigation(); }}>
+					<label for="investigation-name">Investigation name</label>
+					<Input id="investigation-name" bind:value={nameDraft} maxlength={120} disabled={naming} />
+					{#if nameError}<p role="alert">{nameError}</p>{/if}
+					<div class="name-dialog-actions"><Dialog.Close disabled={naming} class="name-cancel">Cancel</Dialog.Close><Button type="submit" disabled={naming || !nameDraft.trim()}>{naming ? 'Saving…' : 'Save name'}</Button></div>
+				</form>
+			</Dialog.Content>
+		</Dialog.Portal>
+	</Dialog.Root>
 	<Dialog.Root bind:open={reportPreviewOpen}>
 		<Dialog.Portal>
 			<Dialog.Overlay class="fella-ui-dialog-overlay" />
@@ -2878,8 +2951,11 @@
 							<span>{activeHandoffQuestions.length} active Question{activeHandoffQuestions.length === 1 ? '' : 's'} · {reportPreview.investigation.findings?.length ?? 0} saved Finding{(reportPreview.investigation.findings?.length ?? 0) === 1 ? '' : 's'} · {reportPreview.charts.length} visualization{reportPreview.charts.length === 1 ? '' : 's'}</span>
 						</section>
 
-						<section class="handoff-records" aria-label="Supporting records in Fella">
-							<header><h3>Supporting records in Fella</h3><p>Jump from a conclusion to its saved run and exact evidence.</p></header>
+						<section class="handoff-markdown" aria-label="Markdown report preview">
+							<article class="handoff-markdown-content"><MarkdownContent text={reportPreview.markdown} /></article>
+						</section>
+						<details class="handoff-records" aria-label="Supporting records in Fella">
+							<summary>Supporting records in Fella</summary>
 							{#if (reportPreview.investigation.findings ?? []).length}
 								<ul>
 									{#each reportPreview.investigation.findings ?? [] as finding (finding.id)}
@@ -2916,7 +2992,7 @@
 									{/each}
 								</ul>
 							{/if}
-						</section>
+						</details>
 
 						{#if reportPreview.charts.length}
 							<section class="handoff-visualizations" aria-label="Visualization previews included in the report">
@@ -2940,10 +3016,6 @@
 							</section>
 						{/if}
 
-						<section class="handoff-markdown" aria-label="Markdown report preview">
-							<header><h3>Markdown report</h3><p>Unavailable run records, missing coverage, source omissions, and excluded transcript material are disclosed in the exported text.</p></header>
-							<article class="handoff-markdown-content">{@html renderMarkdown(reportPreview.markdown)}</article>
-						</section>
 					</div>
 
 					<footer class="handoff-preview-footer">
@@ -2975,6 +3047,24 @@
 	}
 	.page-head { margin-bottom: 16px; }
 	.page-head > div { min-width: 0; }
+	.investigation-title-row { display: flex; align-items: flex-start; gap: 8px; width: 100%; }
+	.investigation-title-row h1 { flex: 1; }
+	.investigation-title-row :global(button) { flex: none; color: var(--text-faint); }
+	:global(.investigation-name-dialog) { width: min(440px, calc(100vw - 32px)); padding: 24px; }
+	:global(.investigation-name-dialog form) { display: grid; gap: 12px; margin-top: 20px; }
+	:global(.investigation-name-dialog [data-dialog-description]) { color: var(--text-dim); line-height: 1.5; }
+	:global(.name-dialog-actions) { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+	:global(.name-cancel) { border: 0; border-radius: var(--radius); padding: 8px 12px; background: transparent; color: var(--text-dim); cursor: pointer; }
+	.analysis-run-technical { min-width: 0; font-size: var(--fs-sm); }
+	.analysis-run-technical > summary { cursor: pointer; color: var(--text-dim); padding: 8px 0; }
+	.analysis-run-technical > dl { margin-top: 12px; }
+	.analysis-run-question-links label small { display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+	.analysis-run-question-links > small, .analysis-run-question-links > p { margin: 0; font-size: var(--fs-xs); color: var(--text-dim); }
+	.analysis-run-detail > header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+	.analysis-run-detail > header > div { grid-column: 1; grid-row: 1; }
+	.analysis-run-detail :global(.analysis-run-close) { grid-column: 2; grid-row: 1; }
+	.analysis-run-detail :global(.analysis-run-open-chat) { grid-column: 1 / -1; grid-row: 2; justify-self: start; }
+	.analysis-run-chooser > summary { cursor: pointer; color: var(--text-dim); font-size: var(--fs-xs); padding: 6px 0; }
 	.page-head h1 { overflow-wrap: anywhere; }
 	.investigation-nav {
 		position: sticky;
@@ -3033,9 +3123,10 @@
 	.handoff-preview-body { display: grid; align-content: start; gap: var(--space-4); min-height: 0; overflow: auto; padding: var(--space-4) var(--space-5); }
 	.handoff-coverage { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); }
 	.handoff-records, .handoff-visualizations, .handoff-markdown { display: grid; gap: var(--space-2); min-width: 0; }
-	.handoff-records > header, .handoff-visualizations > header, .handoff-markdown > header { display: grid; gap: 2px; }
-	.handoff-records h3, .handoff-visualizations h3, .handoff-markdown h3 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
-	.handoff-records > header p, .handoff-visualizations > header p, .handoff-markdown > header p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.handoff-visualizations > header { display: grid; gap: 2px; }
+	.handoff-visualizations h3, .handoff-records > summary { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
+	.handoff-records > summary { cursor: pointer; color: var(--text-dim); padding: 8px 0; }
+	.handoff-visualizations > header p { margin: 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.handoff-records > ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 	.handoff-records > ul > li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); }
 	.handoff-records li > div:first-child { display: grid; min-width: 0; gap: 3px; }
@@ -3057,12 +3148,14 @@
 	.handoff-markdown-content :global(th), .handoff-markdown-content :global(td) { padding: 5px 8px; border: 1px solid var(--border); text-align: left; }
 	.handoff-markdown-content :global(th) { background: var(--bg-inset); }
 	.handoff-markdown-content :global(code) { padding: 1px 4px; border-radius: var(--radius-xs); background: var(--bg-inset); font-size: .92em; }
-	.handoff-preview-footer { border-top: 1px solid var(--border); }
+	.handoff-preview-footer { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(0, auto); border-top: 1px solid var(--border); }
 	.handoff-preview-footer > span { min-width: 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.handoff-preview-footer > span[role='alert'] { color: var(--danger, #b42318); }
 	.handoff-preview-footer > div { display: flex; flex: none; align-items: center; gap: var(--space-2); }
 	.handoff-preview-footer .handoff-preview-actions { min-width: 0; }
-	.handoff-preview-filename { margin-right: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.handoff-preview-filename { min-width: 0; max-width: min(44ch, 35vw); margin-right: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.handoff-preview-actions :global(button) { flex: none; }
+	@media (max-width: 720px) { .handoff-preview-footer { grid-template-columns: minmax(0, 1fr); } .handoff-preview-footer .handoff-preview-actions { justify-content: flex-end; } .handoff-preview-filename { flex: 1; max-width: none; } }
 	.handoff-preview-filename code { color: var(--text-dim); }
 	:global(.handoff-preview-secondary) { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
 	:global(.handoff-preview-secondary:hover) { border-color: var(--border); background: var(--bg-inset); color: var(--text); }
@@ -3224,9 +3317,9 @@
 	.finding-edit-actions, .finding-capture-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 	.finding-error { margin: 0; color: var(--danger, #b42318); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.analysis-runs { display: grid; gap: var(--space-4); padding: var(--space-5) 0; margin-top: var(--space-4); }
-	.analysis-runs-heading, .analysis-run-detail > header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.analysis-runs-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.analysis-runs-heading h3, .analysis-run-detail h4 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.analysis-runs-heading p, .analysis-run-detail > header p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.analysis-runs-heading p { margin: var(--space-1) 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
 	.analysis-runs-heading > span { color: var(--text-faint); font-size: var(--fs-xs); white-space: nowrap; }
 	.analysis-run-list { display: grid; gap: var(--space-1); margin: 0; padding: 0; list-style: none; }
 	.analysis-run-link { display: flex; width: 100%; min-width: 0; align-items: flex-start; gap: var(--space-3); padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg); color: var(--text); text-align: left; cursor: pointer; }
@@ -3274,7 +3367,7 @@
 	.analysis-run-assumptions li :global(button) { flex: none; }
 	.analysis-run-answer { display: grid; gap: var(--space-2); padding: var(--space-2) 0 0; border: 0; border-radius: 0; background: transparent; }
 	.analysis-run-answer h5 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
-	.analysis-run-answer p { max-height: 320px; overflow: auto; margin: 0; font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.analysis-run-answer { font-size: var(--fs-sm); }
 	.analysis-run-answer small { color: var(--text-faint); font-size: var(--fs-xs); }
 	.analysis-run-question-links { display: grid; gap: var(--space-2); min-width: 0; padding: var(--space-3); margin: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.analysis-run-question-links legend { padding: 0 var(--space-1); color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }

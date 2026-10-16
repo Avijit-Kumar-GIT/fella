@@ -29,10 +29,10 @@
 		{#if workspaceAvailable}
 			<div class="workspace-context-actions">
 				{#if session.workspacePaneOpen && (compact || expanded)}
-					<Button variant="ghost" size="sm" class="workspace-pane-toggle" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} />Conversation</Button>
+					<Button variant="ghost" size="sm" class="workspace-pane-toggle" title="Return to the current conversation" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} />Conversation{#if session.activeChat.busy}<span class="conversation-activity" aria-label="Analysis running"> · Running</span>{/if}</Button>
 				{/if}
 				{#if session.workspacePaneOpen && !compact}
-					<Button variant="ghost" size="icon" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand workspace tools'} title={expanded ? 'Restore split view' : 'Expand workspace tools'} onclick={ontoggleexpand}><Icon name="square" size={14} /></Button>
+					<Button variant="ghost" size="sm" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand workspace tools'} title={expanded ? 'Restore split view' : 'Expand workspace tools'} onclick={ontoggleexpand}><Icon name={expanded ? 'panel' : 'arrow-up-right'} size={14} /><span>{expanded ? 'Split view' : 'Expand'}</span></Button>
 				{/if}
 				<Button
 					variant="ghost"

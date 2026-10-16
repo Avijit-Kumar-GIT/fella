@@ -60,7 +60,7 @@
 	 *  in the workspace card and only appears in a row when it disambiguates a
 	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
-		return c.title ?? c.preview;
+		return c.title ?? session.investigationNames[c.id] ?? c.preview;
 	}
 
 
@@ -222,7 +222,7 @@
 	{#if sidebarMode === 'chats'}
 	<section class="repository-section" aria-label="Workspace conversations">
 		<div class="section-head">
-			<h2>Chats</h2>
+			<h2>Recent</h2>
 			{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
 				{#if repo.path}
 					<DropdownMenu.Root>

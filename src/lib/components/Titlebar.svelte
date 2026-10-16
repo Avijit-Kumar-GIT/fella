@@ -23,8 +23,8 @@
 
 	let displayTitle = $derived.by(() => {
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
-		if (session.workspaceView === 'settings') return 'Fella';
-		return folder ? 'Fella' : 'Conversation';
+		if (session.workspaceView === 'settings') return 'Settings';
+		return session.activeChat.title?.trim() || session.investigationNames[session.activeChat.id] || (session.sidebarCollapsed ? 'Fella' : '');
 	});
 
 
@@ -171,7 +171,7 @@
 		text-overflow: ellipsis;
 		min-width: 0;
 	}
-	.titlebar:not(.focus) .id { flex: none; }
+	.titlebar:not(.focus) .id { flex: 0 1 auto; min-width: 0; }
 	.folder.faint {
 		color: var(--text-faint);
 	}

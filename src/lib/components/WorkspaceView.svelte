@@ -5,12 +5,16 @@
 	import { session, type WorkspaceToolTab } from '$lib/session.svelte';
 	import type { Investigation } from '$lib/types';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Dialog } from '$lib/components/ui/dialog';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
 	import InvestigationBriefView from './InvestigationBriefView.svelte';
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 	import CompanionPane from './CompanionPane.svelte';
+	let { onexpand }: { onexpand?: () => void } = $props();
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
@@ -18,6 +22,8 @@
 	let investigationBusy = $state(false);
 	let investigationsOpen = $state(false);
 	let chooserError = $state('');
+	let createOpen = $state(false);
+	let newName = $state('');
 	let listRequest = 0;
 	let selectionRequest = 0;
 	let tabsElement = $state<HTMLDivElement>();
@@ -68,6 +74,7 @@
 		void ipc.investigationsList().then((records) => {
 			if (request !== listRequest || path !== workspacePath) return;
 			const workspaceInvestigations = records.filter((item) => item.workspace_id === path);
+			session.rememberInvestigationNames(workspaceInvestigations);
 			session.reconcileWorkspaceToolTabs(workspaceInvestigations);
 			investigations = workspaceInvestigations
 				.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
@@ -86,7 +93,10 @@
 		const tab = activeTab;
 		const paneOpen = session.workspacePaneOpen;
 		const records = investigations;
-		if (!path || !paneOpen || !tab || tab.kind !== 'investigation' || !tab.investigationId) return;
+		// Explicit picker navigation owns the transition. Restoring the outgoing
+		// tab while its replacement chat loads would steal focus back and prevent
+		// the requested Investigation from acquiring its own tab.
+		if (investigationBusy || !path || !paneOpen || !tab || tab.kind !== 'investigation' || !tab.investigationId) return;
 		const item = records.find((record) => record.id === tab.investigationId);
 		if (!item || (session.activeChat.id === tab.conversationId && session.activeInvestigationId === item.id)) return;
 		const key = `${path}:${tab.id}`;
@@ -173,12 +183,14 @@
 		try {
 			if (!session.newConversation(path)) throw new Error('Could not start a conversation in this workspace.');
 			const conversation = session.activeChat;
-			const record = await ipc.investigationCreate(path, nextInvestigationTitle(), undefined, undefined, conversation.id);
+			const record = await ipc.investigationCreate(path, newName.trim(), undefined, undefined, conversation.id);
 			if (request !== selectionRequest || workspacePath !== path) return;
 			investigations = [record, ...investigations.filter((item) => item.id !== record.id)];
+			session.rememberInvestigationNames([record]);
 			session.setActiveInvestigation(record.id);
 			session.openWorkspaceToolTab('investigation', record.id, conversation.id);
 			session.investigationsVersion += 1;
+			createOpen = false;
 		} catch (cause) {
 			if (request === selectionRequest) chooserError = cause instanceof Error ? cause.message : String(cause);
 		} finally {
@@ -224,6 +236,13 @@
 		if (matchingTabs.length < 2) return label;
 		return `${label} ${matchingTabs.findIndex((item) => item.id === tab.id) + 1}`;
 	}
+	function tabScope(tab: WorkspaceToolTab): string {
+		if (tab.kind === 'context') return 'Shared workspace guide and knowledge';
+		if (tab.kind === 'terminal') return 'Independent shell session';
+		if (tab.kind === 'source') return tab.sourcePath ?? 'Read-only file preview';
+		if (tab.kind === 'preview') return 'Saved answer artifact';
+		return 'Investigation and linked conversation';
+	}
 </script>
 
 <section class="workspace" aria-label="Workspace tools">
@@ -264,6 +283,19 @@
 					</div>
 				{/each}
 			</div>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger class="workspace-tool-overview" aria-label="Open tabs" title="Open tabs"><Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content class="fella-ui-menu-content tool-overview-menu" align="end" sideOffset={6}>
+						{#each session.workspaceToolTabs as tab (tab.id)}
+							<DropdownMenu.Item class="fella-ui-menu-item tool-overview-item" onSelect={() => activateTab(tab)}>
+								<span><strong>{tabLabel(tab)}</strong><small>{tabScope(tab)}</small></span>
+								{#if activeTab?.id === tab.id}<Icon name="check" size={14} />{/if}
+							</DropdownMenu.Item>
+						{/each}
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
 			<button
 				class="workspace-tool-add"
 				type="button"
@@ -294,7 +326,9 @@
 		</div>
 	{/each}
 
-	{#if session.workspaceToolChooserOpen}
+	{#if investigationBusy && !createOpen}
+		<div class="workspace-opening" role="status">Opening Investigation…</div>
+	{:else if session.workspaceToolChooserOpen}
 		<div class="workspace-tool-chooser" data-testid="workspace-tool-chooser">
 			<div class="workspace-tool-chooser-inner">
 				<header class="workspace-tool-chooser-heading">
@@ -373,7 +407,7 @@
 								class="fella-ui-menu-item workspace-investigation-menu-item workspace-investigation-menu-new"
 								data-testid="workspace-tool-new-investigation"
 								disabled={investigationBusy}
-								onSelect={() => void createInvestigation()}
+								onSelect={() => { newName = nextInvestigationTitle(); chooserError = ''; createOpen = true; }}
 							>
 								<Icon name="plus" size={14} />
 								<strong>New Investigation</strong>
@@ -417,14 +451,31 @@
 			{#if activeTab.kind === 'preview' && activeTab.preview}
 				<CompanionPane reference={activeTab.preview} conversationId={activeTab.conversationId} embedded onclose={() => activeTab && session.closeWorkspaceToolTab(activeTab.id)} />
 			{:else if activeTab.kind === 'source'}
-				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} />
+				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} {onexpand} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />
 			{:else}
-				<InvestigationBriefView />
+				{#key `${workspacePath}:${activeTab.id}`}
+					<InvestigationBriefView viewKey={`${workspacePath}:${activeTab.id}`} />
+				{/key}
 			{/if}
 		</div>
 	{/if}
+	<Dialog.Root bind:open={createOpen}>
+		<Dialog.Portal>
+			<Dialog.Overlay class="fella-ui-dialog-overlay" />
+			<Dialog.Content class="fella-ui-dialog-content investigation-name-dialog">
+				<Dialog.Title>New Investigation</Dialog.Title>
+				<Dialog.Description>Name the analysis. It will have its own conversation in this workspace.</Dialog.Description>
+				<form onsubmit={(event) => { event.preventDefault(); if (newName.trim()) void createInvestigation(); }}>
+					<label for="new-investigation-name">Investigation name</label>
+					<Input id="new-investigation-name" bind:value={newName} maxlength={120} disabled={investigationBusy} />
+					{#if chooserError}<p role="alert">{chooserError}</p>{/if}
+					<div class="name-dialog-actions"><Dialog.Close class="name-cancel" disabled={investigationBusy}>Cancel</Dialog.Close><Button type="submit" disabled={investigationBusy || !newName.trim()}>{investigationBusy ? 'Creating…' : 'Create Investigation'}</Button></div>
+				</form>
+			</Dialog.Content>
+		</Dialog.Portal>
+	</Dialog.Root>
 </section>
 
 <style>
@@ -436,6 +487,7 @@
 		min-height: 0;
 		background: var(--bg);
 	}
+	.workspace-opening { display: grid; flex: 1; place-content: center; color: var(--text-faint); font-size: var(--fs-sm); }
 	.workspace-tool-chooser {
 		display: grid;
 		flex: 1;
@@ -617,6 +669,13 @@
 	.workspace-tool-option:disabled { color: var(--text-faint); cursor: not-allowed; }
 	.workspace-tool-error { margin: 6px 10px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-tool-error { color: var(--danger, #b42318); }
+	:global(.workspace-tool-overview) { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 28px; height: 28px; border: 0; border-radius: 999px; background: transparent; color: var(--text-dim); cursor: pointer; }
+	:global(.workspace-tool-overview:hover) { background: var(--sidebar-hover); }
+	:global(.tool-overview-menu) { width: min(360px, calc(100vw - 32px)); max-height: min(480px, 65vh); overflow-y: auto; }
+	:global(.tool-overview-item) { display: flex; justify-content: space-between; gap: 12px; }
+	:global(.tool-overview-item > span) { display: grid; min-width: 0; gap: 3px; }
+	:global(.tool-overview-item strong) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+	:global(.tool-overview-item small) { color: var(--text-faint); font-size: var(--fs-xs); }
 	.workspace-terminal-icon { font-family: var(--mono); font-size: 15px; font-weight: 600; }
 	.workspace-tabs-bar {
 		display: flex;
