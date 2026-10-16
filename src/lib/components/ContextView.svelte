@@ -276,8 +276,8 @@
 <section class="context-page" aria-labelledby="context-title">
 	<header class="page-head">
 		<div>
-			<h1 id="context-title">Data &amp; context</h1>
-			<p>Workspace guidance, reusable knowledge, and definitions kept with each Investigation.</p>
+			<h1 id="context-title">Workspace context</h1>
+			<p>Guidance and knowledge for this folder.</p>
 		</div>
 	</header>
 
@@ -458,7 +458,7 @@
 		width: 100%;
 		max-width: var(--content-max);
 		margin: 0 auto;
-		padding: var(--space-6) var(--pad) var(--space-6);
+		padding: 20px;
 		overflow: auto;
 	}
 	.page-head {
@@ -470,7 +470,8 @@
 	}
 	h1 {
 		margin: 0;
-		font-size: clamp(24px, 3vw, 32px);
+		font-size: 18px;
+		line-height: 1.4;
 		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
@@ -484,7 +485,7 @@
 		display: grid;
 		justify-items: start;
 		gap: var(--space-3);
-		max-width: 48ch;
+		max-width: 100%;
 		padding: var(--space-5);
 		border: 1px solid var(--border);
 		border-radius: var(--radius-lg);
@@ -596,13 +597,14 @@
 	.editor-head {
 		border-bottom: 1px solid var(--border);
 	}
+	.editor-head > div:first-child { min-width: 0; flex: 1; }
 	.editor-head strong {
 		font-family: var(--mono);
 		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
 	.editor-head p {
-		max-width: 48ch;
+		max-width: 100%;
 		margin: 3px 0 0;
 		color: var(--text-faint);
 		font-family: var(--mono);
@@ -620,7 +622,7 @@
 	:global(.guide-textarea) {
 		display: block;
 		width: 100%;
-		min-height: min(56vh, 620px);
+		min-height: 160px;
 		padding: var(--space-4) 0;
 		border: 0;
 		outline: 0;
@@ -636,7 +638,7 @@
 		color: var(--text-faint);
 	}
 	.loading {
-		min-height: min(56vh, 620px);
+		min-height: 160px;
 		display: grid;
 		place-items: center;
 		align-content: center;
@@ -652,7 +654,7 @@
 	.editor-foot span:first-child {
 		color: var(--text-dim);
 	}
-	@media (max-width: 680px) {
+	@container investigation-pane (max-width: 560px) {
 		.page-head,
 		.editor-head,
 		.editor-foot {

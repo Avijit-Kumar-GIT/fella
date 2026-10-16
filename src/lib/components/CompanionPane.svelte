@@ -3,15 +3,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
 	import type { EvidenceItem, SourceInfo } from '$lib/types';
+	import type { CompanionPane as PreviewReference } from '$lib/workbench';
 	import { isRenderableChartEvidence, paneFreshness } from '$lib/workbench';
 	import Chart from './Chart.svelte';
 	import Icon from './Icon.svelte';
 	import SourcePreview from './SourcePreview.svelte';
 
-	let pane = $derived(session.activeChat.companionPane);
+	let { reference, conversationId, onclose, embedded = false }: { reference?: PreviewReference; conversationId?: string | null; onclose?: () => void; embedded?: boolean } = $props();
+	let pane = $derived(reference ?? session.activeChat.companionPane);
+	let conversation = $derived(session.conversations.find((item) => item.id === conversationId) ?? session.activeChat);
 	let chartMessage = $derived.by(() =>
 		pane?.kind === 'chart'
-			? session.activeChat.messages.find((item) => item.id === pane.messageId) ?? null
+			? conversation.messages.find((item) => item.id === pane.messageId) ?? null
 			: null
 	);
 	let source = $derived.by(() =>
@@ -82,7 +85,7 @@
 	}
 </script>
 
-<aside class="companion" aria-label="Companion pane">
+<aside class="companion" class:embedded aria-label="Companion pane">
 	<header class="companion-head">
 		<div class="heading-copy">
 			<span class="eyebrow">{pane?.kind === 'chart' ? 'Chart' : 'Source preview'}</span>
@@ -93,7 +96,7 @@
 			size="icon"
 			class="close"
 			aria-label="Close companion pane and return to conversation"
-			onclick={() => session.closeCompanionPane()}
+			onclick={() => onclose ? onclose() : session.closeCompanionPane()}
 		>
 			<Icon name="x" size={16} />
 			<span class="back-label">Conversation</span>
@@ -154,6 +157,9 @@
 </aside>
 
 <style>
+	.companion.embedded { min-width: 0; flex: 1; border-left: 0; }
+	.embedded .companion-head { min-height: 52px; }
+	.embedded .companion-head :global(.close) { display: none; }
 	.companion {
 		display: flex;
 		flex: 0 1 clamp(330px, 38%, 560px);

@@ -207,7 +207,7 @@
 
 <section class="environment-browser" aria-label="Workspace files">
 	<header class="environment-header">
-		<div><h2>Environment</h2><p>{workspacePath ? session.workspaceLabel(workspacePath) : 'Workspace files'}</p></div>
+		<div><h2>Files</h2><p>{workspacePath ? session.workspaceLabel(workspacePath) : 'Workspace files'}</p></div>
 		{#if workspacePath}
 			<Button variant="ghost" size="icon" type="button" aria-label="Refresh workspace files" title="Check for file changes" disabled={refreshing} onclick={() => void refreshWorkspace()}>
 				<Icon name="refresh" size={14} />

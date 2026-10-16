@@ -1,12 +1,11 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { errMsg, openConversation, openFolder, openRepository } from '$lib/commands';
+	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
-	import { Tooltip } from '$lib/components/ui/tooltip';
 	import type { ConversationSummary } from '$lib/types';
 	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import WorkspaceEnvironment from './WorkspaceEnvironment.svelte';
@@ -27,15 +26,10 @@
 		key: string;
 		path: string | null;
 		name: string;
-		items: ConversationSummary[];
-		current: boolean;
-		expanded: boolean;
 		historyOnly: boolean;
 	};
 
 	let list = $state<ConversationSummary[]>([]);
-	let expandedRepos = $state<Record<string, boolean>>({});
-	let openRepositoryMenuKey = $state<string | null>(null);
 	let workspaceDeleteTarget = $state<Repository | null>(null);
 	let workspaceDeleteDialogOpen = $state(false);
 	let deletingWorkspace = $state(false);
@@ -69,79 +63,21 @@
 		return c.title ?? c.preview;
 	}
 
-	function repositoryKey(path: string | null | undefined): string {
-		return path ?? GENERAL_WORKSPACE_ID;
-	}
 
 	function repositoryName(path: string | null): string {
 		if (!path) return 'General';
 		return path.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') || path;
 	}
 
-	function setRepositoryMenuOpen(key: string, open: boolean): void {
-		if (open) {
-			openRepositoryMenuKey = key;
-			return;
-		}
-		// Keep the hover actions rendered until the menu primitive restores focus
-		// to its trigger; otherwise the trigger disappears during close.
-		requestAnimationFrame(() => {
-			if (openRepositoryMenuKey === key) openRepositoryMenuKey = null;
-		});
-	}
-
-	let repositories = $derived.by((): Repository[] => {
-		const grouped = new Map<string, { path: string | null; items: ConversationSummary[] }>();
-		const add = (path: string | null, item?: ConversationSummary) => {
-			const key = repositoryKey(path);
-			const group = grouped.get(key) ?? { path, items: [] };
-			if (item) group.items.push(item);
-			grouped.set(key, group);
-		};
-
-		for (const path of session.repositoryPaths) add(path);
-		if (session.catalog.workspace) add(session.catalog.workspace);
-		for (const item of list) {
-			if (!item.workspace || !session.hiddenRepositoryPaths.includes(item.workspace)) {
-				add(item.workspace, item);
-			}
-		}
-		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
-		add(null);
-		return [...grouped.values()]
-			.sort((a, b) => {
-				if (a.path === null) return -1;
-				if (b.path === null) return 1;
-				return (order.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.path) ?? Number.MAX_SAFE_INTEGER);
-			})
-			.map((group) => {
-				const key = repositoryKey(group.path);
-				const active = group.path
-					? session.activeWorkspaceId === group.path || (session.workspaceView === 'project' && session.activeProject?.workspace === group.path)
-					: session.activeWorkspaceId === null && session.activeChat?.workspaceScope == null && session.workspaceView !== 'settings';
-				return {
-					key,
-					path: group.path,
-					name: repositoryName(group.path),
-					items: group.items,
-					current: active,
-					historyOnly: !!group.path && session.historyOnlyRepositoryPaths.includes(group.path),
-					expanded: expandedRepos[key] ?? (active || group.path === null)
-				};
-			});
-	});
+	let repositories = $derived<Repository[]>([{
+		key: session.activeWorkspaceId ?? GENERAL_WORKSPACE_ID,
+		path: session.activeWorkspaceId ?? null,
+		name: repositoryName(session.activeWorkspaceId ?? null),
+		historyOnly: Boolean(session.activeWorkspaceId && session.historyOnlyRepositoryPaths.includes(session.activeWorkspaceId))
+	}]);
 
 	function newChat(): void {
 		session.newConversation();
-	}
-
-	async function newWorkspaceChat(repo: Repository): Promise<void> {
-		if (!repo.path) {
-			if (!session.newConversation(null)) session.addSystem('Could not start a new conversation.');
-			return;
-		}
-		if (!(await selectRepository(repo))) return;
-		if (!session.newConversation(repo.path)) session.addSystem('Open the workspace before starting a conversation in it.');
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
@@ -151,23 +87,6 @@
 		const workspace = session.workspaceAt(repo.path);
 		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
 		return openRepository(repo.path, { reportFailure: true });
-	}
-
-	async function toggleRepository(repo: Repository): Promise<void> {
-		await selectRepository(repo);
-	}
-
-	function toggleExpansion(repo: Repository, event: MouseEvent): void {
-		event.stopPropagation();
-		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
-	}
-
-	async function addRepository(): Promise<void> {
-		await openFolder();
-	}
-
-	function hideRepository(repo: Repository): void {
-		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
 	}
 
 	function requestWorkspaceDelete(repo: Repository): void {
@@ -240,7 +159,6 @@
 
 	async function open(c: ConversationSummary) {
 		try {
-			expandedRepos = { ...expandedRepos, [repositoryKey(c.workspace)]: true };
 			await openConversation(c);
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
@@ -298,166 +216,45 @@
 			<Icon name="ask" size={14} /><span>Chats</span>
 		</Button>
 		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'environment' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'environment'} onclick={() => (sidebarMode = 'environment')}>
-			<Icon name="folder" size={14} /><span>Environment</span>
+			<Icon name="folder" size={14} /><span>Files</span>
 		</Button>
 	</div>
 	{#if sidebarMode === 'chats'}
-	<section class="repository-section" aria-labelledby="repositories-heading">
+	<section class="repository-section" aria-label="Workspace conversations">
 		<div class="section-head">
-			<div class="nav-heading" id="repositories-heading">Workspaces</div>
-			<Button
-				variant="ghost"
-				size="icon"
-				class="section-action"
-				type="button"
-				aria-label="Add repository"
-				title={`Add repository (${shortcutModifier}+O)`}
-				onclick={() => void addRepository()}
-			>
-				<Icon name="plus" size={16} />
-			</Button>
+			<h2>Chats</h2>
+			{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
+				{#if repo.path}
+					<DropdownMenu.Root>
+						<DropdownMenu.Trigger class="section-action" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
+						<DropdownMenu.Portal>
+							<DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
+								{#if repo.historyOnly}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void selectRepository(repo)}>Reconnect folder</DropdownMenu.Item>{/if}
+								<DropdownMenu.Item class="fella-ui-menu-item workspace-delete-menu-item" onSelect={() => requestWorkspaceDelete(repo)}>Delete workspace and conversations</DropdownMenu.Item>
+							</DropdownMenu.Content>
+						</DropdownMenu.Portal>
+					</DropdownMenu.Root>
+				{/if}
+			{/each}
 		</div>
 		<div class="repositories">
-			{#each repositories as repo (repo.key)}
-				<div
-					class="repository"
-					class:current={repo.current}
-					class:expanded={repo.expanded}
-					class:menu-open={openRepositoryMenuKey === repo.key}
-				>
-					<div class="repository-row-wrap">
-						<Button
-							variant="ghost"
-							size="icon"
-							class="repository-disclosure"
-							aria-label={`${repo.expanded ? 'Collapse' : 'Expand'} ${repo.name}`}
-							aria-expanded={repo.expanded}
-							title={`${repo.expanded ? 'Collapse' : 'Expand'} workspace contents`}
-							onclick={(event) => toggleExpansion(repo, event)}
-						>
-							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
+			{#each list.filter((item) => (item.workspace ?? null) === (session.activeWorkspaceId ?? null)) as c (c.id)}
+				<div class="item-wrap">
+					{#if renamingId === c.id}
+						<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
+					{:else}
+						<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c)} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
+							<span class="preview">{title(c)}</span>
 						</Button>
-						<Button
-							variant="ghost"
-							class="repository-row"
-							title={repo.path ?? 'General · conversations without a mounted folder'}
-							aria-pressed={repo.current}
-							aria-label={repo.path ? `Open workspace ${repo.name}` : 'General'}
-							onclick={() => toggleRepository(repo)}
-						>
-							<span class="row-slot row-icon"><Icon name={repo.path ? 'repository' : 'ask'} size={16} /></span>
-							<span class="repository-copy">
-								<span class="repository-name">{repo.name}</span>
-								{#if repo.historyOnly}<span class="history-badge" role="status" aria-label="History only. The folder could not be opened; saved conversations remain available." title="Saved conversations are available; the folder is offline">History</span>{/if}
-							</span>
-						</Button>
-						<div class="repository-actions">
-							{#if !repo.historyOnly}
-								<Tooltip.Root>
-									<Tooltip.Trigger
-										class="repository-action"
-										type="button"
-										aria-label={`New conversation in ${repo.name}`}
-										onclick={(event) => { event.stopPropagation(); void newWorkspaceChat(repo); }}
-									>
-										<Icon name="plus" size={14} />
-									</Tooltip.Trigger>
-									<Tooltip.Portal>
-										<Tooltip.Content class="fella-ui-tooltip-content" side="right" sideOffset={8}>
-											New conversation in {repo.name}
-										</Tooltip.Content>
-									</Tooltip.Portal>
-								</Tooltip.Root>
-							{/if}
-						{#if repo.path}
-								<DropdownMenu.Root
-									open={openRepositoryMenuKey === repo.key}
-									onOpenChange={(open) => setRepositoryMenuOpen(repo.key, open)}
-								>
-									<DropdownMenu.Trigger class="repository-action" type="button" aria-label="Repository actions" title="Repository actions">
-										<Icon name="more-horizontal" size={14} />
-									</DropdownMenu.Trigger>
-									<DropdownMenu.Portal>
-										<DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
-										{#if !repo.current && !repo.historyOnly}
-											<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => hideRepository(repo)}>
-												Hide repository
-											</DropdownMenu.Item>
-										{/if}
-										<DropdownMenu.Item class="fella-ui-menu-item workspace-delete-menu-item" onSelect={() => requestWorkspaceDelete(repo)}>
-											Delete workspace and conversations
-										</DropdownMenu.Item>
-										</DropdownMenu.Content>
-									</DropdownMenu.Portal>
-								</DropdownMenu.Root>
-							{/if}
-							{#if repo.path && repo.historyOnly}
-								<Button
-									variant="ghost"
-									size="icon"
-									class="repository-action reconnect-action"
-									aria-label={`Reconnect ${repo.name}`}
-									title="Try the saved folder location again"
-									onclick={(event) => { event.stopPropagation(); void selectRepository(repo); }}
-								>
-									<Icon name="refresh" size={14} />
-								</Button>
-							{/if}
-						</div>
-					</div>
-					{#if repo.expanded}
-						<div class="repository-contents">
-							{#each repo.items as c (c.id)}
-								<div class="item-wrap">
-									{#if renamingId === c.id}
-										<Input
-											class="rename-input"
-											bind:ref={renameInput}
-											bind:value={renameValue}
-											onkeydown={(e) => {
-												if (e.key === 'Enter') commitRename(c);
-												else if (e.key === 'Escape') renamingId = null;
-											}}
-											onblur={() => commitRename(c)}
-											aria-label="Rename conversation"
-										/>
-									{:else}
-										<Button
-											variant="ghost"
-											class={
-												session.conversationId === c.id
-													? 'conversation-row active'
-													: 'conversation-row'
-											}
-											type="button"
-											onclick={() => void open(c)}
-											title={title(c)}
-											aria-label={`Open conversation: ${title(c)}`}
-											aria-current={session.conversationId === c.id ? 'page' : undefined}
-										>
-											<span class="row-slot row-icon row-placeholder" aria-hidden="true"></span>
-											<span class="preview">{title(c)}</span>
-										</Button>
-										<div class="row-actions">
-											<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
-												<Icon name="pencil" size={14} />
-											</Button>
-											<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
-												<Icon name="x" size={14} />
-											</Button>
-										</div>
-									{/if}
-								</div>
-							{/each}
+						<div class="row-actions">
+							<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" onclick={(e) => startRename(c, e)}><Icon name="pencil" size={14} /></Button>
+							<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" onclick={(e) => remove(c, e)}><Icon name="x" size={14} /></Button>
 						</div>
 					{/if}
 				</div>
+			{:else}
+				<p class="sidebar-empty">No conversations yet.</p>
 			{/each}
-			{#if repositories.length === 0}
-				<Button variant="ghost" class="add-repository" onclick={() => void addRepository()}>
-					<span class="row-slot row-icon"><Icon name="folder" size={16} /></span> Add a repository
-				</Button>
-			{/if}
 		</div>
 	</section>
 	{:else}
@@ -519,456 +316,34 @@
 </Dialog.Root>
 
 <style>
-	:global(.workspace-delete-dialog) {
-		width: min(420px, calc(100vw - 32px));
-		display: grid;
-		gap: 18px;
-		padding: 22px;
-	}
-	:global(.workspace-delete-title) {
-		margin: 0;
-		font-size: 18px;
-		font-weight: 650;
-		letter-spacing: -0.02em;
-	}
-	:global(.workspace-delete-description) {
-		display: block;
-		margin: 8px 0 0;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		line-height: 1.5;
-	}
-	.workspace-delete-error {
-		margin: 0;
-		color: var(--err);
-		font-size: var(--fs-sm);
-		line-height: 1.45;
-	}
-	.workspace-delete-actions {
-		display: flex;
-		justify-content: flex-end;
-		gap: var(--space-2);
-	}
-	.sidebar {
-		flex: none;
-		width: 260px;
-		display: flex;
-		flex-direction: column;
-		gap: 0;
-		padding: 0 var(--space-2) var(--space-2);
-		--sidebar-hover: color-mix(in srgb, var(--text) 4%, var(--sidebar-surface));
-		--sidebar-selected: color-mix(in srgb, var(--text) 7%, var(--sidebar-surface));
-		/* No top padding: .header is 42px flush against the top edge, to
-		   match the titlebar's height exactly across the sidebar seam. */
-		background: var(--sidebar-surface);
-		border-right: 1px solid var(--pane-edge);
-		overflow: hidden;
-	}
-	.sidebar-mode-switch {
-		display: grid;
-		grid-template-columns: repeat(2, minmax(0, 1fr));
-		gap: 2px;
-		margin: var(--space-1) var(--space-2);
-		padding: 3px;
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--bg-inset) 68%, var(--sidebar-surface));
-	}
-	.sidebar-mode-switch :global(button) {
-		display: inline-flex;
-		height: 28px;
-		min-width: 0;
-		min-height: 28px;
-		align-items: center;
-		justify-content: center;
-		gap: 6px;
-		padding: 0 8px;
-		border-radius: 999px;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.sidebar-mode-switch :global(button:hover) { color: var(--text); }
-	.sidebar-mode-switch :global(button.active),
-	.sidebar-mode-switch :global(button[aria-pressed='true']) { background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-xs); }
-	.header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		flex: none;
-		height: 44px;
-		padding: 0 var(--space-2);
-	}
-	.sidebar-brand {
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		min-width: 0;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		font-weight: 500;
-		letter-spacing: -0.01em;
-	}
-	.header-actions {
-		display: flex;
-		align-items: center;
-		gap: var(--space-1);
-	}
-	.header-actions :global(.icon-btn) {
-		display: grid;
-		place-items: center;
-		width: 28px;
-		height: 28px;
-		padding: 0;
-		border-radius: var(--radius-sm);
-		color: var(--text-faint);
-	}
-	.header-actions :global(.icon-btn:hover) {
-		color: var(--text);
-		background: var(--sidebar-hover);
-	}
-	.nav-section {
-		display: grid;
-		gap: var(--space-1);
-		padding: var(--space-1) 0;
-	}
-	.repository-section {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
-		padding: var(--space-2) 0;
-	}
-	.section-head {
-		display: flex;
-		align-items: center;
-		min-height: 32px;
-	}
-	.section-head .nav-heading {
-		flex: 1;
-		padding: 0 var(--space-2);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-		line-height: 32px;
-		letter-spacing: .01em;
-	}
-	.section-head :global(.section-action) {
-		display: grid;
-		place-items: center;
-		width: 32px;
-		height: 32px;
-		padding: 0;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.section-head :global(.section-action:hover) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.section-head :global(.section-action[aria-pressed='true']) {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.repositories {
-		flex: 1;
-		min-height: 0;
-		display: grid;
-		align-content: start;
-		grid-auto-rows: max-content;
-		gap: 0;
-		overflow-y: auto;
-	}
-	.repository {
-		min-width: 0;
-	}
-	.repository + .repository { margin-top: var(--space-1); }
-	.repository-row-wrap {
-		position: relative;
-	}
-	.repository-row-wrap :global(.repository-disclosure) {
-		position: absolute;
-		z-index: 1;
-		top: 4px;
-		left: 4px;
-		display: grid;
-		place-items: center;
-		width: 24px;
-		min-width: 24px;
-		height: 24px;
-		min-height: 24px;
-		padding: 0;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-faint);
-	}
-	.repository-row-wrap :global(.repository-disclosure:hover) { background: var(--sidebar-hover); color: var(--text); }
-	.repository-row-wrap :global(.repository-row) {
-		position: relative;
-		width: 100%;
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		min-height: 32px;
-		height: auto;
-		justify-content: flex-start;
-		/* Reserve the full hover-action rail (new conversation and menu) so a
-		   long workspace name never runs beneath the plus button. */
-		padding: 4px 60px 4px 28px;
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: var(--text-dim);
-		text-align: left;
-		white-space: normal;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.repository-row-wrap :global(.repository-row:hover) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.repository.current .repository-row-wrap :global(.repository-row) {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.row-slot {
-		display: grid;
-		place-items: center;
-		width: 16px;
-		height: 20px;
-		flex: none;
-		color: var(--text-faint);
-	}
-	.row-slot :global(svg) {
-		display: block;
-	}
-	.row-chevron {
-		transition: color var(--dur-fast) var(--ease);
-	}
-	.repository-row-wrap :global(.repository-row:hover .row-slot),
-	.repository-row-wrap :global(.repository-row:focus-visible .row-slot),
-	.repository-row-wrap :global(.repository-disclosure:focus-visible .row-slot) {
-		color: var(--text-dim);
-	}
-	.repository.expanded .row-chevron :global(svg) {
-		transform: rotate(90deg);
-		transition: transform var(--dur-fast) var(--ease);
-	}
-	.repository.current .row-chevron {
-		color: var(--text-dim);
-	}
-	.repository.current .row-icon {
-		color: var(--brand-icon);
-	}
-	.repository-copy {
-		min-width: 0;
-		display: flex;
-		align-items: center;
-		gap: 6px;
-		overflow: hidden;
-	}
-	.repository-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		font-weight: 550;
-	}
-	.history-badge {
-		flex: none;
-		padding: 1px 5px;
-		border-radius: 999px;
-		background: color-mix(in srgb, var(--text-faint) 10%, transparent);
-		color: var(--text-faint);
-		font-size: 9px;
-		font-weight: 550;
-		letter-spacing: .01em;
-		line-height: 1.4;
-	}
-	.repository-row-wrap :global(.repository-row:hover .repository-name),
-	.repository-row-wrap :global(.repository-row:focus-visible .repository-name) {
-		color: var(--text);
-	}
-	.repository-actions {
-		position: absolute;
-		top: 3px;
-		right: 4px;
-		display: none;
-		align-items: center;
-		gap: 2px;
-		padding-left: 4px;
-		background: transparent;
-		color: var(--text-faint);
-	}
-	.repository:hover .repository-actions,
-	.repository:focus-within .repository-actions,
-	.repository.menu-open .repository-actions {
-		display: flex;
-		color: var(--text);
-	}
-	.repository-actions :global(.repository-action) {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		min-width: 22px;
-		height: 22px;
-		min-height: 22px;
-		padding: 0;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: inherit;
-	}
-	.repository-actions :global(.repository-action:hover) {
-		background: var(--sidebar-hover);
-		color: inherit;
-	}
-	.repository-actions :global(.repository-action svg) {
-		flex: none;
-		color: inherit;
-	}
-	:global(.workspace-delete-menu-item) { color: var(--err); }
-	:global(.fella-ui-menu-item.workspace-delete-menu-item[data-highlighted]) {
-		background: color-mix(in srgb, var(--err) 10%, transparent);
-		color: var(--err);
-	}
-	.repository-contents {
-		margin: 2px 0 5px;
-		padding: 2px 0 4px 16px;
-		border-left: 1px solid var(--pane-edge);
-		border-radius: 0;
-		background: transparent;
-	}
-	.repositories :global(.add-repository) {
-		display: inline-flex;
-		align-items: center;
-		justify-content: flex-start;
-		width: 100%;
-		height: auto;
-		min-height: 32px;
-		gap: 6px;
-		padding: 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		background: transparent;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-		white-space: normal;
-	}
-	.repositories :global(.add-repository:hover) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.sidebar :global(.nav-row) {
-		position: relative;
-		width: 100%;
-		display: flex;
-		align-items: center;
-		justify-content: flex-start;
-		gap: var(--space-2);
-		height: auto;
-		min-height: 32px;
-		padding: 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-		white-space: nowrap;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.sidebar :global(.nav-row:hover:not(:disabled)) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.sidebar :global(.nav-row.active) {
-		background: var(--sidebar-selected);
-		color: var(--text);
-		font-weight: 500;
-	}
-	.sidebar :global(.nav-row:disabled) {
-		color: var(--border-strong);
-		cursor: default;
-	}
-	.item-wrap {
-		position: relative;
-	}
-	.sidebar :global(.conversation-row) {
-		position: relative;
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		height: auto;
-		min-height: 32px;
-		padding: 4px 58px 4px 0;
-		border-radius: var(--radius-sm);
-		text-align: left;
-		font: inherit;
-		font-weight: 500;
-		color: var(--text);
-	}
-	.sidebar :global(.conversation-row:hover),
-	.sidebar :global(.conversation-row:focus-visible) {
-		background: var(--sidebar-hover);
-	}
-	.sidebar :global(.conversation-row.active) {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.item-wrap:focus-within .row-actions,
-	.item-wrap:hover .row-actions {
-		display: flex;
-	}
-	.preview {
-		min-width: 0;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.sidebar :global(.conversation-row.active .preview) {
-		color: var(--text);
-	}
-	:global(input.rename-input) {
-		min-height: 30px;
-		padding: 0 8px;
-		border-radius: var(--radius-chip);
-		font-size: var(--fs-sm);
-	}
-	.row-actions {
-		position: absolute;
-		top: 4px;
-		right: 6px;
-		display: none;
-		align-items: center;
-		gap: 2px;
-	}
-	.row-actions :global(.ren),
-	.row-actions :global(.del) {
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 24px;
-		padding: 0;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.row-actions :global(.del) {
-		color: var(--err);
-	}
-	.row-actions :global(.ren:hover),
-	.row-actions :global(.del:hover) {
-		color: var(--text);
-		background: var(--sidebar-hover);
-	}
-	.sidebar-footer {
-		flex: none;
-		display: grid;
-		gap: var(--space-1);
-		padding: var(--space-2) 0 0;
-	}
+	.sidebar { display:flex; flex-direction:column; flex:none; width:244px; min-width:0; height:100%; padding:0 8px 8px; background:var(--sidebar-surface); border-right:1px solid var(--border); }
+	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:44px; padding:0 8px; }
+	.sidebar-brand { display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:var(--fs-sm); font-weight:500; }
+	.header-actions :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:28px; height:28px; min-height:28px; padding:0; border:0; border-radius:var(--radius-sm); background:transparent; color:var(--text-faint); cursor:pointer; }
+	.nav-section { padding:4px 0 12px; }
+	.sidebar :global(.nav-row) { display:flex; justify-content:flex-start; width:100%; min-height:36px; padding:7px 10px; gap:9px; border-radius:var(--radius-sm); color:var(--text-dim); font-size:var(--fs-sm); font-weight:450; }
+	.sidebar :global(.nav-row:hover), .sidebar :global(.nav-row.active) { background:var(--sidebar-hover); color:var(--text); }
+	.sidebar-mode-switch { display:flex; gap:2px; padding:3px; margin:0 8px 12px; border:1px solid var(--border); border-radius:999px; }
+	.sidebar :global(.sidebar-mode-option) { flex:1; justify-content:center; min-height:28px; height:28px; gap:6px; padding:0 8px; border-radius:999px; color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
+	.sidebar :global(.sidebar-mode-option.active) { background:var(--bg-raised); color:var(--text); box-shadow:var(--shadow-xs); }
+	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; }
+	.section-head { display:flex; align-items:center; justify-content:space-between; min-height:32px; padding:0 8px; }
+	.section-head h2 { margin:0; color:var(--text-faint); font-size:var(--fs-xs); font-weight:550; }
+	.repositories { flex:1; min-height:0; overflow-y:auto; padding-top:4px; }
+	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }
+	.sidebar :global(.conversation-row) { display:flex; justify-content:flex-start; width:100%; min-height:36px; padding:7px 10px; border-radius:var(--radius-sm); color:var(--text-dim); font-size:var(--fs-sm); font-weight:450; }
+	.sidebar :global(.conversation-row.active) { background:var(--sidebar-selected, var(--sidebar-hover)); color:var(--text); font-weight:550; }
+	.preview { display:block; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.row-actions { position:absolute; top:4px; right:4px; display:none; gap:2px; background:var(--sidebar-surface); border-radius:var(--radius-sm); }
+	.item-wrap:hover .row-actions, .item-wrap:focus-within .row-actions { display:flex; }
+	.item-wrap:hover .preview, .item-wrap:focus-within .preview { padding-right:56px; }
+	.row-actions :global(button) { width:28px; min-height:28px; height:28px; padding:0; color:var(--text-faint); }
+	.sidebar :global(.rename-input) { min-height:36px; height:36px; font-size:var(--fs-sm); }
+	.sidebar-empty { margin:12px 10px; color:var(--text-faint); font-size:var(--fs-xs); }
+	.sidebar-footer { display:grid; gap:2px; padding-top:8px; margin-top:auto; }
+	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
+	:global(.workspace-delete-title) { margin:0; font-size:18px; font-weight:650; }
+	:global(.workspace-delete-description) { display:block; margin-top:8px; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.5; }
+	.workspace-delete-actions { display:flex; justify-content:flex-end; gap:8px; }
+	.workspace-delete-error { color:var(--err); font-size:var(--fs-sm); }
 </style>

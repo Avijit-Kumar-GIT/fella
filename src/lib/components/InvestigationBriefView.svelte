@@ -59,7 +59,7 @@
 	type InvestigationSection = 'brief' | 'data' | 'questions' | 'analysis' | 'results' | 'share';
 	const investigationSections: { id: InvestigationSection; label: string }[] = [
 		{ id: 'brief', label: 'Brief' },
-		{ id: 'data', label: 'Data' },
+		{ id: 'data', label: 'Sources' },
 		{ id: 'questions', label: 'Questions' },
 		{ id: 'analysis', label: 'Analysis' },
 		{ id: 'results', label: 'Results' },
@@ -81,7 +81,8 @@
 	let questions = $state<InvestigationQuestionInput[]>([]);
 	let definitions = $state<InvestigationDefinitionInput[]>([]);
 	let definitionsOpen = $state(false);
-	let historyOpen = $state(false);
+	let historyOpen = $state(true);
+	let editingQuestionIds = $state<string[]>([]);
 	let savedBrief = $state('');
 	let savedQuestions = $state('');
 	let savedDefinitions = $state('');
@@ -154,7 +155,8 @@
 		if (id === disclosureInvestigationId) return;
 		disclosureInvestigationId = id;
 		definitionsOpen = false;
-		historyOpen = false;
+		historyOpen = true;
+		editingQuestionIds = [];
 	});
 	let openAnalysisTurn = $derived(openAnalysisTurnId ? analysisTurns[openAnalysisTurnId] ?? null : null);
 	let questionLinksDirty = $derived.by(() => {
@@ -718,6 +720,7 @@
 			parent_id: rootQuestion?.id
 		};
 		questions = [...questions, question];
+		editingQuestionIds = [...editingQuestionIds, question.id];
 	}
 
 	function updateQuestionSourceSelection(
@@ -764,6 +767,7 @@
 	}
 
 	async function focusQuestion(questionId: string): Promise<void> {
+		if (!editingQuestionIds.includes(questionId)) editingQuestionIds = [...editingQuestionIds, questionId];
 		investigationSection = 'questions';
 		await tick();
 		const field = document.getElementById(`question-${questionId}`);
@@ -1712,7 +1716,7 @@
 			<h1 id="investigation-title">{selected?.title ?? 'Investigation'}</h1>
 			{#if !selected}<p>One request, the data behind it, and the results Fella produces.</p>{/if}
 		</div>
-		{#if selected}
+		{#if selected && selected.conversation_id !== session.activeChat.id}
 			<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
 				<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
 			</Button>
@@ -1785,7 +1789,6 @@
 						<header>
 							<div>
 								<h3 id="brief-summary-title">Brief</h3>
-								<p>Goal, audience, and delivery context.</p>
 							</div>
 							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
 								<Icon name="pencil" size={16} />Edit brief
@@ -1876,68 +1879,10 @@
 						hidden={investigationSection !== 'questions'}
 					>
 					<section class="analyst-work-plan" aria-labelledby="question-plan-title">
-						<div class="optional-context-heading">
-							<p>Context (optional)</p>
-							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
-								<Icon name="plus" size={14} />Add definition or assumption
-							</Button>
-						</div>
-						<details class="definition-disclosure" bind:open={definitionsOpen}>
-							<summary>
-				<span id="definition-context-title">Definitions &amp; assumptions</span>
-								<small>{definitions.length ? `${definitions.length} context note${definitions.length === 1 ? '' : 's'}` : 'None saved'}</small>
-							</summary>
-					<section class="definition-editor" aria-labelledby="definition-context-title">
-						<header class="question-heading">
-							<div>
-								<p>Fella records the version used by each run.</p>
-							</div>
-						</header>
-						{#if definitions.length}
-							<ol class="definition-list">
-								{#each definitions as definition, index (definition.id)}
-									<li class="definition-item">
-										<div class="definition-item-heading">
-											<label for="definition-kind-{definition.id}">Context type</label>
-											<div class="definition-item-meta">
-												{#if selected?.definitions?.find((saved) => saved.id === definition.id)}
-													<span>Saved revision {selected.definitions.find((saved) => saved.id === definition.id)?.revision}</span>
-												{/if}
-												<Button type="button" variant="ghost" aria-label="Remove context note {index + 1}" disabled={saving} onclick={() => removeDefinition(definition.id)}>Remove</Button>
-											</div>
-										</div>
-										<Select
-											id="definition-kind-{definition.id}"
-											ariaLabel="Context type {index + 1}"
-											value={definition.kind}
-											options={[
-												{ value: 'definition', label: 'Definition' },
-												{ value: 'assumption', label: 'Assumption' }
-											]}
-											disabled={saving}
-											onValueChange={(value) => (definition.kind = value as typeof definition.kind)}
-										/>
-										<Textarea
-											id="definition-text-{definition.id}"
-											class="definition-field"
-											bind:value={definition.text}
-											disabled={saving}
-											aria-label="Context note {index + 1}"
-											placeholder={definition.kind === 'definition' ? 'e.g. An active customer has placed a paid order in the past 90 days.' : 'e.g. Treat missing cancellation dates as still active.'}
-										/>
-									</li>
-								{/each}
-							</ol>
-						{:else}
-							<p class="definition-empty">No saved definitions or assumptions.</p>
-						{/if}
-					</section>
-						</details>
 					<section class="question-editor" aria-label="Question plan">
 						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Question plan</h3>
-								<p>Analyze one Question at a time; subquestions are optional.</p>
 							</div>
 							<div class="question-save">
 								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
@@ -1946,21 +1891,7 @@
 							</div>
 						</header>
 						<div class="question-plan-actions">
-							{#if selected.status === 'complete'}
-								<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
-									Reopen Investigation
-								</Button>
-							{:else}
-								<Button
-									type="button"
-									variant="outline"
-									disabled={!coverage.canComplete || saving}
-									title="Answer each active Question or document a data gap. Review flagged results and resolve them before completing."
-									onclick={() => void markInvestigationComplete()}
-								>
-									Mark complete
-								</Button>
-							{/if}
+
 							<Button
 								type="button"
 								variant="outline"
@@ -1975,6 +1906,9 @@
 								<Button type="button" variant="ghost" disabled={autosaving} onclick={retryEditableAutosave}>Retry save</Button>
 							{/if}
 						</div>
+						{#if coverage.activeQuestions.length}
+						<details class="coverage-disclosure">
+							<summary>{coverage.answered} of {coverage.activeQuestions.length} answered{#if coverage.needsReview.length} · {coverage.needsReview.length} need attention{/if}</summary>
 						<section class="question-coverage" aria-label="Question coverage" data-investigation-status={selected.status}>
 							<header>
 								<div>
@@ -2031,6 +1965,8 @@
 								<p class="question-coverage-message" role="status">All active Questions have complete, current answers and are ready to close.</p>
 							{/if}
 						</section>
+						</details>
+						{/if}
 						{#if questions.length}
 							{#if rootQuestion}
 								<div class="question-item root-question-item">
@@ -2092,6 +2028,7 @@
 											{/each}
 										</div>
 									{/if}
+									{#if editingQuestionIds.includes(rootQuestion.id) || !rootQuestion.text.trim()}
 									<Textarea
 										id="question-{rootQuestion.id}"
 										class="question-field"
@@ -2099,6 +2036,13 @@
 										disabled={saving || proposingQuestions}
 										aria-label="Main question"
 									/>
+									<Button variant="ghost" size="sm" disabled={!rootQuestion.text.trim()} onclick={() => (editingQuestionIds = editingQuestionIds.filter((id) => id !== rootQuestion.id))}>Done editing</Button>
+									{:else}
+									<button class="question-text" id="question-{rootQuestion.id}" type="button" aria-label="Edit main question" onclick={() => void focusQuestion(rootQuestion.id)}>{rootQuestion.text}<span>Edit</span></button>
+									{/if}
+									{#if !savedQuestion(rootQuestion.id)?.latest_analysis_turn_id && analysisRunIds(selected).length}
+									<Button variant="link" size="sm" onclick={() => void openAnalysisRun(analysisRunIds(selected).at(-1)!)}>Review existing analysis</Button>
+									{/if}
 									<InvestigationQuestionSourceScope
 										workspacePath={selected.workspace_id}
 										investigation={selected}
@@ -2177,6 +2121,7 @@
 													{/each}
 												</div>
 											{/if}
+											{#if editingQuestionIds.includes(question.id) || !question.text.trim()}
 											<Textarea
 												id="question-{question.id}"
 												class="question-field"
@@ -2184,6 +2129,10 @@
 												disabled={saving || proposingQuestions}
 												aria-label="Subquestion {index + 1}"
 											/>
+											<Button variant="ghost" size="sm" disabled={!question.text.trim()} onclick={() => (editingQuestionIds = editingQuestionIds.filter((id) => id !== question.id))}>Done editing</Button>
+											{:else}
+											<button class="question-text" id="question-{question.id}" type="button" aria-label="Edit Subquestion {index + 1}" onclick={() => void focusQuestion(question.id)}>{question.text}<span>Edit</span></button>
+											{/if}
 											<InvestigationQuestionSourceScope
 												workspacePath={selected.workspace_id}
 												investigation={selected}
@@ -2284,6 +2233,63 @@
 							</Button>
 						{/if}
 					</section>
+						<div class="optional-context-heading">
+							<p>Context (optional)</p>
+							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
+								<Icon name="plus" size={14} />Add definition or assumption
+							</Button>
+						</div>
+						<details class="definition-disclosure" bind:open={definitionsOpen}>
+							<summary>
+				<span id="definition-context-title">Definitions &amp; assumptions</span>
+								<small>{definitions.length ? `${definitions.length} context note${definitions.length === 1 ? '' : 's'}` : 'None saved'}</small>
+							</summary>
+					<section class="definition-editor" aria-labelledby="definition-context-title">
+						<header class="question-heading">
+							<div>
+								<p>Fella records the version used by each run.</p>
+							</div>
+						</header>
+						{#if definitions.length}
+							<ol class="definition-list">
+								{#each definitions as definition, index (definition.id)}
+									<li class="definition-item">
+										<div class="definition-item-heading">
+											<label for="definition-kind-{definition.id}">Context type</label>
+											<div class="definition-item-meta">
+												{#if selected?.definitions?.find((saved) => saved.id === definition.id)}
+													<span>Saved revision {selected.definitions.find((saved) => saved.id === definition.id)?.revision}</span>
+												{/if}
+												<Button type="button" variant="ghost" aria-label="Remove context note {index + 1}" disabled={saving} onclick={() => removeDefinition(definition.id)}>Remove</Button>
+											</div>
+										</div>
+										<Select
+											id="definition-kind-{definition.id}"
+											ariaLabel="Context type {index + 1}"
+											value={definition.kind}
+											options={[
+												{ value: 'definition', label: 'Definition' },
+												{ value: 'assumption', label: 'Assumption' }
+											]}
+											disabled={saving}
+											onValueChange={(value) => (definition.kind = value as typeof definition.kind)}
+										/>
+										<Textarea
+											id="definition-text-{definition.id}"
+											class="definition-field"
+											bind:value={definition.text}
+											disabled={saving}
+											aria-label="Context note {index + 1}"
+											placeholder={definition.kind === 'definition' ? 'e.g. An active customer has placed a paid order in the past 90 days.' : 'e.g. Treat missing cancellation dates as still active.'}
+										/>
+									</li>
+								{/each}
+							</ol>
+						{:else}
+							<p class="definition-empty">No saved definitions or assumptions.</p>
+						{/if}
+					</section>
+						</details>
 					</section>
 						</div>
 						<div
@@ -2303,7 +2309,7 @@
 						</header>
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-							<span>Run history &amp; Findings</span>
+								<span>Recorded analysis</span>
 							<small>{analysisRunIds(selected).length} saved run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} Finding{selected.findings?.length === 1 ? '' : 's'}</small>
 						</summary>
 						<div class="investigation-history-content">
@@ -2781,6 +2787,24 @@
 							onopenlegacy={openLegacyRunFromResults}
 							onreviewquestion={reviewQuestionFromResults}
 						/>
+							<footer class="investigation-completion-actions">
+							{#if selected.status === 'complete'}
+								<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
+									Reopen Investigation
+								</Button>
+							{:else}
+								<Button
+									type="button"
+									variant="outline"
+									disabled={!coverage.canComplete || saving}
+									title="Answer each active Question or document a data gap. Review flagged results and resolve them before completing."
+									onclick={() => void markInvestigationComplete()}
+								>
+									Mark complete
+								</Button>
+							{/if}
+								{#if selected.status !== 'complete' && !coverage.canComplete}<p>Resolve open questions or document a data gap before completing.</p>{/if}
+							</footer>
 					</section>
 						</div>
 						<div
@@ -2939,7 +2963,7 @@
 		width: 100%;
 		max-width: var(--content-max);
 		margin: 0 auto;
-		padding: var(--space-6) var(--pad);
+		padding: 20px;
 		overflow: auto;
 		overscroll-behavior: contain;
 	}
@@ -2949,7 +2973,7 @@
 		justify-content: space-between;
 		gap: var(--space-4);
 	}
-	.page-head { margin-bottom: var(--space-5); }
+	.page-head { margin-bottom: 16px; }
 	.page-head > div { min-width: 0; }
 	.page-head h1 { overflow-wrap: anywhere; }
 	.investigation-nav {
@@ -3043,7 +3067,7 @@
 	:global(.handoff-preview-secondary) { min-height: 36px; padding: 0 var(--space-3); border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-dim); font: inherit; cursor: pointer; }
 	:global(.handoff-preview-secondary:hover) { border-color: var(--border); background: var(--bg-inset); color: var(--text); }
 	h1, h2, p { margin: 0; }
-	h1 { font-size: clamp(24px, 3vw, 32px); font-weight: 650; letter-spacing: -0.03em; }
+	h1 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; font-size: 18px; line-height: 1.4; font-weight: 600; letter-spacing: -0.02em; }
 	.page-head p { margin-top: var(--space-1); color: var(--text-dim); }
 	.investigation-content { min-width: 0; }
 	.brief-editor { min-width: 0; }
@@ -3057,11 +3081,10 @@
 	.investigation-results-section :global(.results-view) { padding: 0; }
 	.investigation-share-section { margin-bottom: var(--space-6); }
 	.investigation-share-section .report-export-status { max-width: none; }
-	.brief-summary { display: grid; gap: var(--space-4); padding: var(--space-5); margin-top: var(--space-2); border: 0; border-radius: var(--radius-window); background: var(--bg-inset); }
+	.brief-summary { display: grid; gap: var(--space-4); padding: 12px 0; margin-top: var(--space-2); border: 0; background: transparent; }
 	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.brief-summary h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.brief-summary > header p { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
-	.brief-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4) var(--space-6); margin: 0; }
+	.brief-summary dl { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); margin: 0; }
 	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
 	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
 	.brief-summary dd { min-width: 0; margin: 0; color: var(--text); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
@@ -3104,7 +3127,7 @@
 	.definition-item :global(.fella-ui-select-trigger) { width: max-content; min-width: 140px; }
 	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.definition-empty { margin: 0; }
-	.question-editor { display: grid; gap: var(--space-4); padding: var(--space-4) 0; margin-top: var(--space-2); }
+	.question-editor { display: grid; gap: 12px; padding: 0; margin-top: 0; }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 	.question-heading { align-items: center; gap: var(--space-4); }
 	.question-heading > div:first-child { min-width: 0; flex: 1; }
@@ -3134,7 +3157,7 @@
 	.question-coverage-review small { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
 	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
 	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
-	.question-item { min-width: 0; padding: var(--space-4); border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
+	.question-item { min-width: 0; padding: 12px 0; border: 0; background: transparent; }
 	.question-item-heading { margin-bottom: var(--space-2); }
 	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.question-status-reason { margin: 0 0 var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
@@ -3300,7 +3323,14 @@
 	.run-preview-dirty { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
 	.run-preview-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
 	.investigation-history { margin-bottom: 0; }
-	.investigation-history-content { display: grid; gap: var(--space-3); padding: 0 var(--space-3) var(--space-3); }
+	.coverage-disclosure { margin: 8px 0 12px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.coverage-disclosure > summary { padding: 6px 0; cursor: pointer; }
+	.investigation-completion-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 20px; }
+	.investigation-completion-actions p { flex: 1; min-width: 180px; color: var(--text-dim); font-size: var(--fs-xs); }
+	.question-text { display: block; width: 100%; padding: 8px 0; border: 0; background: transparent; color: var(--text); font: inherit; line-height: 1.55; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+	.question-text span { display: block; margin-top: 5px; color: var(--text-faint); font-size: var(--fs-xs); }
+	.investigation-history-content { display: flex; flex-direction: column; gap: var(--space-4); padding: 8px 0; }
+	.analysis-runs { order: -1; }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }
 	.empty-state > :global(svg) { color: var(--text-faint); }
 	.empty-state h2 { font-size: var(--fs-lg); }
@@ -3313,13 +3343,13 @@
 		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
 	}
 	@container investigation-pane (max-width: 900px) {
-		.investigation-page { padding: var(--space-5) var(--space-4); }
-		.page-head { align-items: flex-start; flex-direction: column; }
+		.investigation-page { padding: 20px; }
+		.page-head { align-items: flex-start; flex-direction: row; }
 		.investigation-document-heading { align-items: flex-start; flex-direction: column; }
-		.question-heading { align-items: flex-start; flex-direction: column; gap: var(--space-2); }
+		.question-heading { align-items: center; flex-direction: row; gap: var(--space-2); }
 		.question-coverage > header { flex-direction: column; }
 		.question-coverage-counts { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-		.question-save { width: 100%; min-width: 0; max-width: none; min-height: 20px; flex-basis: auto; justify-content: flex-start; }
+		.question-save { width: auto; min-width: 0; max-width: 50%; min-height: 20px; flex: 0 1 auto; justify-content: flex-end; }
 		.question-plan-actions { justify-content: flex-start; }
 		.question-empty-state { align-items: flex-start; flex-direction: column; }
 	}

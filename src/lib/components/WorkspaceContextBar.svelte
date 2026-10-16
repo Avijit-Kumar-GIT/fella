@@ -3,6 +3,7 @@
 	import { openRepository } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import Icon from './Icon.svelte';
+	let { expanded = false, compact = false, ontoggleexpand }: { expanded?: boolean; compact?: boolean; ontoggleexpand?: () => void } = $props();
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);
 	let workspaceName = $derived(
@@ -22,12 +23,17 @@
 	<div class="workspace-context-bar">
 		<div class="workspace-identity" role="group" aria-label={`Workspace: ${workspaceName}`}>
 			<Icon name="folder" size={16} />
-			<span class="workspace-identity-label">Workspace</span>
 			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
 		</div>
 
 		{#if workspaceAvailable}
 			<div class="workspace-context-actions">
+				{#if session.workspacePaneOpen && (compact || expanded)}
+					<Button variant="ghost" size="sm" class="workspace-pane-toggle" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} />Conversation</Button>
+				{/if}
+				{#if session.workspacePaneOpen && !compact}
+					<Button variant="ghost" size="icon" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand workspace tools'} title={expanded ? 'Restore split view' : 'Expand workspace tools'} onclick={ontoggleexpand}><Icon name="square" size={14} /></Button>
+				{/if}
 				<Button
 					variant="ghost"
 					size="sm"
@@ -81,11 +87,6 @@
 		font-size: var(--fs-sm);
 	}
 	.workspace-identity :global(svg) { flex: none; }
-	.workspace-identity-label {
-		flex: none;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
 	.workspace-name {
 		min-width: 0;
 		overflow: hidden;

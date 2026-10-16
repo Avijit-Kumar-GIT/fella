@@ -3,6 +3,7 @@
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
+	import { openFolder } from '$lib/commands';
 
 	let {
 		onselect,
@@ -88,7 +89,6 @@
 				side="bottom"
 				align="start"
 				sideOffset={6}
-				onkeydowncapture={handleWorkspaceMenuKeydown}
 				bind:ref={menuContent}
 			>
 				<DropdownMenu.RadioGroup
@@ -113,6 +113,8 @@
 						</DropdownMenu.RadioItem>
 					{/each}
 				</DropdownMenu.RadioGroup>
+				<DropdownMenu.Separator class="workspace-menu-separator" />
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void openFolder()}><Icon name="plus" size={14} />Add workspace</DropdownMenu.Item>
 			</DropdownMenu.Content>
 		</DropdownMenu.Portal>
 	</DropdownMenu.Root>
@@ -195,5 +197,6 @@
 		white-space: nowrap;
 	}
 	.workspace-switcher.compact { width: 190px; padding: 0; }
+	:global(.workspace-menu-separator) { height: 1px; margin: 6px 0; background: var(--border); }
 	:global(.workspace-switcher.compact .workspace-switcher-trigger) { height: 30px; min-height: 30px; padding: 5px 8px; }
 </style>

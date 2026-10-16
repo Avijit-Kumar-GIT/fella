@@ -773,6 +773,9 @@
 								</details>
 							{/if}
 							<Button type="button" variant="outline" size="sm" onclick={() => onreviewquestion(question.id)}>Review Question</Button>
+							{#if !question.latest_analysis_turn_id && investigation.analysis_turn_ids?.length}
+								<Button type="button" variant="link" size="sm" onclick={() => { const id = investigation.analysis_turn_ids?.at(-1); if (id) onopenrun(id); }}>Review existing analysis</Button>
+							{/if}
 						</div>
 					</li>
 				{/each}

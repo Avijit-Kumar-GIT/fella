@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { ipc } from '$lib/ipc';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { session, type WorkspaceToolTab } from '$lib/session.svelte';
@@ -9,6 +10,7 @@
 	import InvestigationBriefView from './InvestigationBriefView.svelte';
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
+	import CompanionPane from './CompanionPane.svelte';
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
@@ -18,9 +20,23 @@
 	let chooserError = $state('');
 	let listRequest = 0;
 	let selectionRequest = 0;
+	let tabsElement = $state<HTMLDivElement>();
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
 	let terminalTabs = $derived(session.workspaceToolTabs.filter((tab) => tab.kind === 'terminal'));
+	$effect(() => {
+		const id = activeTab?.id;
+		const count = session.workspaceToolTabs.length;
+		void count;
+		if (!id || !tabsElement || !session.workspacePaneOpen) return;
+		void tick().then(() => {
+			const selected = tabsElement?.querySelector<HTMLElement>('[aria-selected="true"]');
+			if (!selected || !tabsElement) return;
+			const rect = selected.getBoundingClientRect(), viewport = tabsElement.getBoundingClientRect();
+			if (rect.left < viewport.left) tabsElement.scrollLeft += rect.left - viewport.left - 4;
+			else if (rect.right > viewport.right) tabsElement.scrollLeft += rect.right - viewport.right + 32;
+		});
+	});
 	let currentInvestigation = $derived.by(() => {
 		if (activeTab?.kind === 'investigation' && activeTab.investigationId) {
 			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
@@ -190,9 +206,15 @@
 	}
 
 	function baseTabLabel(tab: WorkspaceToolTab): string {
-		if (tab.kind === 'context') return 'Data & context';
+		if (tab.kind === 'context') return 'Workspace context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
 		if (tab.kind === 'terminal') return 'Shell';
+		if (tab.kind === 'preview') {
+			const preview = tab.preview;
+			if (preview?.kind === 'source') return preview.name;
+			if (preview?.kind === 'chart') return session.conversations.find((item) => item.id === tab.conversationId)?.messages.find((item) => item.id === preview.messageId)?.answer?.evidence[preview.evidenceIndex]?.chart?.title || 'Chart';
+			return 'Preview';
+		}
 		return investigations.find((item) => item.id === tab.investigationId)?.title.trim() || 'Investigation';
 	}
 
@@ -207,7 +229,7 @@
 <section class="workspace" aria-label="Workspace tools">
 	{#if session.workspaceToolTabs.length > 0}
 		<div class="workspace-tabs-bar">
-			<div class="workspace-tool-tabs" role="tablist" aria-label="Open workspace tools">
+			<div bind:this={tabsElement} class="workspace-tool-tabs" role="tablist" aria-label="Open workspace tools">
 				{#each session.workspaceToolTabs as tab (tab.id)}
 						<div class="workspace-tool-tab-group" role="presentation">
 						<button
@@ -277,7 +299,7 @@
 			<div class="workspace-tool-chooser-inner">
 				<header class="workspace-tool-chooser-heading">
 					<h2>Open a tool</h2>
-					<p>Choose what to keep beside this conversation.</p>
+					<p>Open an Investigation, context, or Shell.</p>
 				</header>
 			<div class="workspace-tool-list" aria-label="Available workspace tools">
 				<DropdownMenu.Root open={investigationsOpen} onOpenChange={setInvestigationsOpen}>
@@ -368,8 +390,8 @@
 				>
 					<span class="workspace-tool-option-icon"><Icon name="table" size={16} /></span>
 					<span class="workspace-tool-option-copy">
-						<strong>Data &amp; context</strong>
-						<small>Files and workspace definitions</small>
+						<strong>Workspace context</strong>
+								<small>Guidance and reusable knowledge</small>
 					</span>
 					<Icon name="chevron-right" size={16} />
 				</button>
@@ -392,7 +414,9 @@
 	</div>
 	{:else if activeTab && activeTab.kind !== 'terminal'}
 		<div class="workspace-content" id="workspace-tool-content" role="tabpanel" aria-label={tabLabel(activeTab)}>
-			{#if activeTab.kind === 'source'}
+			{#if activeTab.kind === 'preview' && activeTab.preview}
+				<CompanionPane reference={activeTab.preview} conversationId={activeTab.conversationId} embedded onclose={() => activeTab && session.closeWorkspaceToolTab(activeTab.id)} />
+			{:else if activeTab.kind === 'source'}
 				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />

@@ -211,6 +211,8 @@
 				<Button variant="ghost" size="sm" class="settings-action" onclick={() => command('/model')}>Choose</Button>
 			</div>
 			{#if session.providers.length}
+				<details class="provider-connections">
+					<summary>Manage model connections</summary>
 				<div class="provider-list">
 					<p class="section-label">Available providers</p>
 					{#each session.providers.filter((item) => item.auth === 'key') as item (item.id)}
@@ -225,6 +227,7 @@
 						</Button>
 					{/each}
 				</div>
+				</details>
 			{/if}
 			<Button
 				variant="link"
@@ -397,6 +400,7 @@
 </section>
 
 <style>
+	.provider-connections > summary { color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; padding: 8px 0; }
 	.settings-page {
 		flex: 1;
 		min-height: 0;

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import CompanionPane from '$lib/components/CompanionPane.svelte';
 	import Composer from '$lib/components/Composer.svelte';
@@ -11,6 +11,7 @@
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceContextBar from '$lib/components/WorkspaceContextBar.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
+	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
@@ -21,12 +22,24 @@
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
 	let dragging = $state(false);
+	let toolsExpanded = $state(false);
+	let toolsCompact = $state(false);
 
 	let activeView = $derived(session.workspaceView);
 	let showRightPane = $derived(session.workspacePaneOpen || Boolean(session.activeChat.companionPane));
 	let scopedWorkspaceActive = $derived(
 		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
 	);
+	$effect(() => {
+		const pane = session.activeChat.companionPane;
+		if (!pane || !scopedWorkspaceActive) return;
+		untrack(() => {
+			if (session.openPreviewToolTab(pane)) {
+				session.activeChat.companionPane = null;
+				session.persist();
+			}
+		});
+	});
 
 	function mountStatusLabel(progress: NonNullable<typeof session.mountProgress>): string {
 		const count = (value: number) => new Intl.NumberFormat().format(value);
@@ -108,6 +121,7 @@
 	}
 
 	async function selectWorkspace(id: string): Promise<void> {
+		session.setWorkspaceView('ask');
 		if (id === GENERAL_WORKSPACE_ID) {
 			session.focusWorkspace(GENERAL_WORKSPACE_ID);
 			return;
@@ -308,28 +322,19 @@
 				</div>
 			{/if}
 			<main>
-				<WorkspaceContextBar />
+				<WorkspaceContextBar expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />
 				<div class="main-row">
 					{#if activeView === 'settings'}
 						<SettingsView />
 					{:else}
-						<div
-							class="workspace-chat-layout"
-							data-workspace-pane-open={session.workspacePaneOpen}
-							data-has-companion={Boolean(session.activeChat.companionPane)}
-						>
-							<section class="workspace-conversation-pane" aria-label="Conversation">
+						<WorkspacePanelLayout open={showRightPane} bind:expanded={toolsExpanded} bind:compact={toolsCompact}>
+							{#snippet conversation()}
 								<div class="conversation-workspace">
 									<Transcript bind:this={transcript} />
 									<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
 								</div>
-							</section>
-							<aside
-								class="workspace-tools-pane"
-								id="workspace-tools-pane"
-								aria-label={session.workspacePaneOpen ? 'Workspace tools' : 'Conversation preview'}
-								hidden={!showRightPane}
-							>
+							{/snippet}
+							{#snippet tools()}
 								{#if scopedWorkspaceActive}
 									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen}>
 										<WorkspaceView />
@@ -338,8 +343,8 @@
 								{#if showRightPane && !session.workspacePaneOpen}
 									<CompanionPane />
 								{/if}
-							</aside>
-						</div>
+							{/snippet}
+						</WorkspacePanelLayout>
 					{/if}
 				</div>
 			</main>
@@ -442,44 +447,6 @@
 		container-type: inline-size;
 		background: var(--workspace-canvas);
 	}
-	.workspace-chat-layout {
-		position: relative;
-		display: grid;
-		flex: 1;
-		min-width: 0;
-		min-height: 0;
-		grid-template-columns: minmax(0, 1fr);
-		grid-template-rows: minmax(0, 1fr);
-		overflow: hidden;
-		background: var(--workspace-canvas);
-	}
-	.workspace-conversation-pane,
-	.workspace-tools-pane {
-		display: flex;
-		min-width: 0;
-		min-height: 0;
-		overflow: hidden;
-	}
-	.workspace-conversation-pane {
-		grid-column: 1;
-		grid-row: 1;
-	}
-	.workspace-tools-pane {
-		grid-column: 2;
-		grid-row: 1;
-		container-name: investigation-pane;
-		container-type: inline-size;
-		background: var(--workspace-canvas);
-	}
-	.workspace-tools-pane[hidden] { display: none !important; }
-	.workspace-tools-pane :global(.workspace),
-	.workspace-tools-pane :global(.companion) {
-		flex: 1;
-		width: 100%;
-		min-width: 0;
-		min-height: 0;
-		border-left: 0;
-	}
 	.workspace-tools-content {
 		display: flex;
 		flex: 1;
@@ -487,14 +454,6 @@
 		min-height: 0;
 	}
 	.workspace-tools-content[hidden] { display: none !important; }
-	.workspace-chat-layout[data-workspace-pane-open='true'],
-	.workspace-chat-layout[data-has-companion='true'] {
-		grid-template-columns: minmax(320px, 62fr) minmax(280px, 38fr);
-	}
-	.workspace-chat-layout[data-workspace-pane-open='true'] .workspace-tools-pane,
-	.workspace-chat-layout[data-has-companion='true'] .workspace-tools-pane {
-		border-left: 1px solid var(--border);
-	}
 	.conversation-workspace {
 		display: flex;
 		flex: 1;
@@ -507,19 +466,6 @@
 		flex: 1;
 		min-width: 0;
 		min-height: 0;
-	}
-	@container workspace-area (max-width: 720px) {
-		.workspace-chat-layout[data-workspace-pane-open='true'],
-		.workspace-chat-layout[data-has-companion='true'] {
-			grid-template-columns: minmax(0, 1fr);
-			grid-template-rows: minmax(0, 1fr) minmax(220px, 0.72fr);
-		}
-		.workspace-tools-pane {
-			grid-column: 1;
-			grid-row: 2;
-			border-top: 1px solid var(--border);
-			border-left: 0;
-		}
 	}
 	.dock {
 		flex: none;

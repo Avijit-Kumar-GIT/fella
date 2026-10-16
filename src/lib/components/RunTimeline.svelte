@@ -158,8 +158,8 @@
 		if (answer?.status === 'insufficient_data') return 'Insufficient data';
 		if (answer?.status === 'failed') return 'Verification failed';
 		if (failed) return 'Analysis did not finish';
-		if (answer) return answer.status === 'verified' ? 'Analysis checked' : 'Analysis complete';
-		if (runState) return runStateLabel(runState) ?? 'Analysis complete';
+		if (answer) return answer.status === 'verified' ? 'Analysis checked' : 'Run finished';
+		if (runState) return runStateLabel(runState) ?? 'Run finished';
 		return 'Analysis did not finish';
 	});
 

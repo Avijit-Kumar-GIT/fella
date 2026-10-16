@@ -161,6 +161,8 @@
 			{/if}
 
 			{#if showSetup}
+				<details class="model-setup" open={hasFolder}>
+					<summary>Connect a model</summary>
 				<div class="setup">
 					{#if rejected}
 						<!-- Hosted key was refused (HTTP 401/403). -->
@@ -206,6 +208,7 @@
 						</div>
 					{/if}
 				</div>
+				</details>
 			{/if}
 
 		</div>
@@ -283,6 +286,8 @@
 </div>
 
 <style>
+	.model-setup { margin-top: 20px; color: var(--text-dim); font-size: var(--fs-sm); }
+	.model-setup > summary { cursor: pointer; }
 	.transcript {
 		flex: 1;
 		overflow-y: auto;

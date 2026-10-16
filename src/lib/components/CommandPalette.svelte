@@ -37,7 +37,7 @@
 
 	const filters: { id: SearchFilter; label: string }[] = [
 		{ id: 'all', label: 'All' },
-		{ id: 'repository', label: 'Repositories' },
+		{ id: 'repository', label: 'Workspaces' },
 		{ id: 'conversation', label: 'Conversations' },
 		{ id: 'source', label: 'Files' },
 		{ id: 'command', label: 'Actions' }

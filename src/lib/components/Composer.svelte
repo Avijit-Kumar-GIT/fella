@@ -47,7 +47,7 @@
 	let composerScopeTarget = $derived(
 		unavailableWorkspacePath
 			? `${unavailableWorkspaceName} (unavailable)`
-			: folderName || 'General (unbound)'
+			: folderName || 'No folder selected'
 	);
 	let placeholder = $derived(
 		session.pendingKey
@@ -514,7 +514,6 @@
 			<div class="context-row">
 				{#if session.workspaceView === 'ask' || session.workspaceView === 'workspace'}
 					<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${composerScopeTarget}`}>
-						<span>Message target</span>
 						<strong>{composerScopeTarget}</strong>
 					</div>
 				{/if}

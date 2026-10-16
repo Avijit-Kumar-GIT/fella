@@ -131,6 +131,8 @@ export interface WorkspaceToolTab {
 	/** Catalog identity for a read-only source preview tab. */
 	sourcePath?: string | null;
 	sourceName?: string | null;
+	/** An immutable reference to an existing answer artifact or older source snapshot. */
+	preview?: CompanionPane | null;
 }
 
 interface SavedWorkspaceContextState {
@@ -180,14 +182,17 @@ function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 		? source.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
 			if (!rawTab || typeof rawTab !== 'object') return [];
 			const tab = rawTab as Record<string, unknown>;
-			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal'].includes(String(tab.kind))) return [];
+			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal', 'preview'].includes(String(tab.kind))) return [];
+			const preview = parseCompanionPane(tab.preview);
+			if (tab.kind === 'preview' && !preview) return [];
 			return [{
 				id: tab.id,
 				kind: tab.kind as WorkspaceToolKind,
 				investigationId: typeof tab.investigationId === 'string' ? tab.investigationId : null,
 				conversationId: typeof tab.conversationId === 'string' ? tab.conversationId : null,
 				sourcePath: typeof tab.sourcePath === 'string' ? tab.sourcePath : null,
-				sourceName: typeof tab.sourceName === 'string' ? tab.sourceName : null
+				sourceName: typeof tab.sourceName === 'string' ? tab.sourceName : null,
+				preview
 			}];
 		}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
 		: [];
@@ -592,7 +597,7 @@ export class Conversation {
 
 export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
-export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal';
+export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal' | 'preview';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -1294,6 +1299,22 @@ class Session {
 		return true;
 	}
 
+	/** Display an existing artifact in the same tabbed Tools frame. References
+	 * retain their original workspace revision; opening a tab never reruns it. */
+	openPreviewToolTab(preview: CompanionPane): WorkspaceToolTab | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
+		context.workspaceToolTabs ??= [];
+		const identity = JSON.stringify(preview);
+		let tab = context.workspaceToolTabs.find((item) => item.kind === 'preview' && item.conversationId === this.activeChat.id && JSON.stringify(item.preview) === identity);
+		if (!tab) {
+			tab = { id: `preview:${uid()}`, kind: 'preview', conversationId: this.activeChat.id, preview };
+			context.workspaceToolTabs.push(tab);
+		}
+		this.activateWorkspaceToolTab(tab.id);
+		return tab;
+	}
+
 	closeWorkspaceToolTab(tabId: string): boolean {
 		const context = this.activeWorkspaceContext;
 		if (!context?.workspaceToolTabs) return false;
@@ -1370,6 +1391,12 @@ class Session {
 	openSourcePane(source: SourceInfo): void {
 		const workspace = this.catalog.workspace;
 		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
+		if (this.activeChat.workspaceScope === workspace) {
+			this.activeChat.companionPane = null;
+			this.openSourceToolTab(source);
+			this.persist();
+			return;
+		}
 		this.setWorkspacePaneOpen(false);
 		this.activeChat.companionPane = {
 			kind: 'source',
@@ -1393,8 +1420,7 @@ class Session {
 			!evidence ||
 			!isRenderableChartEvidence(evidence, message.answer.verification ?? [])
 		) return;
-		this.setWorkspacePaneOpen(false);
-		this.activeChat.companionPane = {
+		const preview: CompanionPane = {
 			kind: 'chart',
 			messageId,
 			evidenceIndex,
@@ -1402,6 +1428,13 @@ class Session {
 			workspacePath: message.answer?.workspace?.path ?? this.activeChat.workspaceScope ?? null,
 			revision: message.answer?.workspace?.revision ?? null
 		};
+		if (this.catalog.workspace && this.activeChat.workspaceScope === this.catalog.workspace) {
+			this.activeChat.companionPane = null;
+			this.openPreviewToolTab(preview);
+		} else {
+			this.setWorkspacePaneOpen(false);
+			this.activeChat.companionPane = preview;
+		}
 		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
 		this.persist();
@@ -1519,6 +1552,7 @@ class Session {
 		// workspace tools pane closed.
 		context.workspacePaneOpen = false;
 		this.focusWorkspace(scope ?? GENERAL_WORKSPACE_ID, conversation.id);
+		this.workspaceView = 'ask';
 		this.#writeIndex();
 		this.#writeWorkspaceState();
 		return true;

@@ -48,20 +48,21 @@ values change.
 | `--link` | `#3a5c8a` | `#8fb0dd` | Links and keyboard focus |
 | `--ok` / `--warn` / `--err` | green / ochre / red | light green / gold / coral | Status only |
 
-The interface uses Geist and Geist Mono, a 14px body scale, 13px secondary
+The interface uses Geist and Geist Mono, a 15px body scale, 14px secondary
 text, and 12px metadata. Titles stay compact and consistent rather than
 becoming oversized hero typography. Spacing follows a 4px increment; controls
-use a restrained 6px radius, conversation surfaces 14px, and the main window
+use restrained 8–10px radii, conversation surfaces 18px, and the main window
 canvas remains flat. Chart series use dedicated palette tokens so category
 colors are not confused with success or failure.
 
 ## Application structure
 
-- Keep the titlebar and sidebar quiet: show the current place once, keep
-  environment switching separate from workspace navigation, and remove labels
-  that merely repeat a nearby control.
+- Keep the titlebar and sidebar quiet. The workspace dropdown changes scope;
+  both Chats and Files in the sidebar belong to that selected workspace.
+  Global search can cross workspace boundaries. Do not duplicate the workspace
+  switcher with a second all-workspace navigation tree.
 - Align each view's title, body, and primary action to the same content width.
-  Use left-aligned editorial layouts for Settings, Projects, and Sources.
+  Use left-aligned editorial layouts for Settings and analytical content.
 - Empty states should be compact and task-oriented. Let the composer or next
   action remain the working focal point; do not add a second brand lockup inside
   the conversation.
@@ -72,6 +73,34 @@ colors are not confused with success or failure.
 - Keep interactive affordances visible: selected appearance/provider rows,
   keyboard focus, and primary versus secondary actions must remain legible in
   both themes.
+
+## Workspace panels
+
+- Chat is the default work surface. Tools uses the same pane frame for
+  Investigations, workspace context, files, charts, and user-only Shell tabs.
+  Opening a preview never changes analytical scope or re-executes an answer.
+  Preserve source/answer identity and older-revision warnings.
+- The split has a draggable, keyboard-operable divider and a locally remembered
+  Tools width. Tools can expand. Below 900px of available workspace width,
+  the active Tools pane uses the working area instead of becoming a small
+  lower panel. Conversation/Tools navigation preserves drafts and open tabs.
+- Investigation tabs own their associated conversations. Selecting workspace
+  context or a file does not silently select another Investigation. Keep the
+  selected tab in view when opening or switching tabs.
+- Use 18px compact pane titles, a shared 20px content inset, and single-line
+  section navigation. Long Investigation names may occupy at most two lines;
+  the full goal belongs in Brief. Do not repeat an Open conversation action
+  when its conversation is already the selected companion work surface.
+- Questions precede optional context. Existing questions are readable text
+  with an explicit editing affordance; edits still autosave. Coverage details
+  remain accessible without duplicating the entire question list by default.
+  Completion is in Results, with the same coverage/review requirements.
+- Recorded analysis is visible without opening a generic history disclosure.
+  A finished run is not an accepted answer: preserve neutral review labels,
+  specific reasons, and the distinction between saved runs and linked answers.
+- Files browses workspace files; Workspace context contains reusable guidance
+  and knowledge; Investigation Sources selects eligible inputs for that work.
+  These are separate intentions, not interchangeable data browsers.
 
 ## Interaction and accessibility
 
