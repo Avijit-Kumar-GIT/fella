@@ -1,35 +1,38 @@
 # Fella: generative analytical workspace plan
 
-Status: implementation is underway in incremental slices. This document remains
-the target architecture and is not a claim that the complete product vision is
-shipped. Written 2026-10-21 against `d719208` on `explore/composable-interface`;
-implementation status below was updated 2026-10-21.
+Status: the initial interactive OpenUI/Studio/report vertical slice is
+implemented; the broader product architecture remains in progress. This
+document is a target architecture, not a claim that the complete product vision
+is shipped. Written 2026-10-21 against `d719208` on
+`explore/composable-interface`; status below was updated 2026-10-22.
 
-### Implementation status — 2026-10-21
+### Implementation status — 2026-10-22
 
-The initial local vertical slice is implemented across OpenUI-backed answers,
-saved artifacts, Studio, deterministic Markdown, and a validated portable
-report package. Presentation generation now has separate data-aware design
-and composition passes over saved results. It preserves the existing Rust
-analytics harness and provider transport. This improves the generation
-process; live-provider presentation quality remains unmeasured. The details
-and test evidence are recorded in the
+The first local vertical slice now includes interactive OpenUI answers, saved
+artifacts, Studio, deterministic Markdown, and a validated portable report
+package. OpenUI is the primary workspace answer in the same analysis turn; the
+earlier separate design/composition passes are historical and no longer run.
+The Svelte host supports local state and bounded presentation calculations over
+saved results while preserving the existing Rust analytics harness and provider
+transport. The current Gemma 4 31B compatibility run rendered and persisted a
+composed answer, but one run does not establish analytical accuracy, general
+model compatibility, or presentation quality. Exact validation evidence is in
+the
 [delivery ledger](testing/GENERATIVE-WORKSPACE-v1.md).
 
 Delivered in this slice:
 
-- A pinned OpenUI Svelte runtime and Fella component library, with generated
-  versioned prompt/schema assets, bounded parser/schema validation, result-bound
-  values, and a validated declarative Vega-Lite renderer. Legacy chart output
-  remains supported. This broadens the supported presentation vocabulary; it
-  does not provide arbitrary executable visualization code.
-- Separate, bounded two-pass presentation generation after eligible completed
-  analysis: a free-form design decision uses the saved question/contract/answer
-  and bounded result profiles, then OpenUI composition follows that decision.
-  The fixed revenue/bar/table example was removed from model context. Repairs
-  reuse the original design plan. Diagnostics separate design/composition
-  latency and token use; readable fallback does not alter analytical
-  verification. Live-provider quality/diversity is still unmeasured.
+- The pinned OpenUI Svelte integration and Fella component library, generated
+  versioned prompt/schema assets, OpenUI Lang parser/evaluator, a reactive
+  Svelte host, result-bound values, local controls, bounded display functions,
+  and a validated declarative Vega-Lite renderer. Legacy chart output remains
+  readable. The model chooses composition from Fella's registered vocabulary;
+  this does not provide arbitrary executable visualization code.
+- Same-turn OpenUI finalization as the primary workspace answer, automatic
+  artifact persistence, exact-result bindings, and a readable fallback. A
+  bounded finalizer correction can repair malformed syntax or a directly
+  hard-coded Metric value without rerunning analytical tools. The renderer
+  remains the authoritative full parser/schema/binding check.
 - Workspace-owned artifact identities and immutable revisions, canonical saved
   result references, Studio documents/placements, revision-aware writes,
   checkpoints, and retention of saved work after conversation deletion.
@@ -40,12 +43,12 @@ Delivered in this slice:
   restart/reopen, export, and portable-package journeys.
 
 Partially delivered or still open: adaptive multi-question Investigation
-orchestration; a complete review/adopt workflow for analytical candidate
-revisions and downstream impact; broader declarative visualization and
-interaction coverage; direct mdxcn interoperability and faithful SVG/PNG
-fallback for unsupported figures; cross-workspace reuse with explicit
-authorization; and full visual/accessibility review across compact, expanded,
-dark/light, and keyboard-only states.
+orchestration; complete review/adopt and downstream-impact workflows for
+analytical candidate revisions; large-result adaptive layouts/virtualization;
+direct mdxcn interoperability and faithful SVG/PNG fallback for unsupported
+figures; cross-workspace reuse with explicit authorization; and full
+visual/accessibility review across compact, expanded, dark/light, and
+keyboard-only states.
 
 Not established by this slice: live-provider quality or model portability,
 startup/latency/memory improvement, packaged Windows/macOS/Linux behavior,
@@ -765,8 +768,9 @@ erase their saved user data as cleanup.
 
 ## 14. External research and known compatibility limits
 
-Research checked 2026-10-21. Pin actual package versions and recheck at the spike;
-repository `main`, package publication, and documentation versions can differ.
+Research checked 2026-10-22. Pin actual package versions and recheck before
+upgrades; repository `main`, package publication, and documentation versions
+can differ.
 
 - [OpenUI Svelte API](https://www.openui.com/docs/api-reference/svelte-lang):
   supplies component registration, prompt generation, streaming rendering,
@@ -775,6 +779,15 @@ repository `main`, package publication, and documentation versions can differ.
 - [Svelte package source](https://raw.githubusercontent.com/thesysdev/openui/main/packages/svelte-lang/package.json):
   inspected source declares `0.4.2`, Svelte 5 peers, and core `^0.4.1`.
   Do not combine it blindly with the React demo's 1.0 dependencies.
+- [OpenUI Lang introduction](https://github.com/thesysdev/openui/blob/main/docs/content/docs/openui-lang/index.mdx)
+  describes the line-oriented, positional language, model-facing component
+  library prompt, and client-side composition. [The Svelte adapter README](https://github.com/thesysdev/openui/blob/main/packages/svelte-lang/README.md)
+  documents `defineComponent`, `createLibrary`, prompt generation, parser,
+  streaming renderer, actions, and Svelte 5 support. Its current README says
+  adapter `0.4.x` targets Lang Core `0.4.x` / OpenUI Lang 0.5; Lang 1.0 support
+  currently requires the React renderer. Fella pins `@openuidev/lang-core`
+  `0.4.1` with `@openuidev/svelte-lang` `0.4.2` rather than mixing the React
+  1.x surface into its Svelte application.
 - [OpenUI 1.0 compatibility](https://www.openui.com/docs/openui-lang/whats-new):
   explains the language/runtime version distinction. The plan does not assume
   the Svelte package already runs all the demo's behaviors.
@@ -783,6 +796,12 @@ repository `main`, package publication, and documentation versions can differ.
   useful composition reference, not a drop-in Svelte application or a source
   of analytical authority. Its broad drawing/HTML capabilities need separate
   local-first and security decisions.
+- [Open Intelligent UI prompt options](https://raw.githubusercontent.com/thesysdev/open-intelligent-ui/main/src/lib/prompt-options.ts)
+  demonstrates the product pattern behind the expressive behavior: the model
+  composes layout, content, data, and input primitives, while task-specific
+  rules and local state/pure functions make controls useful. Its current
+  library is React-based; the whole component set and query/action behavior are
+  not a drop-in Svelte runtime.
 - [OpenUI renderer source](https://raw.githubusercontent.com/thesysdev/openui/main/packages/svelte-lang/src/lib/Renderer.svelte):
   accumulated-response parsing and callback-driven state require measurement
   and app-owned persistence/fallback.
@@ -797,6 +816,20 @@ repository `main`, package publication, and documentation versions can differ.
 - [Cursor agent/checkpoint documentation](https://cursor.com/docs/agent/overview):
   reference for reviewable work and restoration, not a requirement to clone an
   IDE or treat a checkpoint as permanent version history.
+
+Fella uses the official Svelte adapter to define its component library and
+generate prompts, and OpenUI Lang Core for parsing and expression evaluation.
+A Fella-owned Svelte host evaluates supported local state and bounded display
+functions, resolves data only from authorized saved analysis results, and
+renders Fella components. This host provides Fella's result/provenance and
+persistence boundary; presentation programs do not receive live query, shell,
+filesystem, arbitrary HTML/JavaScript, network, or general engine-action
+authority. Canonical persisted OpenUI calls are positional. A narrow adapter
+accepts named props for registered Fella components when models emit them,
+normalizes them before validation/persistence, and leaves already-positional
+programs unchanged. Declarative Vega-Lite remains subject to Fella's binding and
+resource limits; arbitrary executable/custom visual code stays disabled until
+the separate Level C security/export gate passes.
 
 ## 15. Completion and stop conditions
 

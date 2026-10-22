@@ -5,12 +5,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Generative workspace contract v1; executable task set v1.3 (2026-10-21).
+ * Generative workspace contract v1; executable task set v1.5 (2026-10-22).
  * Expected semantics are fixed before candidate execution and come from
  * docs/testing/GENERATIVE-WORKSPACE-v1.md, not observed rendering output.
  * v1.3 makes OpenUI the same-turn primary answer contract and removes the
- * separate presentation-propose request. This deterministic desktop suite
- * makes no live-model response-diversity or quality claim.
+ * separate presentation-propose request. v1.4 adds the approved local-state
+ * interaction and chat persistence path; changing it must make no new model,
+ * analytics, or source requests. This suite makes no live-model quality claim.
  *
  * 1. Recorded analysis -> persisted artifact -> Studio; narrative/order survive
  *    restart with exact saved values and no model call or source query.
@@ -23,6 +24,10 @@ import { join, resolve } from 'node:path';
  *    without gaining execution privileges or changing analytical verification.
  * 6. Deterministic export preserves exact values, null/empty/zero, evidence,
  *    caveats, reading order, and selected state without computation.
+ * 7. OpenUI controls update only local presentation state, derived content
+ *    responds in place, and the selected state survives reopening the chat.
+ * 8. A rejected literal Metric receives one finalizer-only correction turn;
+ *    the original analysis is not rerun and the corrected artifact is saved.
  *
  * Independent oracle: literal Q3=10/Q4=20 and integers beyond JS safe range.
  * No hosted credentials, generated model answer, existing test, or app module
@@ -293,12 +298,13 @@ const test = base.extend({
 	}
 });
 
-test('generative v1.3: one workspace turn returns and automatically renders its OpenUI answer', async ({ desktop }) => {
+test('generative v1.4: same-turn OpenUI is interactive and persists local state without rerunning analysis', async ({ desktop }) => {
 	test.setTimeout(90_000);
 	const { page, workspace, profile } = desktop;
 	const modelRequests = [];
 	const canonical = 'The workspace contains sales.csv with quarterly revenue data.';
-	const program = 'root = Document([Section("Workspace files", [Text("OPENUI_PRIMARY_SURFACE: sales.csv contains quarterly revenue data.")])])';
+	const program = `$quarter = "Q3"
+root = Document([Section("Workspace files", [SegmentedControl("Quarter", [{"value":"Q3","label":"Q3"},{"value":"Q4","label":"Q4"}], $quarter), Text("OPENUI_PRIMARY_SURFACE: " + $quarter + " revenue data from sales.csv.")])])`;
 	const server = createServer(async (request, response) => {
 		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
 			response.writeHead(404).end();
@@ -344,6 +350,10 @@ test('generative v1.3: one workspace turn returns and automatically renders its 
 		await expect(primary.locator('details.original')).not.toHaveAttribute('open');
 		await expect(primary.getByText(canonical, { exact: true })).toBeHidden();
 		await expect(primary).toContainText('Analysis · revision 1');
+		await expect(primary.getByRole('button', { name: 'Q3', exact: true })).toHaveAttribute('aria-pressed', 'true');
+		await primary.getByRole('button', { name: 'Q4', exact: true }).click();
+		await expect(primary).toContainText('OPENUI_PRIMARY_SURFACE: Q4 revenue data from sales.csv.');
+		await expect(primary.getByRole('button', { name: 'Q4', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
 		const methods = (await engineRequests(profile)).map(({ method }) => method);
 		expect(methods.filter((method) => method === 'ask')).toHaveLength(1);
@@ -367,6 +377,14 @@ test('generative v1.3: one workspace turn returns and automatically renders its 
 		const saved = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifacts[0].id });
 		expect(saved.revision.program).toBe(program);
 		expect(saved.run.result.text).toBe(canonical);
+		await page.reload();
+		await chooseWorkspace(page, 'commerce');
+		await page.getByRole('button', { name: `Open conversation: ${question}`, exact: true }).click();
+		const reopened = page.locator('.msg.assistant').last().locator('.analytical-answer');
+		await expect(reopened).toContainText('OPENUI_PRIMARY_SURFACE: Q4 revenue data from sales.csv.');
+		await expect(reopened.getByRole('button', { name: 'Q4', exact: true })).toHaveAttribute('aria-pressed', 'true');
+		expect(modelRequests).toHaveLength(2);
+		expect((await engineRequests(profile)).filter(({ method }) => method === 'ask')).toHaveLength(1);
 	} finally {
 		await test.info().attach('mock-provider-requests', {
 			body: JSON.stringify(modelRequests.map(({ tools, messages }) => ({
@@ -376,6 +394,84 @@ test('generative v1.3: one workspace turn returns and automatically renders its 
 			contentType: 'application/json'
 		});
 		await writeFile(join(profile, 'mock-provider-requests.json'), JSON.stringify(modelRequests, null, 2));
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
+test('generative v1.5: rejected literal Metric gets finalizer-only repair without rerunning analysis', async ({ desktop }) => {
+	test.setTimeout(90_000);
+	const { page, workspace, profile } = desktop;
+	const modelRequests = [];
+	const canonical = 'The workspace contains sales.csv with quarterly revenue data.';
+	const correctedProgram = 'root = Document([Section("Workspace summary", [Text("CORRECTED_OPENUI_FINALIZER: sales.csv contains quarterly revenue data.")])])';
+	const server = createServer(async (request, response) => {
+		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+			response.writeHead(404).end();
+			return;
+		}
+		let body = '';
+		for await (const chunk of request) body += chunk;
+		const payload = JSON.parse(body);
+		modelRequests.push(payload);
+		const call = modelRequests.length === 1
+			? { id: 'call_repair_inventory', function: { name: 'list_files', arguments: JSON.stringify({ kind: 'all', offset: 0, limit: 40 }) } }
+			: modelRequests.length === 2
+				? { id: 'call_invalid_metric', function: { name: 'fella_openui_answer', arguments: JSON.stringify({
+					answer: canonical,
+					presentation_program: 'root = Document([Metric(null, null, null, "Q4 revenue", "USD", 80)])'
+				}) } }
+				: { id: 'call_corrected_openui', function: { name: 'fella_openui_answer', arguments: JSON.stringify({ answer: canonical, presentation_program: correctedProgram }) } };
+		response.writeHead(200, { 'content-type': 'application/json' }).end(`${JSON.stringify({
+			choices: [{ index: 0, message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', ...call }] }, finish_reason: 'tool_calls' }],
+			usage: { prompt_tokens: 12, completion_tokens: 8 }
+		})}\n`);
+	});
+	await new Promise((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	const address = server.address();
+	expect(address && typeof address === 'object').toBeTruthy();
+
+	try {
+		await rm(join(profile, 'enforce-engine-budget'), { force: true });
+		await invoke(page, 'set_api_key', { provider: 'custom', key: 'generative-e2e-local-key' });
+		await invoke(page, 'set_settings', {
+			settings: { provider: 'custom', base_url: `http://127.0.0.1:${address.port}/v1`, model: 'fella-openui-repair-e2e' }
+		});
+
+		const composer = page.getByRole('combobox', { name: 'Ask about commerce', exact: true });
+		await composer.fill('Summarize what files are available in this workspace.');
+		await composer.press('Enter');
+		const assistant = page.locator('.msg.assistant').last();
+		const primary = assistant.locator('.analytical-answer');
+		await expect(primary).toContainText('CORRECTED_OPENUI_FINALIZER', { timeout: 30_000 });
+
+		expect(modelRequests).toHaveLength(3);
+		const repairMessages = modelRequests[2].messages.filter(({ role }) => role === 'tool');
+		expect(repairMessages.some(({ content }) => /Metric values cannot be copied into the presentation/.test(content ?? ''))).toBe(true);
+		expect(modelRequests[2].tools.map((tool) => tool.function.name)).toEqual(['fella_openui_answer']);
+		const methods = (await engineRequests(profile)).map(({ method }) => method);
+		expect(methods.filter((method) => method === 'ask')).toHaveLength(1);
+		expect(methods.filter((method) => method === 'artifact_create')).toHaveLength(1);
+		expect(methods).not.toContain('run_sql_direct');
+
+		const turnId = await assistant.getAttribute('data-analysis-turn-id');
+		expect(turnId).toBeTruthy();
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		expect(turn.result).toMatchObject({ text: canonical, presentation_program: correctedProgram });
+		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
+		expect(artifacts).toHaveLength(1);
+		const saved = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifacts[0].id });
+		expect(saved.revision.program).toBe(correctedProgram);
+	} finally {
+		await test.info().attach('mock-provider-requests', {
+			body: JSON.stringify(modelRequests.map(({ tools, messages }) => ({
+				tools: tools?.map((tool) => tool.function.name) ?? [],
+				messages: messages?.map(({ role, content, tool_calls, name }) => ({ role, content, tool_calls, name })) ?? []
+			})), null, 2),
+			contentType: 'application/json'
+		});
 		await new Promise((resolve) => server.close(resolve));
 	}
 });

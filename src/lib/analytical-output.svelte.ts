@@ -51,6 +51,7 @@ export async function ensureAnalyticalOutput(
 			if (!checked.valid) {
 				throw new Error(`The OpenUI answer could not be validated. ${checked.issues.map(item => item.message).join('; ').slice(0, 2400)}`);
 			}
+			const canonicalProgram = checked.normalizedProgram;
 			const target = message.artifact_target;
 			let resolved: ResolvedArtifact;
 			if (target) {
@@ -61,7 +62,7 @@ export async function ensureAnalyticalOutput(
 				} else {
 					resolved = await bridge.artifactRevise(workspace, target.artifactId, target.baseRevision, {
 						run_id: turnId,
-						program,
+						program: canonicalProgram,
 						change_note: target.instruction
 					});
 				}
@@ -72,7 +73,7 @@ export async function ensureAnalyticalOutput(
 				if (existing) artifact = existing;
 				else {
 					const title = run.question.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Analysis';
-					artifact = await bridge.artifactCreate(workspace, turnId, title, program);
+					artifact = await bridge.artifactCreate(workspace, turnId, title, canonicalProgram);
 				}
 				resolved = await bridge.artifactResolve(workspace, artifact.id);
 			}

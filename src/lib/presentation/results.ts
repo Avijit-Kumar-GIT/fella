@@ -34,6 +34,33 @@ export function requireResult(results: BoundResult[], id: string): BoundResult {
 	return result;
 }
 
+/** Convert result-backed local shaping into a display-only table/chart source. */
+export function derivedRowsResult(base: BoundResult, rows: unknown[]): BoundResult {
+	if (!Array.isArray(rows) || rows.length > limits.rowsPerResult) throw new Error('A derived display exceeds the saved-row limit.');
+	const records = rows.map((row, index) => {
+		if (!row || typeof row !== 'object' || Array.isArray(row)) throw new Error(`Derived row ${index + 1} is not a row object.`);
+		const record = row as Record<string, unknown>;
+		if (Object.keys(record).some((key) => ['__proto__', 'constructor', 'prototype'].includes(key))) throw new Error('Derived rows contain an unsafe field.');
+		return record;
+	});
+	const columns = [...new Set(records.flatMap((row) => Object.keys(row)))].slice(0, 100);
+	if (!columns.length) columns.push(...base.columns);
+	const values = records.map((row) => columns.map((column) => {
+		const value = row[column];
+		if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value)) return value;
+		throw new Error('Derived rows may contain only scalar display values.');
+	}));
+	if (values.length * columns.length > limits.cells) throw new Error('A derived display exceeds the presentation cell limit.');
+	return {
+		id: base.id,
+		columns,
+		rows: values,
+		exact_rows: values.map((row) => row.map((value) => value === null ? 'null' : String(value))),
+		row_count: base.complete ? values.length : Math.max(base.row_count, values.length),
+		complete: base.complete
+	};
+}
+
 export function exactValue(result: BoundResult, row: number, field: string): string {
 	const col = result.columns.indexOf(field);
 	if (col < 0 || !Number.isInteger(row) || row < 0 || row >= result.rows.length) throw new Error('The saved value reference is invalid.');
@@ -51,18 +78,23 @@ export function sanitizeState(state: PresentationState = {}): PresentationState 
 	const clean: PresentationState = Object.create(null);
 	for (const [key, value] of Object.entries(state).slice(0, 160)) {
 		if (key.startsWith('tab:') && typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 12) clean[key] = value;
+		if (/^\$[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(key) && (value === null || typeof value === 'string' && value.length <= 256 || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1e12)) clean[key] = value;
 		if (key.startsWith('filter:') && value && typeof value === 'object') {
 			const filter = value as FilterSelection;
-			if (typeof filter.resultId === 'string' && typeof filter.field === 'string' && (typeof filter.value === 'string' || filter.value === null)) clean[key] = { resultId: filter.resultId, field: filter.field, value: filter.value };
+			if (typeof filter.resultId === 'string' && filter.resultId.length <= 240 && typeof filter.field === 'string' && filter.field.length <= 240 && (typeof filter.value === 'string' && filter.value.length <= limits.text || filter.value === null)) clean[key] = { resultId: filter.resultId, field: filter.field, value: filter.value };
 		}
 	}
 	return clean;
 }
 
 /** Hydrated state is presentation-specific. Stale/hidden filters cannot affect another program. */
-export function resolvePresentationState(root: ElementNode, state: PresentationState, results: BoundResult[]): PresentationState {
+export function resolvePresentationState(root: ElementNode, state: PresentationState, results: BoundResult[], stateDefaults: Record<string, unknown> = {}): PresentationState {
 	const clean = sanitizeState(state);
 	const resolved: PresentationState = Object.create(null);
+	for (const [name, defaultValue] of Object.entries(stateDefaults)) {
+		const candidate = clean[name];
+		resolved[name] = candidate !== undefined && (typeof candidate === typeof defaultValue || candidate === null && defaultValue === null) ? candidate : defaultValue;
+	}
 	function visit(node: ElementNode) {
 		if (node.typeName === 'Tabs') {
 			const key = `tab:${String(node.props.name)}`;

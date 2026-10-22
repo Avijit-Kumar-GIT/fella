@@ -198,6 +198,49 @@ arbitrary code, remote resources, and unrecorded data transforms. Broadening
 that declarative vocabulary without weakening provenance is a separate design
 and implementation gap.
 
+## Interactive OpenUI runtime — task set v1.11
+
+Defined 2026-10-22 from the product requirement that OpenUI be the default,
+expressive answer surface—not a static mockup or an optional second pass. This
+supersedes the static-only state/expression constraint recorded in v1.5; those
+older results remain historical and their safety expectations are retained.
+
+19. The Svelte host evaluates supported OpenUI expressions, local `$` state,
+    `@Each` templates, and bounded pure functions over supplied saved-result
+    rows. The model chooses component composition and answer-specific structure
+    from the registered native Svelte vocabulary. There is no fixed visualization
+    template.
+20. Selectors, segmented controls, checkboxes, and explicitly pressed local
+    actions update only display state. Dependent content recomputes in place;
+    no analysis, model, source, or workspace mutation is triggered. Chat and
+    Studio selections persist and restore with their existing records.
+21. Every analytical source remains bound to saved results. Display-derived
+    aggregates, filters, sorting, and chart/table views are labeled where they
+    could be mistaken for independently verified analysis; exact original
+    values remain inspectable. Incomplete source scope remains visible.
+22. Queries, mutations, arbitrary code, remote data, unsafe chart sources, and
+    unregistered state are rejected. Fella's Rust engine retains authority over
+    analytical execution and verification. Existing `fella-openui-v1` artifacts
+    remain readable; new artifacts use the versioned v2 presentation contract.
+
+### Finalizer-only repair journey — desktop task set v1.5
+
+Defined before adding the journey. If Rust rejects a final OpenUI program for a
+copied literal Metric value, it must return an actionable correction to the
+model and restrict the next model request to the OpenUI finalizer. A valid
+correction must complete the original answer and persist its presentation; it
+must not rerun the analysis or grant the presentation access to analysis tools.
+The deterministic desktop test proves this protocol path with a controlled
+provider response. It does not prove that an arbitrary live model will repair
+every invalid program; that remains a provider-evaluation measure.
+
+The deterministic OpenUI contract adds real parser/evaluator, local-state,
+derived-result, `@Each`, Svelte-rendering, action, export, safety, and fallback
+coverage. A desktop interaction verifies state persistence after reopening a
+conversation and confirms the control causes no second model or analysis call.
+Live model runs are separately reported: passing these contracts does not prove
+answer accuracy, visual appropriateness, or general model quality.
+
 ## OpenUI grammar compatibility — task set v1.8
 
 Defined 2026-10-22 before changing the validator. OpenUI accepts grouping
@@ -448,3 +491,54 @@ path against a deterministic mock, not provider compliance, view diversity,
 answer-specific design quality, or model latency/token cost. Legacy chart data
 and renderers remain available for previously saved analytical history; new
 workspace answers do not expose that chart-generation path.
+
+### Slice 5 — interactive OpenUI runtime and finalizer guard (2026-10-22)
+
+OpenUI now acts as an interactive, model-composed answer surface rather than a
+static chart wrapper. The host evaluates OpenUI Lang expressions, local state,
+`@Each`, and bounded pure display functions over authorized saved-result rows.
+Controls update persisted presentation state and derived views locally; they do
+not request another analysis. The Fella component library includes composable
+content/layout primitives, local controls, result-bound tables/metrics, and a
+declarative Vega-Lite surface. Model composition is not selected from a chart
+family enum, but remains within the registered Fella component and safety
+vocabulary. Arbitrary generated code remains disabled.
+
+Integration follows the actual supported package boundary checked against
+upstream sources: the pinned Svelte adapter (`@openuidev/svelte-lang` 0.4.2)
+and Lang Core (0.4.1) provide Svelte component registration, prompt/schema
+generation, and the actual OpenUI parser/evaluator. Fella owns the reactive
+Svelte host because presentation state must be persisted with Fella records and
+all data must resolve from authorized analysis results. It does not embed the
+React Open Intelligent UI application. Canonical saved OpenUI calls are
+positional; a narrow, registered-component-only adapter accepts named props
+some models emit and normalizes them before full validation and persistence.
+References and implementation rationale are recorded in the [plan's upstream
+research section](../OPENUI-ANALYTICAL-WORKSPACE-PLAN.md#14-external-research-and-known-compatibility-limits).
+
+Live Gemma 4 31B compatibility was checked through the configured Ollama Cloud
+provider. One latest run generated a question-specific composition, passed
+validation, rendered, and persisted in 7.4 seconds. A prior output in this
+iteration copied KPI values into literal Metric props and was rejected; the
+finalizer now receives explicit instructions and Rust gives the existing
+bounded finalizer-only correction turn a targeted error, without re-running
+analysis. The successful latest live run does not establish that this correction
+branch was exercised, nor analytical accuracy or general provider quality.
+
+Validation after the final code change:
+
+- `pnpm test:analytical-presentation`: 76 passed; `pnpm test:studio-report`:
+  3 groups passed.
+- `cargo test --manifest-path backend/Cargo.toml --lib --locked openui_answer`:
+  6 passed, including literal Metric rejection and exact result-binding cases.
+- `pnpm check`: 0 errors, 0 warnings; `pnpm electron:build`: passed with the
+  existing large-chunk warning.
+- `pnpm test:e2e:generative`: 9 passed, 0 failed. The task-set v1.5 journey
+  confirms a literal-Metric rejection receives a finalizer-only repair and
+  persists a corrected artifact with one original `ask` and no analysis rerun.
+
+No model-generated score is treated as a quality measure. Still unmeasured:
+answer correctness across representative analyst tasks, independent visual
+appropriateness, task-to-task composition diversity, retry rate, model portability,
+startup/memory, and packaged Windows/macOS behavior. This slice does not complete
+the broader product roadmap or the separately gated custom-renderer work.

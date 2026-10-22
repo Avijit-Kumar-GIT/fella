@@ -88,7 +88,7 @@ fn openui_answer_schema() -> ToolSchema {
     ToolSchema {
         name: OPENUI_ANSWER_TOOL.into(),
         description: format!(
-            "Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_program` is the user-visible OpenUI Lang presentation of that same answer. Do not call this until analysis is complete. Do not call it in the same response as any other tool. Use only result IDs and fields previously returned in this turn; never invent values. When no result table is available, create a substantive text-first OpenUI presentation. The program must be complete and begin with root = Document([...]).\n\n{instructions}"
+            "Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_program` is the user-visible OpenUI Lang presentation of that same answer. Do not call this until analysis is complete. Do not call it in the same response as any other tool. Use only result IDs and fields previously returned in this turn; never invent values. Do not copy numeric results into Metric value props: bind exact cells by result ID, field, and zero-based row, or use a value expression derived from @Rows(). Fella rejects literal Metric values and will ask you to repair the presentation. When no result table is available, create a substantive text-first OpenUI presentation. The complete program must contain one explicit root = Document([...]) statement; local state defaults and reusable component statements may appear before or after it.\n\n{instructions}"
         ),
         parameters: serde_json::json!({
             "type":"object",
@@ -175,6 +175,241 @@ fn validate_openui_delimiters(program: &str) -> EngineResult<()> {
     Ok(())
 }
 
+fn has_openui_document_root(program: &str) -> bool {
+    program.lines().any(|line| {
+        let line = line.trim_start();
+        if line.starts_with('#') || line.starts_with("//") {
+            return false;
+        }
+        line.split_once('=').is_some_and(|(name, expression)| {
+            name.trim() == "root" && expression.trim_start().starts_with("Document(")
+        })
+    })
+}
+
+fn openui_call_close(chars: &[char], open: usize) -> Option<usize> {
+    let mut brackets = vec![')'];
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = open + 1;
+    while index < chars.len() {
+        let character = chars[index];
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(character, '"' | '\'') {
+            quote = Some(character);
+        } else if matches!(character, '(' | '[' | '{') {
+            brackets.push(match character {
+                '(' => ')',
+                '[' => ']',
+                _ => '}',
+            });
+        } else if matches!(character, ')' | ']' | '}') {
+            if brackets.pop() != Some(character) {
+                return None;
+            }
+            if brackets.is_empty() {
+                return Some(index);
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+fn split_openui_arguments(source: &[char]) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut brackets = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = 0;
+    for (index, character) in source.iter().copied().enumerate() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(character, '"' | '\'') {
+            quote = Some(character);
+        } else if matches!(character, '(' | '[' | '{') {
+            brackets.push(match character {
+                '(' => ')',
+                '[' => ']',
+                _ => '}',
+            });
+        } else if matches!(character, ')' | ']' | '}') {
+            let _ = brackets.pop();
+        } else if character == ',' && brackets.is_empty() {
+            let value = source[start..index].iter().collect::<String>();
+            if !value.trim().is_empty() {
+                args.push(value.trim().to_owned());
+            }
+            start = index + 1;
+        }
+    }
+    let value = source[start..].iter().collect::<String>();
+    if !value.trim().is_empty() {
+        args.push(value.trim().to_owned());
+    }
+    args
+}
+
+fn openui_named_argument(argument: &str) -> Option<(String, String)> {
+    let chars: Vec<char> = argument.chars().collect();
+    let mut brackets = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    for (index, character) in chars.iter().copied().enumerate() {
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            continue;
+        }
+        if matches!(character, '"' | '\'') {
+            quote = Some(character);
+        } else if matches!(character, '(' | '[' | '{') {
+            brackets.push(match character {
+                '(' => ')',
+                '[' => ']',
+                _ => '}',
+            });
+        } else if matches!(character, ')' | ']' | '}') {
+            if brackets.pop() != Some(character) {
+                return None;
+            }
+        } else if character == ':' && brackets.is_empty() {
+            let name = chars[..index].iter().collect::<String>();
+            let name = name.trim();
+            if !name.is_empty()
+                && name.chars().enumerate().all(|(offset, ch)| {
+                    ch == '_' || ch.is_ascii_alphanumeric() && (offset > 0 || !ch.is_ascii_digit())
+                })
+            {
+                let value = chars[index + 1..].iter().collect::<String>();
+                return Some((name.to_owned(), value.trim().to_owned()));
+            }
+        }
+    }
+    None
+}
+
+fn is_openui_literal_value(value: &str) -> bool {
+    let value = value.trim();
+    if value == "true" || value == "false" {
+        return true;
+    }
+    if value.parse::<f64>().is_ok() {
+        return true;
+    }
+    let mut chars = value.chars();
+    let first = chars.next();
+    matches!(first, Some('"' | '\'')) && value.chars().last() == first && value.len() >= 2
+}
+
+/// Catch directly-authored Metric values before returning to the UI. The
+/// frontend remains the authoritative OpenUI/schema validator; this narrow
+/// preflight gives the existing finalizer another model turn to replace a
+/// hard-coded number or string with a saved-row binding.
+fn validate_openui_metric_bindings(program: &str) -> EngineResult<()> {
+    let chars: Vec<char> = program.chars().collect();
+    let mut index = 0;
+    let mut quote = None;
+    let mut escaped = false;
+    while index < chars.len() {
+        let character = chars[index];
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+        if matches!(character, '"' | '\'') {
+            quote = Some(character);
+            index += 1;
+            continue;
+        }
+        if character == '#' || character == '/' && chars.get(index + 1) == Some(&'/') {
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        if character == '_' || character.is_ascii_alphabetic() {
+            let start = index;
+            index += 1;
+            while index < chars.len()
+                && (chars[index] == '_' || chars[index].is_ascii_alphanumeric())
+            {
+                index += 1;
+            }
+            let name = chars[start..index].iter().collect::<String>();
+            if name != "Metric" {
+                continue;
+            }
+            let mut open = index;
+            while open < chars.len() && chars[open].is_whitespace() {
+                open += 1;
+            }
+            if chars.get(open) != Some(&'(') {
+                continue;
+            }
+            let Some(close) = openui_call_close(&chars, open) else {
+                continue;
+            };
+            let args = split_openui_arguments(&chars[open + 1..close]);
+            let mut positional = 0usize;
+            let mut value = None;
+            for argument in args {
+                if let Some((prop, prop_value)) = openui_named_argument(&argument) {
+                    if prop == "value" {
+                        value = Some(prop_value);
+                    }
+                } else {
+                    if positional == 5 {
+                        value = Some(argument);
+                    }
+                    positional += 1;
+                }
+            }
+            if value
+                .as_deref()
+                .is_some_and(|value| value.trim() != "null" && is_openui_literal_value(value))
+            {
+                return Err(EngineError::msg(
+                    "Metric values cannot be copied into the presentation as literals. Bind an exact saved result by result ID, field, and row, or derive a display-only value from @Rows().",
+                ));
+            }
+            continue;
+        }
+        index += 1;
+    }
+    Ok(())
+}
+
 fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnswer> {
     let text = arguments["answer"].as_str().unwrap_or_default().trim();
     let program = arguments["presentation_program"]
@@ -189,12 +424,13 @@ fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnsw
             "OpenUI answer has an invalid presentation program",
         ));
     }
-    if !program.starts_with("root = Document(") {
+    if !has_openui_document_root(program) {
         return Err(EngineError::msg(
-            "OpenUI presentation must begin with root = Document(...)",
+            "OpenUI presentation must contain root = Document(...)",
         ));
     }
     validate_openui_delimiters(program)?;
+    validate_openui_metric_bindings(program)?;
     Ok(OpenUiAnswer {
         text: text.to_owned(),
         program: program.to_owned(),
@@ -2421,7 +2657,9 @@ sandbox with no filesystem, network, environment, or subprocess access."
             "Choose an answer-specific presentation based on the question and the actual result shape. \
 Fella's OpenUI output is the answer surface: compose it creatively from saved evidence-bound components, \
 avoid repetitive templates, and do not add charts, metrics, tables, or controls unless they help explain \
-the result. Presentation choices never change analysis, source scope, or verification."
+the result. Bind every displayed analytical value to a returned result; do not copy result numbers into \
+Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
+display-only calculations use @Rows(). Presentation choices never change analysis, source scope, or verification."
                 .into(),
         );
     }
@@ -2625,6 +2863,52 @@ mod tests {
         ] {
             assert!(parse_openui_answer(&arguments).is_err());
         }
+    }
+
+    #[test]
+    fn openui_answer_accepts_state_and_named_statements_before_the_document_root() {
+        let answer = parse_openui_answer(&serde_json::json!({
+            "answer": "A local selector can change this display.",
+            "presentation_program": "$quarter = \"Q3\"\nheading = Text($quarter + \" revenue\")\nroot = Document([heading])"
+        }))
+        .unwrap();
+
+        assert!(answer.program.contains("root = Document("));
+    }
+
+    #[test]
+    fn openui_answer_requests_repair_for_literal_metric_values_only() {
+        for metric in [
+            "Metric(null, null, null, \"Q4 revenue\", \"USD\", 80)",
+            "Metric(resultId: null, field: null, row: null, title: \"Q4 revenue\", value: \"$80\")",
+        ] {
+            let error = parse_openui_answer(&serde_json::json!({
+                "answer": "Q4 revenue was $80.",
+                "presentation_program": format!("root = Document([{metric}])")
+            }))
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("cannot be copied into the presentation"));
+        }
+
+        for metric in [
+            "Metric(\"evidence-1\", \"revenue\", 0, \"Q4 revenue\", \"USD\")",
+            "Metric(null, null, null, \"Revenue\", null, @Sum(@Rows(\"evidence-1\").revenue))",
+            "Metric(null, null, null, \"Revenue\", null, revenue)",
+        ] {
+            parse_openui_answer(&serde_json::json!({
+                "answer": "Revenue is shown with its saved-result binding.",
+                "presentation_program": format!("revenue = @Sum(@Rows(\"evidence-1\").revenue)\nroot = Document([{metric}])")
+            }))
+            .unwrap();
+        }
+
+        parse_openui_answer(&serde_json::json!({
+            "answer": "The text mentions a Metric call, but it is just prose.",
+            "presentation_program": "root = Document([Text(\"Metric(null, null, null, 'Revenue', null, 80) is not code\")])"
+        }))
+        .unwrap();
     }
 
     #[test]

@@ -26,10 +26,10 @@ export interface PresentationExport {
 	resultIds: string[];
 }
 
-export const PRESENTATION_VERSION = 'fella-openui-v1';
+export const PRESENTATION_VERSION = 'fella-openui-v2';
 export const PRESENTATION_LIMITS = {
 	programBytes: 100_000,
-	components: 160,
+	components: 240,
 	depth: 24,
 	results: 32,
 	rowsPerResult: 10_000,

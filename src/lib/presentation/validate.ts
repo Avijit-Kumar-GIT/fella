@@ -1,16 +1,21 @@
-import { createParser, parseExpression, split, tokenize, toNumber, type ASTNode, type ElementNode, type Token } from '@openuidev/lang-core';
+import { BUILTIN_NAMES, createParser, parseExpression, split, tokenize, toNumber, type ASTNode, type ElementNode, type Token } from '@openuidev/lang-core';
 import { componentDefinitions, type ComponentName } from './schemas';
 import { presentationSchema } from './manifest';
-import { requireResult, validateResults } from './results';
+import { derivedRowsResult, requireResult, validateResults } from './results';
 import { validateChartSpec } from './chart';
 import { PRESENTATION_LIMITS as limits, type BoundResult, type PresentationIssue } from './types';
+import { createPresentationStore, evaluatePresentationTree } from './runtime';
 
 export interface PresentationValidation {
 	valid: boolean;
+	/** Default-state, evaluated tree retained for callers that inspect validated props. */
 	root: ElementNode | null;
+	/** Parsed dynamic OpenUI tree consumed by the reactive host renderer. */
+	sourceRoot: ElementNode | null;
 	normalizedProgram: string;
 	issues: PresentationIssue[];
 	resultIds: string[];
+	stateDefaults: Record<string, unknown>;
 }
 
 function skipDoubleQuotedString(source: string, start: number): number {
@@ -85,6 +90,201 @@ function stripOpenUiComments(input: string): string {
 
 function normalizeOpenUiSource(input: string): string {
 	return stripOpenUiComments(stripOpenUiFences(input.trim())).trim();
+}
+
+function findMatchingDelimiter(source: string, start: number): number {
+	const opening = source[start];
+	const closers: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
+	if (!Object.hasOwn(closers, opening)) return -1;
+	const stack = [closers[opening]];
+	let quote = '';
+	for (let index = start + 1; index < source.length; index++) {
+		const char = source[index];
+		if (quote) {
+			if (char === '\\') index++;
+			else if (char === quote) quote = '';
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; continue; }
+		if (Object.hasOwn(closers, char)) stack.push(closers[char]);
+		else if (')]}'.includes(char)) {
+			if (stack.pop() !== char) return -1;
+			if (!stack.length) return index;
+		}
+	}
+	return -1;
+}
+
+function splitComponentArguments(source: string): string[] | null {
+	if (!source.trim()) return [];
+	const args: string[] = [];
+	let start = 0;
+	let quote = '';
+	const stack: string[] = [];
+	const closers: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
+	for (let index = 0; index < source.length; index++) {
+		const char = source[index];
+		if (quote) {
+			if (char === '\\') index++;
+			else if (char === quote) quote = '';
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; continue; }
+		if (Object.hasOwn(closers, char)) stack.push(closers[char]);
+		else if (')]}'.includes(char)) {
+			if (stack.pop() !== char) return null;
+		} else if (char === ',' && !stack.length) {
+			const arg = source.slice(start, index).trim();
+			if (arg) args.push(arg);
+			start = index + 1;
+		}
+	}
+	if (quote || stack.length) return null;
+	const tail = source.slice(start).trim();
+	if (tail) args.push(tail);
+	return args;
+}
+
+function namedComponentArgument(argument: string): { name: string; value: string } | null {
+	let quote = '';
+	const stack: string[] = [];
+	const closers: Record<string, string> = { '(': ')', '[': ']', '{': '}' };
+	for (let index = 0; index < argument.length; index++) {
+		const char = argument[index];
+		if (quote) {
+			if (char === '\\') index++;
+			else if (char === quote) quote = '';
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; continue; }
+		if (Object.hasOwn(closers, char)) stack.push(closers[char]);
+		else if (')]}'.includes(char)) {
+			if (stack.pop() !== char) return null;
+		} else if (char === ':' && !stack.length) {
+			const name = argument.slice(0, index).trim();
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+			const value = argument.slice(index + 1).trim();
+			if (!value) throw new Error(`Named component prop “${name}” needs a value.`);
+			return { name, value };
+		}
+	}
+	return null;
+}
+
+function requiredComponentProps(name: ComponentName): Set<string> {
+	const cached = requiredPropsByComponent.get(name);
+	if (cached) return cached;
+	const definitions = presentationSchema().$defs as Record<string, { required?: string[] }>;
+	const required = new Set(definitions[name]?.required ?? []);
+	requiredPropsByComponent.set(name, required);
+	return required;
+}
+
+const requiredPropsByComponent = new Map<ComponentName, Set<string>>();
+
+/**
+ * OpenUI Lang calls are positional. Model-facing JSON-schema signatures can
+ * nevertheless lead models to emit `Card(..., title: "...")`. Accept that
+ * ergonomic form only for registered Fella components, then normalize it to
+ * native OpenUI positional calls before parsing or persistence.
+ */
+function normalizeNamedComponentProps(source: string): string {
+	let rewritten = '';
+	let index = 0;
+	while (index < source.length) {
+		const char = source[index];
+		if (char === '"' || char === "'") {
+			const end = skipQuotedString(source, index);
+			rewritten += source.slice(index, end);
+			index = end;
+			continue;
+		}
+		if (!/[A-Za-z_]/.test(char)) { rewritten += char; index++; continue; }
+		let nameEnd = index + 1;
+		while (nameEnd < source.length && /[A-Za-z0-9_]/.test(source[nameEnd])) nameEnd++;
+		const name = source.slice(index, nameEnd);
+		let open = nameEnd;
+		while (open < source.length && /\s/.test(source[open])) open++;
+		if (!Object.hasOwn(componentDefinitions, name) || source[open] !== '(') {
+			rewritten += source.slice(index, nameEnd);
+			index = nameEnd;
+			continue;
+		}
+		const close = findMatchingDelimiter(source, open);
+		if (close === -1) {
+			rewritten += source.slice(index, nameEnd);
+			index = nameEnd;
+			continue;
+		}
+		const body = source.slice(open + 1, close);
+		const args = splitComponentArguments(body);
+		if (!args) {
+			rewritten += source.slice(index, nameEnd);
+			index = nameEnd;
+			continue;
+		}
+		const namedArgs = args.map(namedComponentArgument);
+		if (!namedArgs.some(Boolean)) {
+			const normalizedBody = normalizeNamedComponentProps(body);
+			rewritten += `${source.slice(index, open + 1)}${normalizedBody})`;
+			index = close + 1;
+			continue;
+		}
+		const nestedArgs = args.map(normalizeNamedComponentProps);
+
+		const propNames = Object.keys(componentDefinitions[name as ComponentName].props.shape);
+		const propIndexes = new Map(propNames.map((prop, propIndex) => [prop, propIndex]));
+		const required = requiredComponentProps(name as ComponentName);
+		const values: (string | undefined)[] = Array(propNames.length).fill(undefined);
+		let positionalIndex = 0;
+		let hasNamed = false;
+		for (let argIndex = 0; argIndex < nestedArgs.length; argIndex++) {
+			const named = namedArgs[argIndex];
+			if (named) {
+				hasNamed = true;
+				const propIndex = propIndexes.get(named.name);
+				if (propIndex === undefined) throw new Error(`Unknown named prop “${named.name}” on ${name}.`);
+				if (values[propIndex] !== undefined) throw new Error(`The ${name} prop “${named.name}” was supplied more than once.`);
+				values[propIndex] = normalizeNamedComponentProps(named.value);
+			} else {
+				if (hasNamed) throw new Error(`${name} positional arguments cannot follow named props.`);
+				if (positionalIndex >= propNames.length) throw new Error(`${name} has too many positional arguments.`);
+				values[positionalIndex++] = nestedArgs[argIndex];
+			}
+		}
+		const lastValue = values.reduce((last, value, propIndex) => value === undefined ? last : propIndex, -1);
+		for (let propIndex = 0; propIndex <= lastValue; propIndex++) {
+			if (values[propIndex] !== undefined) continue;
+			const prop = propNames[propIndex];
+			if (required.has(prop)) throw new Error(`The required ${name} prop “${prop}” is missing.`);
+			values[propIndex] = 'null';
+		}
+		rewritten += `${name}${source.slice(nameEnd, open + 1)}${values.slice(0, lastValue + 1).join(', ')})`;
+		index = close + 1;
+	}
+	return rewritten;
+}
+
+function skipQuotedString(source: string, start: number): number {
+	const quote = source[start];
+	let index = start + 1;
+	while (index < source.length) {
+		if (source[index] === '\\') index += 2;
+		else if (source[index] === quote) return index + 1;
+		else index++;
+	}
+	return index;
+}
+
+function stripOmittedOptionalProps(value: unknown): void {
+	if (Array.isArray(value)) { value.forEach(stripOmittedOptionalProps); return; }
+	if (!value || typeof value !== 'object' || (value as ElementNode).type !== 'element') return;
+	const node = value as ElementNode;
+	const required = requiredComponentProps(node.typeName as ComponentName);
+	for (const [name, prop] of Object.entries(node.props)) {
+		if (prop === null && !required.has(name)) delete node.props[name];
+		else if (name === 'children') stripOmittedOptionalProps(prop);
+	}
 }
 
 /** The OpenUI lexer skips unknown characters; reject those before trusting its tokens. */
@@ -212,72 +412,145 @@ function assertCompleteOpenUiExpression(tokens: Token[]): void {
 	if (position !== tokens.length) throw new Error('The presentation contains trailing or unparsed OpenUI syntax.');
 }
 
-function validateStaticAst(node: ASTNode, depth = 0, state = { nodes: 0 }): void {
+const unsafeObjectKeys = new Set(['__proto__', 'constructor', 'prototype']);
+
+function validateSafeAst(node: ASTNode, declaredState: Set<string>, depth = 0, state = { nodes: 0 }, scoped = new Set<string>()): void {
 	if (++state.nodes > limits.programBytes || depth > limits.depth * 3) throw new Error('The presentation expression is too complex.');
 	switch (node.k) {
-		case 'Str': case 'Bool': case 'Null': case 'Ref': case 'Ph': case 'StateRef': case 'RuntimeRef': return;
+		case 'Str': case 'Bool': case 'Null': return;
 		case 'Num':
-			if (!Number.isFinite(node.v)) throw new Error('Presentation numbers must be finite.');
+			if (!Number.isFinite(node.v) || Math.abs(node.v) > 1e15) throw new Error('Presentation numbers must be finite and bounded.');
 			return;
-		case 'Comp':
-			if (!Object.hasOwn(componentDefinitions, node.name)) throw new Error(`Unsupported component or builtin “${node.name}”.`);
-			if (node.mappedProps) throw new Error('Named props are not supported in analytical presentations.');
-			node.args.forEach((arg) => validateStaticAst(arg, depth + 1, state));
+		case 'Ref':
+			if (!scoped.has(node.n) && node.n.startsWith('$')) throw new Error('Reactive variables must use OpenUI state references.');
 			return;
-		case 'Arr': node.els.forEach((item) => validateStaticAst(item, depth + 1, state)); return;
-		case 'Obj': {
-			const keys = node.entries.map(([key]) => key);
-			if (new Set(keys).size !== keys.length || keys.some((key) => ['__proto__', 'constructor', 'prototype'].includes(key))) throw new Error('Duplicate or unsafe object keys are not allowed.');
-			node.entries.forEach(([, item]) => validateStaticAst(item, depth + 1, state));
+		case 'StateRef':
+			if (!declaredState.has(node.n)) throw new Error(`Undeclared local presentation state “${node.n}”.`);
+			return;
+		case 'Ph': throw new Error(`Unresolved OpenUI reference “${node.n}”.`);
+		case 'RuntimeRef': throw new Error('Runtime, query and mutation references are not permitted in presentations.');
+		case 'Comp': {
+			if (node.name === 'Run' || node.name === 'OpenUrl') throw new Error(`${node.name} actions are not permitted in analytical presentations.`);
+			const isComponent = Object.hasOwn(componentDefinitions, node.name);
+			const isFunction = BUILTIN_NAMES.has(node.name);
+			if (!isComponent && !isFunction) throw new Error(`Unsupported component or OpenUI function “${node.name}”.`);
+			if (node.name === 'Set' && (node.args.length !== 2 || node.args[0]?.k !== 'StateRef' || !declaredState.has(node.args[0].n))) throw new Error('Set() may update only a declared local state variable.');
+			if (node.name === 'Reset' && (!node.args.length || node.args.some((arg) => arg.k !== 'StateRef' || !declaredState.has(arg.n)))) throw new Error('Reset() may reset only declared local state variables.');
+			if (node.name === 'ToAssistant' && (!node.args.length || node.args.length > 2)) throw new Error('ToAssistant() needs a follow-up message.');
+			if (node.name === 'Rows' && (node.args.length !== 1 || node.args[0]?.k !== 'Str')) throw new Error('Rows() must name one literal supplied-result ID.');
+			if (node.name === 'Each') {
+				if (node.args.length !== 3) throw new Error('Each() needs a list, a row variable, and a component template.');
+				const binder = node.args[1].k === 'Ref' ? node.args[1].n : node.args[1].k === 'Str' ? node.args[1].v : '';
+				if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(binder)) throw new Error('Each() needs a simple local row variable.');
+				validateSafeAst(node.args[0], declaredState, depth + 1, state, scoped);
+				const nested = new Set(scoped); nested.add(binder);
+				validateSafeAst(node.args[2], declaredState, depth + 1, state, nested);
+				return;
+			}
+			if (node.mappedProps) {
+				if (!isComponent) throw new Error('Named props are not permitted for OpenUI functions.');
+				for (const value of Object.values(node.mappedProps)) validateSafeAst(value, declaredState, depth + 1, state, scoped);
+			} else node.args.forEach((arg) => validateSafeAst(arg, declaredState, depth + 1, state, scoped));
 			return;
 		}
-		case 'BinOp': validateStaticAst(node.left, depth + 1, state); validateStaticAst(node.right, depth + 1, state); return;
-		case 'UnaryOp': validateStaticAst(node.operand, depth + 1, state); return;
-		case 'Ternary': validateStaticAst(node.cond, depth + 1, state); validateStaticAst(node.then, depth + 1, state); validateStaticAst(node.else, depth + 1, state); return;
-		case 'Member': validateStaticAst(node.obj, depth + 1, state); return;
-		case 'Index': validateStaticAst(node.obj, depth + 1, state); validateStaticAst(node.index, depth + 1, state); return;
-		case 'Assign': throw new Error('State assignments and executable OpenUI expressions are not allowed in presentations.');
+		case 'Arr': node.els.forEach((item) => validateSafeAst(item, declaredState, depth + 1, state, scoped)); return;
+		case 'Obj': {
+			const keys = node.entries.map(([key]) => key);
+			if (new Set(keys).size !== keys.length || keys.some((key) => unsafeObjectKeys.has(key))) throw new Error('Duplicate or unsafe object keys are not allowed.');
+			node.entries.forEach(([, item]) => validateSafeAst(item, declaredState, depth + 1, state, scoped));
+			return;
+		}
+		case 'BinOp': validateSafeAst(node.left, declaredState, depth + 1, state, scoped); validateSafeAst(node.right, declaredState, depth + 1, state, scoped); return;
+		case 'UnaryOp': validateSafeAst(node.operand, declaredState, depth + 1, state, scoped); return;
+		case 'Ternary': validateSafeAst(node.cond, declaredState, depth + 1, state, scoped); validateSafeAst(node.then, declaredState, depth + 1, state, scoped); validateSafeAst(node.else, declaredState, depth + 1, state, scoped); return;
+		case 'Member': validateSafeAst(node.obj, declaredState, depth + 1, state, scoped); return;
+		case 'Index': validateSafeAst(node.obj, declaredState, depth + 1, state, scoped); validateSafeAst(node.index, declaredState, depth + 1, state, scoped); return;
+		case 'Assign': throw new Error('Unscoped state assignments are not permitted. Use a user-triggered Button action.');
 		default: throw new Error(`Unsupported OpenUI expression “${(node as { k: string }).k}”.`);
 	}
 }
 
-/** Validate OpenUI's static expression subset without losing its grammar or recovery boundaries. */
-function preflight(program: string): string {
+interface PreflightResult { program: string; stateDefaults: Record<string, unknown>; componentValues: Set<string>; statementCount: number }
+
+/** Validate complete OpenUI syntax and only the safe, local presentation runtime subset. */
+function preflight(program: string): PreflightResult {
 	if (typeof program !== 'string' || !program.trim()) throw new Error('The presentation is empty.');
 	if (new TextEncoder().encode(program).length > limits.programBytes) throw new Error('The presentation exceeds its size budget.');
-	const source = normalizeOpenUiSource(program);
+	const source = normalizeNamedComponentProps(normalizeOpenUiSource(program));
 	if (!source) throw new Error('The presentation is empty.');
 	validateOpenUiSourceCharacters(source);
 	const tokens = tokenize(source);
 	const statements = split(tokens);
 	const ids = new Set<string>();
 	const astById = new Map<string, ASTNode>();
-	const statementTokens: { id: string; ast: ASTNode }[] = [];
+	const stateDefaults: Record<string, unknown> = Object.create(null);
+	const declarations: { id: string; ast: ASTNode; state: boolean }[] = [];
 	let accounted = 0;
 	for (const statement of statements) {
-		if (ids.has(statement.id) || statement.id.startsWith('$')) throw new Error('Duplicate statements and reactive variables are not allowed.');
+		const isState = statement.id.startsWith('$');
+		if (ids.has(statement.id)) throw new Error('Duplicate OpenUI statements are not allowed.');
+		if (isState && !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(statement.id)) throw new Error('A local state name is invalid.');
 		ids.add(statement.id);
 		assertCompleteOpenUiExpression(statement.tokens);
 		const ast = parseExpression(statement.tokens);
-		validateStaticAst(ast);
-		astById.set(statement.id, ast);
-		statementTokens.push({ id: statement.id, ast });
+		declarations.push({ id: statement.id, ast, state: isState });
+		if (isState) {
+			if (!['Str', 'Num', 'Bool', 'Null'].includes(ast.k)) throw new Error('Presentation state defaults must be simple text, number, boolean, or null values.');
+			const value = ast.k === 'Str' ? ast.v : ast.k === 'Num' ? ast.v : ast.k === 'Bool' ? ast.v : null;
+			if (typeof value === 'string' && value.length > 256 || typeof value === 'number' && (!Number.isFinite(value) || Math.abs(value) > 1e12)) throw new Error('A local state default exceeds its value limit.');
+			stateDefaults[statement.id] = value;
+		} else astById.set(statement.id, ast);
 		accounted += statement.tokens.length + 2;
 	}
-	if (!statements.length || tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid or incomplete statement.');
+	if (!statements.length || statements.length > limits.components + 32 || tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid or incomplete statement.');
+	const declaredState = new Set(Object.keys(stateDefaults));
+	for (const declaration of declarations) if (!declaration.state) validateSafeAst(declaration.ast, declaredState);
+	const componentValues = new Set<string>();
+	function referencesComponent(node: ASTNode, visiting = new Set<string>()): boolean {
+		if (node.k === 'Comp') {
+			if (Object.hasOwn(componentDefinitions, node.name)) return true;
+			return node.args.some((arg) => referencesComponent(arg, visiting))
+				|| Object.values(node.mappedProps ?? {}).some((arg) => referencesComponent(arg, visiting));
+		}
+		if (node.k === 'Ref') {
+			if (visiting.has(node.n)) return false;
+			const declaration = astById.get(node.n);
+			if (!declaration) return false;
+			const next = new Set(visiting); next.add(node.n);
+			return referencesComponent(declaration, next);
+		}
+		if (node.k === 'Arr') return node.els.some((item) => referencesComponent(item, visiting));
+		if (node.k === 'Obj') return node.entries.some(([, item]) => referencesComponent(item, visiting));
+		if (node.k === 'BinOp') return referencesComponent(node.left, visiting) || referencesComponent(node.right, visiting);
+		if (node.k === 'UnaryOp') return referencesComponent(node.operand, visiting);
+		if (node.k === 'Ternary') return referencesComponent(node.cond, visiting) || referencesComponent(node.then, visiting) || referencesComponent(node.else, visiting);
+		if (node.k === 'Member') return referencesComponent(node.obj, visiting);
+		if (node.k === 'Index') return referencesComponent(node.obj, visiting) || referencesComponent(node.index, visiting);
+		if (node.k === 'Assign') return referencesComponent(node.value, visiting);
+		return false;
+	}
+	for (const [id, ast] of astById) if (referencesComponent(ast)) componentValues.add(id);
 
-	function collectReferences(node: ASTNode, into: Set<string>): void {
+	function collectReferences(node: ASTNode, into: Set<string>, scoped = new Set<string>()): void {
 		switch (node.k) {
-			case 'Ref': into.add(node.n); break;
-			case 'Comp': node.args.forEach((arg) => collectReferences(arg, into)); break;
-			case 'Arr': node.els.forEach((item) => collectReferences(item, into)); break;
-			case 'Obj': node.entries.forEach(([, item]) => collectReferences(item, into)); break;
-			case 'BinOp': collectReferences(node.left, into); collectReferences(node.right, into); break;
-			case 'UnaryOp': collectReferences(node.operand, into); break;
-			case 'Ternary': collectReferences(node.cond, into); collectReferences(node.then, into); collectReferences(node.else, into); break;
-			case 'Member': collectReferences(node.obj, into); break;
-			case 'Index': collectReferences(node.obj, into); collectReferences(node.index, into); break;
-			case 'Assign': collectReferences(node.value, into); break;
+			case 'Ref': if (!scoped.has(node.n)) into.add(node.n); break;
+			case 'Comp':
+				if (node.name === 'Each' && node.args.length === 3) {
+					collectReferences(node.args[0], into, scoped);
+					const binder = node.args[1].k === 'Ref' ? node.args[1].n : node.args[1].k === 'Str' ? node.args[1].v : '';
+					const nested = new Set(scoped); if (binder) nested.add(binder);
+					collectReferences(node.args[2], into, nested);
+				} else node.args.forEach((arg) => collectReferences(arg, into, scoped));
+				if (node.mappedProps) Object.values(node.mappedProps).forEach((arg) => collectReferences(arg, into, scoped));
+				break;
+			case 'Arr': node.els.forEach((item) => collectReferences(item, into, scoped)); break;
+			case 'Obj': node.entries.forEach(([, item]) => collectReferences(item, into, scoped)); break;
+			case 'BinOp': collectReferences(node.left, into, scoped); collectReferences(node.right, into, scoped); break;
+			case 'UnaryOp': collectReferences(node.operand, into, scoped); break;
+			case 'Ternary': collectReferences(node.cond, into, scoped); collectReferences(node.then, into, scoped); collectReferences(node.else, into, scoped); break;
+			case 'Member': collectReferences(node.obj, into, scoped); break;
+			case 'Index': collectReferences(node.obj, into, scoped); collectReferences(node.index, into, scoped); break;
+			case 'Assign': collectReferences(node.value, into, scoped); break;
 		}
 	}
 	function reachableStatements(source: Map<string, ASTNode>): Set<string> {
@@ -299,22 +572,9 @@ function preflight(program: string): string {
 	const sourceReachable = reachableStatements(astById);
 	const missingReferences = [...sourceReachable].filter((id) => !ids.has(id));
 	if (missingReferences.length) throw new Error(`The presentation contains unresolved references: ${missingReferences.join(', ')}.`);
-	if ([...ids].some((id) => !sourceReachable.has(id))) throw new Error('The presentation contains unused statements.');
-	const evaluationBudget = { remaining: 20_000 };
-	const normalizedStatements = statementTokens.map(({ id, ast }) => `${id} = ${serializeStatic(ast, astById, evaluationBudget)}`);
-	// Folding a local constant into an expression can make its definition redundant.
-	// Drop only those now-unreferenced definitions that were reachable in the source.
-	const normalizedAstById = new Map<string, ASTNode>();
-	for (const { id } of statementTokens) {
-		const normalized = normalizedStatements.find((line) => line.startsWith(`${id} = `));
-		if (!normalized) continue;
-		const normalizedTokens = split(tokenize(normalized))[0]?.tokens;
-		if (normalizedTokens) normalizedAstById.set(id, parseExpression(normalizedTokens));
-	}
-	const normalizedReachable = reachableStatements(normalizedAstById);
-	const normalized = normalizedStatements.filter((line) => normalizedReachable.has(line.slice(0, line.indexOf(' = ')))).join('\n');
-	if (new TextEncoder().encode(normalized).length > limits.programBytes) throw new Error('The normalized OpenUI presentation exceeds its size budget.');
-	return normalized;
+	if ([...astById.keys()].some((id) => !sourceReachable.has(id))) throw new Error('The presentation contains unused statements.');
+	if (new TextEncoder().encode(source).length > limits.programBytes) throw new Error('The normalized OpenUI presentation exceeds its size budget.');
+	return { program: source, stateDefaults, componentValues, statementCount: declarations.length };
 }
 
 function serializeStatic(node: ASTNode, declarations: Map<string, ASTNode>, budget: { remaining: number }): string {
@@ -459,23 +719,215 @@ function materializeStaticValues(value: unknown): unknown {
 	return value;
 }
 
-/** Complete programs only. During streaming retain the previous valid frame/fallback. */
-export function validatePresentation(program: string, results: BoundResult[]): PresentationValidation {
+function isAstNode(value: unknown): value is ASTNode {
+	return !!value && typeof value === 'object' && typeof (value as { k?: unknown }).k === 'string';
+}
+
+function containsRows(value: unknown): boolean {
+	if (isAstNode(value)) {
+		if (value.k === 'Comp' && value.name === 'Rows') return true;
+		if (value.k === 'Comp') return value.args.some(containsRows) || Object.values(value.mappedProps ?? {}).some(containsRows);
+		if (value.k === 'Arr') return value.els.some(containsRows);
+		if (value.k === 'Obj') return value.entries.some(([, item]) => containsRows(item));
+		if (value.k === 'BinOp') return containsRows(value.left) || containsRows(value.right);
+		if (value.k === 'UnaryOp') return containsRows(value.operand);
+		if (value.k === 'Ternary') return containsRows(value.cond) || containsRows(value.then) || containsRows(value.else);
+		if (value.k === 'Member') return containsRows(value.obj);
+		if (value.k === 'Index') return containsRows(value.obj) || containsRows(value.index);
+		if (value.k === 'Assign') return containsRows(value.value);
+		return false;
+	}
+	if (Array.isArray(value)) return value.some(containsRows);
+	if (value && typeof value === 'object') return Object.values(value).some(containsRows);
+	return false;
+}
+
+function onlyRowsDerived(value: unknown): boolean {
+	if (!isAstNode(value)) return false;
+	if (value.k === 'Comp') {
+		if (value.name === 'Rows') return value.args.length === 1 && value.args[0]?.k === 'Str';
+		if (value.name === 'Each') return onlyRowsDerived(value.args[0]);
+		const listOperators = new Set(['Filter', 'Sort', 'GroupBy', 'Pivot', 'Top', 'Between', 'Change', 'Cumulative', 'MovingAvg', 'Histogram']);
+		return listOperators.has(value.name) && onlyRowsDerived(value.args[0]);
+	}
+	if (value.k === 'Ternary') return onlyRowsDerived(value.then) && onlyRowsDerived(value.else);
+	if (value.k === 'Ref') return true;
+	return false;
+}
+
+function rowIdsFrom(value: unknown, into: Set<string>): void {
+	if (isAstNode(value)) {
+		if (value.k === 'Comp' && value.name === 'Rows') {
+			const id = value.args[0]?.k === 'Str' ? value.args[0].v : '';
+			if (!id) throw new Error('Rows() needs a literal saved result ID.');
+			into.add(id);
+		}
+		if (value.k === 'Comp') {
+			value.args.forEach((arg) => rowIdsFrom(arg, into));
+			Object.values(value.mappedProps ?? {}).forEach((item) => rowIdsFrom(item, into));
+		} else if (value.k === 'Arr') value.els.forEach((item) => rowIdsFrom(item, into));
+		else if (value.k === 'Obj') value.entries.forEach(([, item]) => rowIdsFrom(item, into));
+		else if (value.k === 'BinOp') { rowIdsFrom(value.left, into); rowIdsFrom(value.right, into); }
+		else if (value.k === 'UnaryOp') rowIdsFrom(value.operand, into);
+		else if (value.k === 'Ternary') { rowIdsFrom(value.cond, into); rowIdsFrom(value.then, into); rowIdsFrom(value.else, into); }
+		else if (value.k === 'Member') rowIdsFrom(value.obj, into);
+		else if (value.k === 'Index') { rowIdsFrom(value.obj, into); rowIdsFrom(value.index, into); }
+		else if (value.k === 'Assign') rowIdsFrom(value.value, into);
+		return;
+	}
+	if (Array.isArray(value)) value.forEach((item) => rowIdsFrom(item, into));
+	else if (value && typeof value === 'object') Object.values(value).forEach((item) => rowIdsFrom(item, into));
+}
+
+function containsComponentValue(value: unknown, componentValues: ReadonlySet<string>, scoped = new Set<string>(), seen = new Set<string>()): boolean {
+	if (isAstNode(value)) {
+		if (value.k === 'Comp') {
+			if (Object.hasOwn(componentDefinitions, value.name)) return true;
+			if (value.name === 'Each' && value.args.length === 3) {
+				const binder = value.args[1].k === 'Ref' ? value.args[1].n : value.args[1].k === 'Str' ? value.args[1].v : '';
+				const nested = new Set(scoped); if (binder) nested.add(binder);
+				return containsComponentValue(value.args[0], componentValues, scoped, seen)
+					|| containsComponentValue(value.args[2], componentValues, nested, seen);
+			}
+			return value.args.some((item) => containsComponentValue(item, componentValues, scoped, seen))
+				|| Object.values(value.mappedProps ?? {}).some((item) => containsComponentValue(item, componentValues, scoped, seen));
+		}
+		if (value.k === 'Ref') {
+			if (scoped.has(value.n)) return false;
+			if (componentValues.has(value.n)) return true;
+			if (seen.has(value.n)) return false;
+			return false;
+		}
+		if (value.k === 'Arr') return value.els.some((item) => containsComponentValue(item, componentValues, scoped, seen));
+		if (value.k === 'Obj') return value.entries.some(([, item]) => containsComponentValue(item, componentValues, scoped, seen));
+		if (value.k === 'BinOp') return containsComponentValue(value.left, componentValues, scoped, seen) || containsComponentValue(value.right, componentValues, scoped, seen);
+		if (value.k === 'UnaryOp') return containsComponentValue(value.operand, componentValues, scoped, seen);
+		if (value.k === 'Ternary') return containsComponentValue(value.cond, componentValues, scoped, seen) || containsComponentValue(value.then, componentValues, scoped, seen) || containsComponentValue(value.else, componentValues, scoped, seen);
+		if (value.k === 'Member') return containsComponentValue(value.obj, componentValues, scoped, seen);
+		if (value.k === 'Index') return containsComponentValue(value.obj, componentValues, scoped, seen) || containsComponentValue(value.index, componentValues, scoped, seen);
+		if (value.k === 'Assign') return containsComponentValue(value.value, componentValues, scoped, seen);
+		return false;
+	}
+	if (Array.isArray(value)) return value.some((item) => containsComponentValue(item, componentValues, scoped, seen));
+	if (value && typeof value === 'object') return Object.values(value).some((item) => containsComponentValue(item, componentValues, scoped, seen));
+	return false;
+}
+
+function inspectSourceTree(value: unknown, results: BoundResult[], resultIds: Set<string>, componentValues: ReadonlySet<string>, depth = 0): void {
+	if (depth > limits.depth * 3) throw new Error('Presentation source nesting is too deep.');
+	if (Array.isArray(value)) { value.forEach((item) => inspectSourceTree(item, results, resultIds, componentValues, depth + 1)); return; }
+	if (!value || typeof value !== 'object') return;
+	if ((value as ElementNode).type === 'element') {
+		const node = value as ElementNode;
+		const props = node.props;
+		for (const [name, prop] of Object.entries(props)) {
+			if (name !== 'children' && containsComponentValue(prop, componentValues)) throw new Error('Component references may only be used as presentation children, not as computed prop values.');
+		}
+		const resultId = typeof props.resultId === 'string' ? props.resultId : null;
+		if (['Metric', 'Table', 'Chart', 'ResultFilter'].includes(node.typeName) && !resultId && !(node.typeName === 'Metric' && containsRows(props.value))) throw new Error(`${node.typeName} must be bound to a supplied saved result.`);
+		if (resultId) { requireResult(results, resultId); resultIds.add(resultId); }
+		if ((node.typeName === 'Table' || node.typeName === 'Chart') && props.rows !== undefined) {
+			if (!onlyRowsDerived(props.rows)) throw new Error(`${node.typeName} rows must derive from @Rows("result-id").`);
+			const sources = new Set<string>(); rowIdsFrom(props.rows, sources);
+			if (sources.size !== 1 || resultId && !sources.has(resultId)) throw new Error(`${node.typeName} display rows must come from its declared resultId.`);
+		}
+		if (node.typeName === 'Chart') staticChartSpec(props.spec);
+		if (node.typeName === 'Metric' && props.value !== undefined && !containsRows(props.value)) throw new Error('A computed Metric must derive from supplied saved result rows.');
+		if (node.typeName === 'Progress' && !containsRows(props.value)) throw new Error('Progress values must derive from supplied saved result rows.');
+		for (const item of Object.values(props)) inspectSourceTree(item, results, resultIds, componentValues, depth + 1);
+		return;
+	}
+	if (isAstNode(value)) {
+		rowIdsFrom(value, resultIds);
+		if (value.k === 'Comp' && Object.hasOwn(componentDefinitions, value.name)) {
+			const keys = Object.keys(componentDefinitions[value.name as ComponentName].props.shape);
+			const props = value.mappedProps ?? Object.fromEntries(value.args.flatMap((arg, index) => keys[index] ? [[keys[index], arg]] : []));
+			inspectSourceTree({ type: 'element', typeName: value.name, props, partial: false, hasDynamicProps: true }, results, resultIds, componentValues, depth + 1);
+			return;
+		}
+		if (value.k === 'Comp') { value.args.forEach((arg) => inspectSourceTree(arg, results, resultIds, componentValues, depth + 1)); Object.values(value.mappedProps ?? {}).forEach((item) => inspectSourceTree(item, results, resultIds, componentValues, depth + 1)); }
+		else if (value.k === 'Arr') value.els.forEach((item) => inspectSourceTree(item, results, resultIds, componentValues, depth + 1));
+		else if (value.k === 'Obj') value.entries.forEach(([, item]) => inspectSourceTree(item, results, resultIds, componentValues, depth + 1));
+		else if (value.k === 'BinOp') { inspectSourceTree(value.left, results, resultIds, componentValues, depth + 1); inspectSourceTree(value.right, results, resultIds, componentValues, depth + 1); }
+		else if (value.k === 'UnaryOp') inspectSourceTree(value.operand, results, resultIds, componentValues, depth + 1);
+		else if (value.k === 'Ternary') { inspectSourceTree(value.cond, results, resultIds, componentValues, depth + 1); inspectSourceTree(value.then, results, resultIds, componentValues, depth + 1); inspectSourceTree(value.else, results, resultIds, componentValues, depth + 1); }
+		else if (value.k === 'Member') inspectSourceTree(value.obj, results, resultIds, componentValues, depth + 1);
+		else if (value.k === 'Index') { inspectSourceTree(value.obj, results, resultIds, componentValues, depth + 1); inspectSourceTree(value.index, results, resultIds, componentValues, depth + 1); }
+		return;
+	}
+	for (const item of Object.values(value)) inspectSourceTree(item, results, resultIds, componentValues, depth + 1);
+}
+
+function staticChartSpec(value: unknown): unknown {
+	if (isAstNode(value)) {
+		switch (value.k) {
+			case 'Str': return value.v;
+			case 'Num': return value.v;
+			case 'Bool': return value.v;
+			case 'Null': return null;
+			case 'Arr': return value.els.map(staticChartSpec);
+			case 'Obj': return Object.fromEntries(value.entries.map(([key, item]) => [key, staticChartSpec(item)]));
+			case 'BinOp': case 'UnaryOp': case 'Ternary': case 'Member': case 'Index': return evaluateStaticExpression(value, new Map());
+			default: throw new Error('Chart specifications must be static and cannot be driven by executable or local-state expressions.');
+		}
+	}
+	if (Array.isArray(value)) return value.map(staticChartSpec);
+	if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, staticChartSpec(item)]));
+	return value;
+}
+
+function validateAction(value: unknown, defaults: Record<string, unknown>): void {
+	if (!value || typeof value !== 'object') return;
+	const action = value as Record<string, unknown>;
+	if (Array.isArray(action.steps)) { action.steps.forEach((step) => validateAction(step, defaults)); return; }
+	if (action.type === 'set') {
+		if (typeof action.target !== 'string' || !Object.hasOwn(defaults, action.target)) throw new Error('Button actions may set only a declared local state variable.');
+		const ast = action.valueAST as ASTNode | undefined;
+		if (!ast || !['Str', 'Num', 'Bool', 'Null', 'StateRef', 'BinOp', 'UnaryOp', 'Ternary', 'Member', 'Index'].includes(ast.k) || containsRows(ast)) throw new Error('Button state actions may assign only a simple local value.');
+	} else if (action.type === 'reset') {
+		if (!Array.isArray(action.targets) || action.targets.some((target) => typeof target !== 'string' || !Object.hasOwn(defaults, target))) throw new Error('Button actions may reset only declared local state variables.');
+	} else if (action.type === 'continue_conversation') {
+		if (typeof action.message !== 'string' || !action.message.trim() || action.message.length > 2000) throw new Error('The follow-up message is invalid or too long.');
+	} else throw new Error('This OpenUI action is not permitted in an analytical presentation.');
+}
+
+/** Complete programs only. Invalid generated layouts fall back to the verified answer. */
+export function validatePresentation(program: string, results: BoundResult[], persistedState: Record<string, unknown> = {}): PresentationValidation {
 	const issues: PresentationIssue[] = [];
 	const resultIds = new Set<string>();
 	let normalizedProgram = '';
+	let stateDefaults: Record<string, unknown> = {};
+	let sourceRoot: ElementNode | null = null;
 	try {
-		normalizedProgram = preflight(program);
+		const checked = preflight(program);
+		normalizedProgram = checked.program;
+		stateDefaults = checked.stateDefaults;
 		validateResults(results);
 		const parsed = createParser(presentationSchema()).parse(normalizedProgram);
 		if (parsed.meta.incomplete || parsed.meta.unresolved.length) throw new Error(`The presentation is incomplete or has unresolved references${parsed.meta.unresolved.length ? `: ${parsed.meta.unresolved.join(', ')}` : '.'}`);
-		if (parsed.meta.statementCount > limits.components || parsed.meta.orphaned.length) throw new Error('The presentation contains unused statements or exceeds the statement budget.');
+		if (parsed.meta.statementCount > limits.components + Object.keys(stateDefaults).length || parsed.meta.orphaned.length) throw new Error('The presentation contains unused statements or exceeds the statement budget.');
 		if (parsed.meta.errors.length) {
 			for (const error of parsed.meta.errors) issues.push({ path: `${error.component}${error.path}`, message: error.message });
-			return { valid: false, root: null, normalizedProgram, issues, resultIds: [] };
+			return { valid: false, root: null, sourceRoot: null, normalizedProgram, issues, resultIds: [], stateDefaults };
 		}
-		if (parsed.queryStatements.length || parsed.mutationStatements.length || Object.keys(parsed.stateDeclarations).length) throw new Error('Queries, mutations and reactive state plans are not permitted in presentations.');
-		if (!parsed.root || parsed.root.typeName !== 'Document' || parsed.root.statementId !== 'root') throw new Error('The presentation must have an explicit root = Document(...) statement.');
+		if (parsed.queryStatements.length || parsed.mutationStatements.length) throw new Error('Queries and mutations are not permitted in presentations.');
+		if (!parsed.root || parsed.root.typeName !== 'Document' || parsed.root.statementId !== 'root') throw new Error('The presentation must have an explicit root = Document([...]) statement.');
+		sourceRoot = parsed.root;
+		stripOmittedOptionalProps(sourceRoot);
+		inspectSourceTree(sourceRoot, results, resultIds, checked.componentValues);
+		const selectedState: Record<string, unknown> = Object.create(null);
+		for (const [name, defaultValue] of Object.entries(stateDefaults)) {
+			const candidate = persistedState[name];
+			selectedState[name] = typeof candidate === typeof defaultValue || candidate === null && defaultValue === null ? candidate : defaultValue;
+		}
+		const store = createPresentationStore(stateDefaults, selectedState);
+		let evaluated: ElementNode | null = null;
+		try {
+			const result = evaluatePresentationTree(sourceRoot, results, store);
+			if (result.errors.length) throw new Error(result.errors.join('; '));
+			if (!result.root) throw new Error('The OpenUI presentation could not be evaluated.');
+			evaluated = result.root;
+		} finally { store.dispose(); }
 		let count = 0;
 		const controls = new Set<string>();
 		const ancestry = new Set<unknown>();
@@ -485,36 +937,50 @@ export function validatePresentation(program: string, results: BoundResult[]): P
 			ancestry.add(value);
 			const node = value as ElementNode;
 			if (node.type !== 'element' || node.partial || !Object.hasOwn(componentDefinitions, node.typeName)) throw new Error(`${path} uses an unknown, partial or unsupported component.`);
-			node.props = materializeStaticValues(node.props) as Record<string, unknown>;
+			const props = { ...node.props } as Record<string, unknown>;
+			for (const [key, prop] of Object.entries(props)) if (prop && typeof prop === 'object' && (prop as Record<string, unknown>).__reactive === 'assign') props[key] = persistedState[(prop as Record<string, unknown>).target as string] ?? stateDefaults[(prop as Record<string, unknown>).target as string] ?? null;
 			const definition = componentDefinitions[node.typeName as ComponentName];
-			const check = definition.props.safeParse(node.props);
+			const check = definition.props.safeParse(props);
 			if (!check.success) throw new Error(`${path}: ${check.error.issues.map((item) => item.message).join('; ')}`);
-			const props = check.data as Record<string, unknown>;
+			const safeProps = check.data as Record<string, unknown>;
 			if (node.typeName === 'Document' && depth > 0) throw new Error('Document may only be the root.');
-			if ('resultId' in props) {
-				const result = requireResult(results, String(props.resultId));
-				resultIds.add(result.id);
-				if ('field' in props && !result.columns.includes(String(props.field))) throw new Error(`${path} references a missing saved field.`);
-				if ('fields' in props && (props.fields as string[]).some((field) => !result.columns.includes(field))) throw new Error(`${path} references a missing table field.`);
-				if (node.typeName === 'Metric' && Number(props.row) >= result.rows.length) throw new Error(`${path} references a missing saved row.`);
-				if (node.typeName === 'Chart') validateChartSpec(props.spec, result);
+			if (node.typeName === 'Metric') {
+				if (safeProps.value === undefined) {
+					if (typeof safeProps.resultId !== 'string' || typeof safeProps.field !== 'string' || typeof safeProps.row !== 'number') throw new Error(`${path} must use an exact result row or an explicit Rows-derived value.`);
+					const result = requireResult(results, safeProps.resultId); resultIds.add(result.id);
+					if (!result.columns.includes(safeProps.field) || safeProps.row < 0 || safeProps.row >= result.rows.length) throw new Error(`${path} references a missing saved field or row.`);
+				} else if (typeof safeProps.value !== 'string' && (typeof safeProps.value !== 'number' || !Number.isFinite(safeProps.value)) && safeProps.value !== null) throw new Error(`${path} value must be a scalar display result.`);
+			}
+			if (node.typeName === 'Progress' && (typeof safeProps.value !== 'number' || !Number.isFinite(safeProps.value))) throw new Error(`${path} needs a finite numeric value.`);
+			if (['Table', 'Chart', 'ResultFilter'].includes(node.typeName)) {
+				const result = requireResult(results, String(safeProps.resultId)); resultIds.add(result.id);
+				if (node.typeName === 'Table' && Array.isArray(safeProps.fields) && safeProps.fields.some((field) => !result.columns.includes(String(field)))) throw new Error(`${path} references a missing saved table field.`);
 				if (node.typeName === 'ResultFilter') {
-					const index = result.columns.indexOf(String(props.field));
+					if (!result.columns.includes(String(safeProps.field))) throw new Error(`${path} references a missing saved filter field.`);
+					const index = result.columns.indexOf(String(safeProps.field));
 					if (new Set(result.rows.map((row) => row[index])).size > 200) throw new Error('A display filter has too many choices; use a more focused result.');
 				}
+				if (node.typeName === 'Table' && safeProps.rows !== undefined) derivedRowsResult(result, safeProps.rows as unknown[]);
+				if (node.typeName === 'Chart') {
+					const chartData = safeProps.rows === undefined ? result : derivedRowsResult(result, safeProps.rows as unknown[]);
+					validateChartSpec(safeProps.spec, chartData);
+				}
 			}
-			if (node.typeName === 'Tabs' || node.typeName === 'ResultFilter') {
-				if (controls.has(String(props.name))) throw new Error('Presentation control names must be unique.');
-				controls.add(String(props.name));
+			if (['Tabs', 'ResultFilter', 'Select', 'SegmentedControl', 'Checkbox'].includes(node.typeName)) {
+				const controlName = String(safeProps.name ?? safeProps.label);
+				if (controls.has(controlName)) throw new Error('Presentation control names must be unique.');
+				controls.add(controlName);
 			}
-			if (node.typeName === 'Tabs' && (props.labels as unknown[]).length !== (props.children as unknown[]).length) throw new Error('Each tab needs one label and one child.');
-			if ('children' in props) (props.children as unknown[]).forEach((child, index) => walk(child, `${path}.children[${index}]`, depth + 1));
+			if (node.typeName === 'Tabs' && (safeProps.labels as unknown[]).length !== (safeProps.children as unknown[]).length) throw new Error('Each tab needs one label and one child.');
+			if (node.typeName === 'Button') validateAction(safeProps.action, stateDefaults);
+			if ('children' in safeProps) (safeProps.children as unknown[]).forEach((child, index) => walk(child, `${path}.children[${index}]`, depth + 1));
 			ancestry.delete(value);
 		}
-		walk(parsed.root, 'root', 0);
-		return { valid: true, root: parsed.root, normalizedProgram, issues, resultIds: [...resultIds] };
+		walk(evaluated, 'root', 0);
+		for (const id of resultIds) requireResult(results, id);
+		return { valid: true, root: evaluated, sourceRoot, normalizedProgram, issues, resultIds: [...resultIds], stateDefaults };
 	} catch (error) {
 		issues.push({ path: 'root', message: error instanceof Error ? error.message : 'The presentation could not be validated.' });
-		return { valid: false, root: null, normalizedProgram, issues, resultIds: [...resultIds] };
+		return { valid: false, root: null, sourceRoot, normalizedProgram, issues, resultIds: [...resultIds], stateDefaults };
 	}
 }

@@ -1,18 +1,21 @@
 <script lang="ts">
 	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	import { filteredRows, requireResult } from '../../presentation/results';
+	import { derivedRowsResult, filteredRows, requireResult } from '../../presentation/results';
 	import { renderBoundChart, type ChartView } from '../../presentation/vega-runtime';
 	import { usePresentation } from './context';
 	import ResultTable from './ResultTable.svelte';
-	let { props }: ComponentRenderProps<{ resultId: string; spec: Record<string, unknown>; title?: string }> = $props();
+	import DerivedTable from './DerivedTable.svelte';
+	let { props }: ComponentRenderProps<{ resultId: string; spec: Record<string, unknown>; title?: string; rows?: unknown[] }> = $props();
 	const context = usePresentation();
 	let result = $derived(requireResult(context.results, props.resultId));
-	let indices = $derived(filteredRows(result, context.state));
+	let isDerived = $derived(props.rows !== undefined);
+	let chartData = $derived(isDerived ? derivedRowsResult(result, props.rows ?? []) : result);
+	let indices = $derived(isDerived ? chartData.rows.map((_, row) => row) : filteredRows(result, context.state));
 	let container: HTMLDivElement;
 	let status = $state('Loading visualization…');
 	let failed = $state(false);
 	$effect(() => {
-		const source = result;
+		const source = chartData;
 		const spec = props.spec;
 		const rows = indices;
 		const target = container;
@@ -46,8 +49,13 @@
 	<div class="chart-scroll" aria-label={props.title ?? 'Visualization of saved results'} role="img"><div class="chart-target" bind:this={container}></div></div>
 	{#if status}<p class="status" role="status">{status}</p>{/if}
 	{#if !result.complete}<p class="scope">This visualization uses {result.rows.length} saved rows, not the full dataset ({result.row_count} rows).</p>{/if}
-	<p class="scope">Display mappings may summarize saved rows. Exact source values remain available below.</p>
-	<details open={failed}><summary>Exact saved values</summary><ResultTable {result} {indices} /></details>
+	{#if isDerived}
+		<details open={failed}><summary>Display rows</summary><DerivedTable source={result} rows={props.rows ?? []} /></details>
+		<details><summary>Exact saved source values</summary><ResultTable {result} indices={filteredRows(result, context.state)} /></details>
+	{:else}
+		<p class="scope">Display mappings may summarize saved rows. Exact source values remain available below.</p>
+		<details open={failed}><summary>Exact saved values</summary><ResultTable {result} {indices} /></details>
+	{/if}
 </figure>
 <style>
 	figure { margin: 0; min-width: 0; } figcaption { font-size: .85rem; font-weight: 550; margin-bottom: .65rem; }

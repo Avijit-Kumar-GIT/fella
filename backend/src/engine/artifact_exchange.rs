@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use super::artifacts::{self, BoundResult, ResolvedArtifact, StudioDocument, LIBRARY_VERSION};
+use super::artifacts::{self, BoundResult, ResolvedArtifact, StudioDocument};
 use super::error::{EngineError, EngineResult};
 use super::evidence::{VerificationCheck, VerificationStatus};
 use super::runtime::{AnalysisContract, AnalysisTurn, ContractMeasure, ContractTime, TurnState};
@@ -879,7 +879,7 @@ pub fn package_validate(json: &str) -> EngineResult<ReportPackage> {
         if artifacts.insert(&artifact.id, artifact).is_some()
             || !origins.insert((&artifact.origin_artifact_id, artifact.origin_revision))
             || artifact.origin_revision == 0
-            || artifact.library_version != LIBRARY_VERSION
+            || !artifacts::supports_library_version(&artifact.library_version)
         {
             return Err(err(
                 "report artifact revisions are duplicated or unsupported",
@@ -1122,7 +1122,7 @@ pub fn package_list(data_dir: &Path) -> EngineResult<Vec<ImportedReportSummary>>
 #[cfg(test)]
 mod tests {
     use super::super::artifacts::{
-        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioUpdate,
+        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioUpdate, LIBRARY_VERSION,
     };
     use super::*;
     use serde_json::json;
@@ -1392,6 +1392,47 @@ mod tests {
             .manifest
             .exclusions
             .contains(&"checkpoint_history".into()));
+    }
+
+    #[test]
+    fn legacy_openui_revision_version_survives_export_validation_and_import() {
+        let profile = Profile::new();
+        let mut item = resolved("legacy-run", json!([["East", 12]]));
+        item.revision.library_version = artifacts::LEGACY_LIBRARY_VERSION.into();
+        item.artifact.revisions[0].library_version = artifacts::LEGACY_LIBRARY_VERSION.into();
+
+        let encoded = export_snapshot(
+            &document(std::slice::from_ref(&item)),
+            std::slice::from_ref(&item),
+        )
+        .unwrap();
+        let package = package_validate(&encoded).unwrap();
+        assert_eq!(
+            package.artifacts[0].library_version,
+            artifacts::LEGACY_LIBRARY_VERSION
+        );
+
+        // Imported reports remain inert snapshots and retain the source
+        // revision's renderer version instead of being relabeled as v2.
+        let imported = package_import(&profile.0, &encoded).unwrap();
+        assert!(!imported.preview.programs_executable);
+        assert_eq!(
+            imported.preview.package.artifacts[0].library_version,
+            artifacts::LEGACY_LIBRARY_VERSION
+        );
+        assert_eq!(
+            package_load(&profile.0, &imported.id)
+                .unwrap()
+                .preview
+                .package
+                .artifacts[0]
+                .library_version,
+            artifacts::LEGACY_LIBRARY_VERSION
+        );
+
+        let mut unsupported = package;
+        unsupported.artifacts[0].library_version = "fella-openui-v3".into();
+        assert!(package_validate(&rechecksum(&mut unsupported)).is_err());
     }
 
     #[test]

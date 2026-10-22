@@ -1,8 +1,9 @@
-// Contract v1, task set v1.10: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
-// invalid-output and binding rejection, static OpenUI expressions and local references,
-// exact values, safe broad Vega-Lite composition, deterministic export, and visible fallback. v1.1 corrects two
-// fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
-// test intent and assertions are unchanged. No model or IPC calls.
+// Contract v2.0: same-turn OpenUI answer contract, reactive Svelte presentation,
+// result-bound local calculations, persistent controls, safe actions, exact source values,
+// broad Vega-Lite composition, deterministic export, and visible fallback. This revision
+// intentionally replaces v1's static-only presentation constraint with the approved
+// interactive display contract; analytics execution and authority remain unchanged.
+// No model or IPC calls.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
@@ -16,6 +17,7 @@ async function test(name, fn) {
 }
 try {
 	const { validatePresentation } = await server.ssrLoadModule('/src/lib/presentation/validate.ts');
+	const { createPresentationStore, evaluatePresentationAction } = await server.ssrLoadModule('/src/lib/presentation/runtime.ts');
 	const { presentationSchema, presentationPrompt, PRESENTATION_EXAMPLE, PRESENTATION_DESIGN_GUIDANCE, presentationManifest } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
 	const { analyticalLibrary } = await server.ssrLoadModule('/src/lib/presentation/library.ts');
 	const { exportPresentation } = await server.ssrLoadModule('/src/lib/presentation/export.ts');
@@ -37,12 +39,15 @@ try {
 		const schema = presentationSchema();
 		assert.deepEqual(Object.keys(schema.$defs), Object.keys(analyticalLibrary.components));
 		for (const [name, definition] of Object.entries(schema.$defs)) assert.deepEqual(definition.properties, analyticalLibrary.toJSONSchema().$defs[name].properties, name);
-		assert.equal(presentationManifest().version, 'fella-openui-v1');
-		assert.match(presentationPrompt(results), /Metric\(resultId: string, field: string, row: integer, title: string, unit\?: string\)/);
+		assert.equal(presentationManifest().version, 'fella-openui-v2');
+		assert.match(presentationPrompt(results), /Metric\(resultId\?, field\?, row\?, title, unit\?, value\?, format\?, detail\?\) — positional arguments in this exact order/);
+		assert.match(presentationPrompt(results), /native OpenUI calls use positional arguments/i);
+		assert.match(presentationPrompt(results), /normalizes them to native positional OpenUI/i);
 		assert.match(presentationPrompt(results), /every component or value reference must resolve to exactly one statement/i);
 		assert.match(presentationPrompt(results), /named OpenUI statements and local references/);
 		assert.match(presentationPrompt(results), /whole expression resolves to a static value/);
 		assert.match(presentationPrompt(results), /use one even if the user did not request it/);
+		assert.match(presentationPrompt(results), /literal analytical values are rejected/i);
 		assert.match(presentationPrompt(results), /"id":"revenue"/);
 	});
 	await test('same-turn OpenUI generation is the primary answer contract, not a second design pass', () => {
@@ -50,6 +55,9 @@ try {
 		assert.match(generated.prompt, /primary answer surface in the same analysis turn/i);
 		assert.match(generated.prompt, /model chooses the presentation; the user does not need to name a chart/i);
 		assert.match(generated.prompt, /use one without waiting to be asked/i);
+		assert.match(generated.prompt, /Fella also accepts named props/i);
+		assert.match(generated.prompt, /never use named props on OpenUI built-ins/i);
+		assert.match(generated.prompt, /Do not copy numeric results into Metric value props/i);
 		assert.doesNotMatch(generated.prompt, /separate presentation design plan|design plan and result profiles/i);
 		assert.equal('design_version' in generated, false);
 		assert.equal('planner_prompt' in generated, false);
@@ -71,10 +79,11 @@ try {
 		assert.doesNotMatch(html, new RegExp(canonical));
 	});
 	await test('completed OpenUI answer auto-creates a persistent artifact without another model call', async () => {
-		const program = 'root = Document([Metric("sales-result", "revenue", 0, "Q3 revenue", "USD")])';
+		const program = 'root = Document([Metric(resultId: "sales-result", field: "revenue", row: 0, title: "Q3 revenue", unit: "USD")])';
+		const canonicalProgram = 'root = Document([Metric("sales-result", "revenue", 0, "Q3 revenue", "USD")])';
 		const result = { id: 'sales-result', columns: ['revenue'], rows: [[12.5]], exact_rows: [['12.50']], row_count: 1, complete: true };
 		const artifact = { id: 'automatic-artifact', workspace: '/workspace', title: 'Quarter revenue', current_revision: 1, saved: false,
-			revisions: [{ revision: 1, run_id: 'workspace-openui-turn', program, library_version: 'fella-openui-v1', change_note: '', created_at_ms: 1 }], created_at_ms: 1, updated_at_ms: 1 };
+			revisions: [{ revision: 1, run_id: 'workspace-openui-turn', program: canonicalProgram, library_version: 'fella-openui-v2', change_note: '', created_at_ms: 1 }], created_at_ms: 1, updated_at_ms: 1 };
 		const resolved = { artifact, revision: artifact.revisions[0], run: { question: 'What was Q3 revenue?', result: { text: 'Revenue was 12.50 USD.' } }, results: [result] };
 		const calls = [];
 		const bridge = {
@@ -92,14 +101,17 @@ try {
 		assert.equal(message.artifact_id, artifact.id);
 		assert.equal(message.artifact_revision, 1);
 		assert.equal(persisted, 1);
+		assert.equal(message.answer.presentation_program, program, 'keep the original model program on the transcript');
 		assert.deepEqual(calls.map(([name]) => name), ['presentationResults', 'artifactList', 'artifactCreate', 'artifactResolve']);
-		assert.ok(calls.some(([name, , , , savedProgram]) => name === 'artifactCreate' && savedProgram === program));
+		assert.ok(calls.some(([name, , , , savedProgram]) => name === 'artifactCreate' && savedProgram === canonicalProgram));
 	});
 	await test('canonical fixture and resolved official OpenUI references validate', () => {
 		assert.equal(validatePresentation(PRESENTATION_EXAMPLE, results).valid, true);
 		const validation = validatePresentation('root = Document([intro, Table("revenue")])\nintro = Text("A comparison.")', results);
 		assert.equal(validation.valid, true, JSON.stringify(validation.issues));
 		assert.deepEqual(validation.resultIds, ['revenue']);
+		const positional = 'root = Document([\n  Text("Keep this formatting, commas, and: punctuation"),\n  Card([Text("nested")], "Existing", null, "quiet")\n])';
+		assert.equal(validatePresentation(positional, results).normalizedProgram, positional, 'native positional OpenUI should not be reformatted');
 	});
 	await test('OpenUI local references and static expressions normalize before schema validation', () => {
 		const program = `root = Document([title, Chart("revenue", {"mark":"line","width":baseWidth * scale,"encoding":{"x":{"field":fields[0],"type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}}, heading)])
@@ -128,6 +140,76 @@ columnCount = true ? 1 + 1 : 4`;
 		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
 		assert.match(html, /Q3/);
 		assert.match(html, /Regional revenue comparison/);
+	});
+	await test('Fella named component props normalize to positional OpenUI and leave omitted optional props unset', () => {
+		const program = `root = Document([
+			Card([Metric("revenue", "revenue", 0, title: "South Q4 revenue", unit: "USD", detail: "Peak for South")], tone: "accent", title: "South Growth"),
+			Table(resultId: "revenue", fields: ["quarter", "region"], title: "Quarterly records")
+		])`;
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		assert.match(check.normalizedProgram, /Card\(\[Metric\("revenue", "revenue", 0, "South Q4 revenue", "USD", null, null, "Peak for South"\)\], "South Growth", null, "accent"\)/);
+		assert.match(check.normalizedProgram, /Table\("revenue", \["quarter", "region"\], null, "Quarterly records"\)/);
+		const card = check.root?.props.children?.[0];
+		assert.equal(card?.props.title, 'South Growth');
+		assert.equal(card?.props.tone, 'accent');
+		assert.equal('detail' in card?.props, false);
+		const metric = card?.props.children?.[0];
+		assert.equal(metric?.props.value, undefined);
+		assert.equal(metric?.props.detail, 'Peak for South');
+		const table = check.root?.props.children?.[1];
+		assert.equal(table?.props.rows, undefined);
+		assert.equal(table?.props.title, 'Quarterly records');
+		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
+		assert.match(html, /South Growth/);
+		assert.match(html, /South Q4 revenue/);
+		assert.match(html, /Quarterly records/);
+	});
+	await test('reactive controls recalculate result-bound metrics from saved rows and restore persisted state', () => {
+		const program = `$region = "North"
+root = Document([Section("Revenue", [Select("Region", [{"value":"North","label":"North"},{"value":"South","label":"South"}], $region), Metric(null, null, null, "Revenue", null, @Sum(@Filter(@Rows("revenue"), "region", "==", $region).revenue), "number")])])`;
+		const initial = validatePresentation(program, results);
+		assert.equal(initial.valid, true, JSON.stringify(initial.issues));
+		assert.equal(initial.stateDefaults.$region, 'North');
+		const northHtml = render(AnalyticalPresentation, { props: { program, results } }).body;
+		assert.match(northHtml, /123\.45/);
+		const restored = validatePresentation(program, results, { $region: 'South' });
+		assert.equal(restored.valid, true, JSON.stringify(restored.issues));
+		assert.equal(restored.root?.props.children?.[0]?.props.children?.[1]?.props.value, 200);
+		const southHtml = render(AnalyticalPresentation, { props: { program, results, initialState: { $region: 'South' } } }).body;
+		assert.match(southHtml, /200/);
+		assert.doesNotMatch(southHtml, /123\.45/);
+	});
+	await test('Each renders model-selected result rows as native Svelte components', () => {
+		const program = `root = Document([@Each(@Rows("revenue"), row, Card([Title(row.quarter), Text(row.region)]))])`;
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
+		assert.match(html, /Q3/); assert.match(html, /North/);
+		assert.match(html, /Q4/); assert.match(html, /South/);
+	});
+	await test('result-derived table sorting changes the display without replacing exact saved rows', () => {
+		const program = 'root = Document([Table("revenue", ["quarter", "revenue"], @Sort(@Rows("revenue"), "revenue", "desc"), "Sorted revenue")])';
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		assert.equal(check.resultIds[0], 'revenue');
+		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
+		assert.ok(html.indexOf('Q4') < html.indexOf('Q3'), 'the local derived order should be visible');
+		assert.match(html, /Display-derived/);
+		assert.match(html, /Exact saved source values/);
+	});
+	await test('user-triggered OpenUI actions update only declared local state and emit follow-ups explicitly', () => {
+		const program = `$region = "North"\nroot = Document([Button("Show south", Action([@Set($region, "South")])), FollowUp("Compare next", "Compare South with the prior quarter")])`;
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		const action = check.root?.props.children?.[0]?.props.action;
+		const store = createPresentationStore(check.stateDefaults, { $region: 'North' });
+		try {
+			assert.deepEqual(evaluatePresentationAction(action, check.stateDefaults, store), {});
+			assert.equal(store.get('$region'), 'South');
+			const followUp = check.root?.props.children?.[1]?.props;
+			assert.equal(followUp?.message, 'Compare South with the prior quarter');
+		} finally { store.dispose(); }
 	});
 	await test('OpenUI grammar: grouped expressions, operator semantics, references, collections, and lazy branches validate', () => {
 		const program = `root = Document([Section("Summary", [Text(summary), Text(selected), Text(coercions)])])
@@ -174,7 +256,9 @@ selected = true ? (lazy ? "safe" : "wrong") : 1 / 0`;
 		['OpenUI builtin calls', 'root = Document([Text(Abs(1))])'],
 		['OpenUI @-prefixed builtins', 'root = Document([Text(@Avg([1,2]))])'],
 		['query plan', 'root = Document([Text("ok")])\ndata = Query("execute",{})'],
-		['reactive state', '$state = 1\nroot = Document([Text("ok")])'],
+		['undeclared reactive state', 'root = Document([Text($selection)])'],
+		['component reference used as computed text', 'heading = Text("Revenue")\nroot = Document([Text(heading + "!")])'],
+		['state-driven chart specification', '$width = 200\nroot = Document([Chart("revenue", {"mark":"bar","width":$width,"encoding":{"x":{"field":"quarter","type":"nominal"},"y":{"field":"revenue","type":"quantitative"}}})])'],
 		['duplicate control names', 'root = Document([Tabs("same",["A"],[Text("ok")]),ResultFilter("revenue","region","same")])'],
 		['tab arity', 'root = Document([Tabs("view",["A","B"],[Text("ok")])])'],
 		['nested root', 'root = Document([Document([Text("ok")])])'],
@@ -184,7 +268,11 @@ selected = true ? (lazy ? "safe" : "wrong") : 1 / 0`;
 		['malformed ternary', 'root = Document([Text(true ? "yes" "no")])'],
 		['malformed unary operator', 'root = Document([Text(+)])'],
 		['valid-token trailing expression', 'root = Document([Text("ok")]) 42'],
-		['single-character logical operator', 'root = Document([Text(true & false)])']
+		['single-character logical operator', 'root = Document([Text(true & false)])'],
+		['named OpenUI builtin arguments', 'root = Document([Text("sum " + @Sum(values: @Rows("revenue")))])'],
+		['unknown named component prop', 'root = Document([Card([Text("ok")], invented: true)])'],
+		['duplicate named component prop', 'root = Document([Card([Text("ok")], title: "one", title: "two")])'],
+		['positional prop after named prop', 'root = Document([Card([Text("ok")], title: "one", "two")])']
 	]) await test(`reject ${name}`, () => { const check = validatePresentation(program, results); assert.equal(check.valid, false, JSON.stringify(check)); assert.equal(check.root, null); assert.ok(check.issues.length); });
 
 	await test('exact metrics/tables preserve large integers, decimal scale, null and markup escaping', () => {
@@ -257,6 +345,6 @@ selected = true ? (lazy ? "safe" : "wrong") : 1 / 0`;
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.10): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v2.0: ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }

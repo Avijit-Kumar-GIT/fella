@@ -697,6 +697,8 @@ export interface Message {
 	/** Projection link only; Rust artifact/run stores own the analytical output. */
 	artifact_id?: string;
 	artifact_revision?: number;
+	/** Local OpenUI control choices, independent of analytical source or result state. */
+	presentation_state?: Record<string, unknown>;
 	/** Existing artifact revision this answer should revise, if requested in chat. */
 	artifact_target?: { artifactId: string; baseRevision: number; instruction: string };
 	/** True while the assistant message is still streaming. */

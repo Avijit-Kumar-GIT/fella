@@ -62,7 +62,10 @@
 		{#await import('./presentation/AnalyticalPresentation.svelte')}
 			<p class="answer-status" role="status">Loading the interactive answer…</p>
 		{:then module}
-			<module.default program={resolved.revision.program} results={resolved.results} onaction={(action) => {
+			<module.default program={resolved.revision.program} results={resolved.results} initialState={message.presentation_state ?? {}} onstatechange={(state) => {
+				message.presentation_state = state;
+				session.persist();
+			}} onaction={(action) => {
 				if (session.catalog.workspace !== resolved?.artifact.workspace) return;
 				const target = resolved;
 				void requestArtifactChange(target, action.message).catch(cause => error = cause instanceof Error ? cause.message : String(cause));

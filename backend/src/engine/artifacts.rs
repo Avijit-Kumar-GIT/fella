@@ -18,7 +18,16 @@ use super::analysis_store;
 use super::error::{EngineError, EngineResult};
 use super::runtime::AnalysisTurn;
 
-pub const LIBRARY_VERSION: &str = "fella-openui-v1";
+/// Version assigned to newly-created or newly-revised presentation artifacts.
+pub const LIBRARY_VERSION: &str = "fella-openui-v2";
+/// Historical version retained on existing revisions and portable snapshots.
+pub const LEGACY_LIBRARY_VERSION: &str = "fella-openui-v1";
+
+/// Whether this build can preserve and load a stored presentation revision.
+/// This does not imply that new revisions may be written using that version.
+pub fn supports_library_version(version: &str) -> bool {
+    matches!(version, LIBRARY_VERSION | LEGACY_LIBRARY_VERSION)
+}
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PROGRAM_BYTES: usize = 256 * 1024;
@@ -249,7 +258,7 @@ fn validate_artifact(record: &ArtifactRecord) -> EngineResult<()> {
         validate_program(&revision.program)?;
         if revision.revision <= previous
             || !seen.insert(revision.revision)
-            || revision.library_version != LIBRARY_VERSION
+            || !supports_library_version(&revision.library_version)
             || revision.change_note.len() > 4096
             || (previous == 0 && (revision.revision != 1 || revision.parent_revision.is_some()))
             || (previous > 0
@@ -1011,6 +1020,7 @@ mod tests {
         )
         .unwrap();
         assert!(!item.saved);
+        assert_eq!(item.revisions[0].library_version, "fella-openui-v2");
         assert_eq!(item.title, "Revenue");
         let resolved = resolve(&profile.0, WORKSPACE, &item.id, None).unwrap();
         assert_eq!(resolved.run.question, source.question);
@@ -1171,6 +1181,7 @@ mod tests {
         assert_eq!(candidate.current_revision, 1);
         assert_eq!(candidate.revisions[0], first.revisions[0]);
         assert_eq!(candidate.revisions[1].parent_revision, Some(1));
+        assert_eq!(candidate.revisions[1].library_version, "fella-openui-v2");
         let adopted = adopt(&profile.0, WORKSPACE, &first.id, 1, 2).unwrap();
         assert_eq!(adopted.current_revision, 2);
         assert!(adopt(&profile.0, WORKSPACE, &first.id, 1, 1).is_err());
@@ -1193,6 +1204,42 @@ mod tests {
             load(&profile.0, WORKSPACE, &first.id).unwrap().revisions,
             candidate.revisions
         );
+    }
+
+    #[test]
+    fn legacy_artifact_revisions_load_and_new_revisions_use_current_library_version() {
+        let profile = Profile::new();
+        seed(&profile, "legacy-run");
+        seed(&profile, "next-run");
+        let mut legacy = artifact(&profile, "legacy-run");
+        legacy.revisions[0].library_version = LEGACY_LIBRARY_VERSION.to_owned();
+
+        // Seed a serialized v1 record to exercise the normal load path.
+        let db = store_unlocked(&profile.0).unwrap();
+        put_artifact_unlocked(&db, &legacy).unwrap();
+        drop(db);
+        let loaded = load(&profile.0, WORKSPACE, &legacy.id).unwrap();
+        assert_eq!(loaded.revisions[0].library_version, LEGACY_LIBRARY_VERSION);
+
+        // Preserve the old revision byte-for-byte while ensuring all newly
+        // authored revisions use the current v2 library.
+        let revised = revise(
+            &profile.0,
+            WORKSPACE,
+            &legacy.id,
+            1,
+            Some("next-run"),
+            Some("root = Report()"),
+            "Refresh presentation",
+        )
+        .unwrap();
+        assert_eq!(revised.revisions[0], loaded.revisions[0]);
+        assert_eq!(revised.revisions[1].library_version, LIBRARY_VERSION);
+        assert_eq!(load(&profile.0, WORKSPACE, &legacy.id).unwrap(), revised);
+
+        let mut unsupported = revised;
+        unsupported.revisions[0].library_version = "fella-openui-v3".into();
+        assert!(validate_artifact(&unsupported).is_err());
     }
 
     #[test]
