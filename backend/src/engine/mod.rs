@@ -4,6 +4,7 @@
 pub mod agent;
 pub mod analysis_store;
 pub mod analytics;
+pub mod artifact_exchange;
 pub mod artifacts;
 pub mod capabilities;
 pub mod catalog;

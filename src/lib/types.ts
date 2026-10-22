@@ -658,7 +658,8 @@ export type AskMode = 'ask' | 'inspect';
  * read and the backend remains the source of truth for access. */
 export type ContextReference =
 	| { kind: 'source'; key: string; label: string; detail?: string }
-	| { kind: 'column'; key: string; label: string; detail?: string };
+	| { kind: 'column'; key: string; label: string; detail?: string }
+	| { kind: 'artifact'; key: string; label: string; detail?: string };
 
 /** One observable step in a local question run. Kept in the conversation so
  * switching workspaces never loses the small amount of run history shown in the UI. */
@@ -690,6 +691,9 @@ export interface Message {
 	run_duration_ms?: number;
 	/** Present on assistant messages once the answer is complete. */
 	answer?: Answer;
+	/** Projection link only; Rust artifact/run stores own the analytical output. */
+	artifact_id?: string;
+	artifact_revision?: number;
 	/** True while the assistant message is still streaming. */
 	pending?: boolean;
 	ts: number;

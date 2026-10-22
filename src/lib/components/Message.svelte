@@ -7,6 +7,7 @@
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
+	import AnalyticalAnswer from './AnalyticalAnswer.svelte';
 	import { enterUp } from '$lib/motion';
 	import { isRenderableChartEvidence } from '$lib/workbench';
 
@@ -178,7 +179,9 @@
 		{#if split.background}
 			<div class="background">{split.background}</div>
 		{/if}
-		{#if hasVisualAnswer}
+		{#if message.artifact_id}
+			<AnalyticalAnswer {message} />
+		{:else if hasVisualAnswer}
 			<div class="text rich answer-lead"><MarkdownContent text={composition.lead} /></div>
 			<div class="answer-visuals" aria-label="Visual answer">
 				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
@@ -215,6 +218,9 @@
 				{/if}
 				{#if message.pending}<span class="thinking" aria-hidden="true"></span>{/if}
 			</div>
+		{/if}
+		{#if !message.artifact_id && !message.pending && message.answer?.turn_id && message.answer?.workspace && message.answer?.evidence.some(item => !item.error && ['run_sql', 'run_python', 'forecast_analysis'].includes(item.tool) && (item.rows || item.result_table))}
+			<AnalyticalAnswer {message} />
 		{/if}
 	{:else}
 		<div class="text">{message.text}</div>

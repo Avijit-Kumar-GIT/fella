@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import { ipc } from '$lib/ipc';
+	import { requestArtifactChange } from '$lib/commands';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { session, type WorkspaceToolTab } from '$lib/session.svelte';
 	import type { Investigation } from '$lib/types';
@@ -218,6 +219,7 @@
 	}
 
 	function baseTabLabel(tab: WorkspaceToolTab): string {
+		if (tab.kind === 'studio') return tab.title || 'Studio';
 		if (tab.kind === 'context') return 'Workspace context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
 		if (tab.kind === 'terminal') return 'Shell';
@@ -237,6 +239,7 @@
 		return `${label} ${matchingTabs.findIndex((item) => item.id === tab.id) + 1}`;
 	}
 	function tabScope(tab: WorkspaceToolTab): string {
+		if (tab.kind === 'studio') return 'Saved analytical document';
 		if (tab.kind === 'context') return 'Shared workspace guide and knowledge';
 		if (tab.kind === 'terminal') return 'Independent shell session';
 		if (tab.kind === 'source') return tab.sourcePath ?? 'Read-only file preview';
@@ -333,7 +336,7 @@
 			<div class="workspace-tool-chooser-inner">
 				<header class="workspace-tool-chooser-heading">
 					<h2>Open a tool</h2>
-					<p>Open an Investigation, context, or Shell.</p>
+					<p>Open an Investigation, Studio, context, or Shell.</p>
 				</header>
 			<div class="workspace-tool-list" aria-label="Available workspace tools">
 				<DropdownMenu.Root open={investigationsOpen} onOpenChange={setInvestigationsOpen}>
@@ -416,6 +419,11 @@
 					</DropdownMenu.Portal>
 				</DropdownMenu.Root>
 				<div class="workspace-tool-group-label workspace-tool-group-secondary">Workspace</div>
+				<button class="workspace-tool-option" type="button" data-testid="workspace-tool-studio" onclick={() => session.openStudioToolTab()}>
+					<span class="workspace-tool-option-icon"><Icon name="file" size={16} /></span>
+					<span class="workspace-tool-option-copy"><strong>Studio</strong><small>Saved analyses and reports</small></span>
+					<Icon name="chevron-right" size={16} />
+				</button>
 				<button
 					class="workspace-tool-option"
 					type="button"
@@ -448,7 +456,20 @@
 	</div>
 	{:else if activeTab && activeTab.kind !== 'terminal'}
 		<div class="workspace-content" id="workspace-tool-content" role="tabpanel" aria-label={tabLabel(activeTab)}>
-			{#if activeTab.kind === 'preview' && activeTab.preview}
+			{#if activeTab.kind === 'studio' && workspacePath}
+				{@const ownerTab = activeTab}
+				{#key `${workspacePath}:${ownerTab.id}`}
+					{#await import('./StudioView.svelte')}
+						<p role="status">Opening Studio…</p>
+					{:then module}
+						<module.default workspace={workspacePath} documentId={ownerTab.documentId} initialArtifactId={ownerTab.initialArtifactId} onopen={(id) => session.setStudioTabDocument(ownerTab.id, id)} onrequestchange={async (artifact, instruction) => {
+							await requestArtifactChange(artifact, instruction);
+						}} />
+					{:catch error}
+						<p role="alert">Could not open Studio: {String(error)}</p>
+					{/await}
+				{/key}
+			{:else if activeTab.kind === 'preview' && activeTab.preview}
 				<CompanionPane reference={activeTab.preview} conversationId={activeTab.conversationId} embedded onclose={() => activeTab && session.closeWorkspaceToolTab(activeTab.id)} />
 			{:else if activeTab.kind === 'source'}
 				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} {onexpand} />

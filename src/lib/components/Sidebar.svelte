@@ -30,6 +30,10 @@
 	};
 
 	let list = $state<ConversationSummary[]>([]);
+	let conversationDeleteTarget = $state<ConversationSummary | null>(null);
+	let conversationDeleteDialogOpen = $state(false);
+	let deletingConversation = $state(false);
+	let conversationDeleteError = $state('');
 	let workspaceDeleteTarget = $state<Repository | null>(null);
 	let workspaceDeleteDialogOpen = $state(false);
 	let deletingWorkspace = $state(false);
@@ -165,17 +169,28 @@
 		}
 	}
 
-	async function remove(c: ConversationSummary, e: MouseEvent) {
+	function remove(c: ConversationSummary, e: MouseEvent) {
 		e.stopPropagation();
+		conversationDeleteTarget = c;
+		conversationDeleteError = '';
+		conversationDeleteDialogOpen = true;
+	}
+
+	async function confirmConversationDelete() {
+		const target = conversationDeleteTarget;
+		if (!target || deletingConversation) return;
+		deletingConversation = true;
+		conversationDeleteError = '';
 		try {
-			await ipc.deleteConversation(c.id);
-			list = list.filter((x) => x.id !== c.id);
+			await ipc.deleteConversation(target.id);
+			list = list.filter((x) => x.id !== target.id);
 			// If this conversation is still live, remove it too --
 			// otherwise its very next settle re-archives it, undoing the delete.
-			session.removeConversationWithoutArchiving(c.id);
-		} catch (err) {
-			session.addSystem(`error: ${errMsg(err)}`);
-		}
+			session.removeConversationWithoutArchiving(target.id);
+			conversationDeleteDialogOpen = false;
+			conversationDeleteTarget = null;
+		} catch (err) { conversationDeleteError = errMsg(err); }
+		finally { deletingConversation = false; }
 	}
 </script>
 
@@ -248,7 +263,7 @@
 						</Button>
 						<div class="row-actions">
 							<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" onclick={(e) => startRename(c, e)}><Icon name="pencil" size={14} /></Button>
-							<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" onclick={(e) => remove(c, e)}><Icon name="x" size={14} /></Button>
+							<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" title="Delete conversation" onclick={(e) => remove(c, e)}><Icon name="x" size={14} /></Button>
 						</div>
 					{/if}
 				</div>
@@ -299,7 +314,7 @@
 					Delete {workspaceDeleteTarget?.name ?? 'workspace'}?
 				</Dialog.Title>
 				<Dialog.Description class="workspace-delete-description">
-					This permanently removes the workspace and its saved conversations from Fella. The folder, files, and any project notes are kept.
+					This removes the workspace from the sidebar and deletes its conversations. Saved Studio analyses and their supporting records are kept; reconnect the folder to open them. The folder, files, and project notes are not deleted.
 				</Dialog.Description>
 			</div>
 			{#if workspaceDeleteError}
@@ -310,6 +325,23 @@
 				<Button variant="destructive" disabled={deletingWorkspace} onclick={() => void deleteWorkspaceAndConversations()}>
 					{deletingWorkspace ? 'Deleting…' : 'Delete workspace and conversations'}
 				</Button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root bind:open={conversationDeleteDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fella-ui-dialog-overlay" />
+		<Dialog.Content class="fella-ui-dialog-content conversation-delete-dialog">
+			<Dialog.Title class="workspace-delete-title" level={2}>Delete conversation?</Dialog.Title>
+			<Dialog.Description class="workspace-delete-description">
+				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}” and its transcript will be deleted. Saved Studio outputs, their supporting analysis records, and revisions will remain available in this workspace.
+			</Dialog.Description>
+			{#if conversationDeleteError}<p class="workspace-delete-error" role="alert">{conversationDeleteError}</p>{/if}
+			<div class="workspace-delete-actions">
+				<Button variant="ghost" disabled={deletingConversation} onclick={() => { conversationDeleteDialogOpen = false; }}>Cancel</Button>
+				<Button variant="destructive" disabled={deletingConversation} onclick={() => void confirmConversationDelete()}>{deletingConversation ? 'Deleting…' : 'Delete conversation'}</Button>
 			</div>
 		</Dialog.Content>
 	</Dialog.Portal>
@@ -342,6 +374,7 @@
 	.sidebar-empty { margin:12px 10px; color:var(--text-faint); font-size:var(--fs-xs); }
 	.sidebar-footer { display:grid; gap:2px; padding-top:8px; margin-top:auto; }
 	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
+	:global(.conversation-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
 	:global(.workspace-delete-title) { margin:0; font-size:18px; font-weight:650; }
 	:global(.workspace-delete-description) { display:block; margin-top:8px; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.5; }
 	.workspace-delete-actions { display:flex; justify-content:flex-end; gap:8px; }

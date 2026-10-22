@@ -5,6 +5,12 @@ import { ipc, isDesktop } from './ipc';
 export type Appearance = 'system' | 'light' | 'dark';
 
 const APPEARANCE_KEY = 'fella:appearance';
+const RICH_ANSWERS_KEY = 'fella:rich-answers';
+
+function readRichAnswers(): boolean {
+	try { return typeof localStorage === 'undefined' || localStorage.getItem(RICH_ANSWERS_KEY) !== 'false'; }
+	catch { return true; }
+}
 
 function readAppearance(): Appearance {
 	if (typeof localStorage === 'undefined') return 'system';
@@ -25,6 +31,12 @@ function readSystemDark(): boolean {
 }
 
 class Prefs {
+	/** Only new analytical answers generate UI; reopening never calls a model. */
+	richAnswers = $state(readRichAnswers());
+	setRichAnswers(enabled: boolean): void {
+		this.richAnswers = enabled;
+		try { localStorage.setItem(RICH_ANSWERS_KEY, String(enabled)); } catch { /* Session preference remains usable. */ }
+	}
 	/** The selected appearance. System follows the OS preference. */
 	appearance = $state<Appearance>(readAppearance());
 	/** The currently resolved light/dark mode, used by CSS and image assets. */

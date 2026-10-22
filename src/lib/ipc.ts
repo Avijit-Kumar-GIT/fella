@@ -35,6 +35,7 @@ import type {
 	UpdateStatus,
 	WorkspaceProgress
 } from './types';
+import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDocument, StudioPlacement, BoundResult } from './analytics-artifacts';
 
 export function isElectron(): boolean {
 	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
@@ -135,6 +136,39 @@ function workspaceArgs(workspaceId?: string | null): Record<string, unknown> {
 }
 
 export const ipc = {
+	artifactCreate: (workspaceId: string, turnId: string, title: string, program: string) =>
+		invoke<ArtifactRecord>('artifact_create', { workspaceId, turnId, title, program }),
+	artifactList: (workspaceId: string) => invoke<ArtifactRecord[]>('artifact_list', { workspaceId }),
+	artifactResolve: (workspaceId: string, artifactId: string, revision?: number) =>
+		invoke<ResolvedArtifact>('artifact_resolve', { workspaceId, artifactId, revision }),
+	artifactRevise: (workspaceId: string, artifactId: string, baseRevision: number, update: { run_id?: string; program?: string; change_note: string }) =>
+		invoke<ResolvedArtifact>('artifact_revise', { workspaceId, artifactId, baseRevision, runId: update.run_id, program: update.program, changeNote: update.change_note }),
+	artifactAdopt: (workspaceId: string, artifactId: string, baseRevision: number, revision: number) =>
+		invoke<ResolvedArtifact>('artifact_adopt', { workspaceId, artifactId, baseRevision, revision }),
+	artifactCompare: (workspaceId: string, artifactId: string, beforeRevision: number, afterRevision: number) =>
+		invoke<ArtifactComparison>('artifact_compare', { workspaceId, artifactId, beforeRevision, afterRevision }),
+	presentationResults: (workspaceId: string, turnId: string) =>
+		invoke<{ run: AnalysisTurn; results: BoundResult[] }>('presentation_results', { workspaceId, turnId }),
+	presentationPropose: (workspaceId: string, turnId: string, model?: string, instruction?: string, operationId?: string) =>
+		invoke<{ program: string; usage: { prompt_tokens: number; completion_tokens: number } | null; elapsed_ms: number; model: string }>('presentation_propose', { workspaceId, turnId, model, instruction, operationId }),
+	studioList: (workspaceId: string) => invoke<StudioDocument[]>('studio_list', { workspaceId }),
+	studioCreate: (workspaceId: string, title: string) => invoke<StudioDocument>('studio_create', { workspaceId, title }),
+	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),
+	studioSave: (workspaceId: string, documentId: string, baseVersion: number, update: { title: string; body: string; placements: StudioPlacement[] }) =>
+		invoke<StudioDocument>('studio_save', { workspaceId, documentId, baseVersion, update }),
+	studioCheckpoint: (workspaceId: string, documentId: string, baseVersion: number, title: string) =>
+		invoke<StudioDocument>('studio_checkpoint', { workspaceId, documentId, baseVersion, title }),
+	studioRestore: (workspaceId: string, documentId: string, baseVersion: number, checkpointId: string) =>
+		invoke<StudioDocument>('studio_restore', { workspaceId, documentId, baseVersion, checkpointId }),
+	studioExportPackage: (workspaceId: string, documentId: string) =>
+		invoke<string>('studio_export_package', { workspaceId, documentId }),
+	reportPackagePreview: (json: string) =>
+		invoke<ReportPackagePreview>('report_package_preview', { json }),
+	reportPackageImport: (json: string) =>
+		invoke<ImportedReport>('report_package_import', { json }),
+	reportPackageLoad: (importId: string) =>
+		invoke<ImportedReport>('report_package_load', { importId }),
+	reportPackageList: () => invoke<ReportPackageSummary[]>('report_package_list'),
 	/** Signals the app is interactive; returns cold-start ms. */
 	appReady: () => invoke<number>('app_ready'),
 	appInfo: () => invoke<AppInfo>('app_info'),

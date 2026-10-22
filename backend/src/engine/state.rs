@@ -2017,6 +2017,162 @@ fn scan_document_lines(
 }
 
 impl EngineState {
+    /// Internal storage boundary for workspace-scoped analytical outputs.
+    pub(crate) fn analytical_data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    pub fn presentation_results(
+        &self,
+        workspace: &str,
+        turn_id: &str,
+    ) -> EngineResult<serde_json::Value> {
+        let run = self.analysis_turn_load(turn_id)?;
+        if run.workspace.as_deref() != Some(workspace) {
+            return Err(EngineError::msg(
+                "analysis belongs to a different workspace",
+            ));
+        }
+        let results = crate::engine::artifacts::eligible_results(&run)?;
+        Ok(serde_json::json!({ "run": run, "results": results }))
+    }
+
+    fn resolve_artifact_context_refs(
+        &self,
+        references: &[ContextReference],
+        catalog: &Catalog,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<Vec<ContextReference>> {
+        if references.len() > 64 {
+            return Err(EngineError::msg("too many selected context references"));
+        }
+        references.iter().map(|reference| {
+            if reference.kind != "artifact" { return Ok(reference.clone()); }
+            let workspace = catalog.workspace.as_deref().ok_or(EngineError::NoWorkspace)?;
+            let (id, revision) = reference.key.rsplit_once('#').ok_or_else(|| EngineError::msg("select an artifact with an exact revision"))?;
+            let revision = revision.parse::<u64>().map_err(|_| EngineError::msg("invalid artifact revision"))?;
+            let resolved = crate::engine::artifacts::resolve(&self.data_dir, workspace, id, Some(revision))?;
+            if let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) {
+                let scope = resolved.run.source_scope.as_ref().ok_or_else(|| EngineError::msg("this saved output has no recorded source scope; it cannot be attached to a narrowed Investigation"))?;
+                if scope.used_sources.iter().any(|source| !selection.includes_path(&source.source)) {
+                    return Err(EngineError::msg("saved output uses sources outside this Investigation's selection"));
+                }
+            }
+            let detail = serde_json::json!({
+                "original_question": resolved.run.question,
+                "source_revision": resolved.run.workspace_revision,
+                "same_source_revision": resolved.run.workspace_revision == catalog.revision,
+                "interpretation": resolved.run.contract,
+                "definitions": resolved.run.investigation_context.as_ref().map(|context| &context.definitions),
+                "instruction": "User explicitly selected this saved analysis as the target of the current request. Preserve its question and stated meaning except for the requested change. These references explain prior work; inspect current sources and execute a new analysis when changing the calculation. Historical answer prose is not new evidence."
+            }).to_string();
+            if detail.len() > 24 * 1024 { return Err(EngineError::msg("selected artifact context exceeds its budget")); }
+            Ok(ContextReference { kind: "artifact".into(), key: reference.key.clone(), label: resolved.artifact.title, detail: Some(detail) })
+        }).collect()
+    }
+
+    /// Optional presentation call. It cannot execute tools or change the saved
+    /// analytical record, and its token/time accounting is separate from a run.
+    pub async fn presentation_propose(
+        &self,
+        workspace: &str,
+        turn_id: &str,
+        model: Option<&str>,
+        instruction: Option<&str>,
+        operation_id: Option<&str>,
+    ) -> EngineResult<serde_json::Value> {
+        if !self.settings().capabilities.visualizations {
+            return Err(EngineError::msg(
+                "enable Visualizations before generating an interactive presentation",
+            ));
+        }
+        let input = self.presentation_results(workspace, turn_id)?;
+        let instruction = instruction.unwrap_or("").trim();
+        if instruction.chars().count() > 4000 || instruction.contains('\0') {
+            return Err(EngineError::msg("presentation instruction is too long"));
+        }
+        let results = input["results"]
+            .as_array()
+            .ok_or_else(|| EngineError::msg("invalid saved result manifest"))?;
+        if results.is_empty() {
+            return Err(EngineError::msg(
+                "this run has no reusable table results; its saved answer remains available",
+            ));
+        }
+        let manifest: Vec<_> = results.iter().map(|result| serde_json::json!({
+            "id": result["id"], "columns": result["columns"],
+            "row_count": result["row_count"], "complete": result["complete"],
+            "sample": result["exact_rows"].as_array().map(|rows| rows.iter().take(3).collect::<Vec<_>>())
+        })).collect();
+        let library: serde_json::Value =
+            serde_json::from_str(include_str!("../../resources/presentation-library.json"))?;
+        let prompt = library["prompt"]
+            .as_str()
+            .ok_or_else(|| EngineError::msg("presentation library prompt is unavailable"))?;
+        let user = serde_json::json!({
+            "question": input["run"]["question"].as_str().unwrap_or("").chars().take(4000).collect::<String>(),
+            "saved_answer": input["run"]["result"]["text"].as_str().unwrap_or("").chars().take(8000).collect::<String>(),
+            "verification_status": input["run"]["result"]["status"],
+            "results": manifest, "requested_presentation_change": instruction
+        });
+        let started = Instant::now();
+        let operation_id = operation_id.unwrap_or(turn_id);
+        if operation_id.len() > 128
+            || operation_id.is_empty()
+            || !operation_id
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        {
+            return Err(EngineError::msg("invalid presentation operation identity"));
+        }
+        let operation_key = format!("presentation:{operation_id}");
+        let cancel = Arc::new(AtomicBool::new(false));
+        {
+            let mut operations = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+            if operations.contains_key(&operation_key) {
+                return Err(EngineError::msg(
+                    "presentation operation is already running",
+                ));
+            }
+            operations.insert(operation_key.clone(), cancel.clone());
+        }
+        let user = user.to_string();
+        let response = tokio::select! {
+            response = tokio::time::timeout(std::time::Duration::from_secs(45), self.ask_once_usage(model, prompt, &user)) =>
+                response.map_err(|_| EngineError::msg("presentation generation timed out; the analytical answer is unchanged")).and_then(|value| value),
+            _ = async { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(std::time::Duration::from_millis(40)).await; } } =>
+                Err(EngineError::msg("presentation generation cancelled; the analytical answer is unchanged"))
+        };
+        self.cancel
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&operation_key);
+        let response = response?;
+        let (program, usage) = response;
+        if program.len() > 96 * 1024 {
+            return Err(EngineError::msg("presentation exceeds the output budget"));
+        }
+        let diagnostic = serde_json::json!({
+            "workspace": workspace, "turn_id": turn_id,
+            "library_version": library["version"], "schema_hash": library["hash"],
+            "model": model.filter(|v| !v.trim().is_empty()).unwrap_or(&self.settings().model),
+            "elapsed_ms": started.elapsed().as_millis() as u64, "usage": usage,
+            "program_bytes": program.len()
+        });
+        let folder = self.data_dir.join("analysis").join("presentation-attempts");
+        if std::fs::create_dir_all(&folder).is_ok() {
+            let mut identity = [0u8; 16];
+            if getrandom::fill(&mut identity).is_ok() {
+                let name: String = identity.iter().map(|b| format!("{b:02x}")).collect();
+                if let Ok(body) = serde_json::to_vec(&diagnostic) {
+                    let _ = std::fs::write(folder.join(format!("{name}.json")), body);
+                }
+            }
+        }
+        Ok(serde_json::json!({ "program": program, "usage": usage,
+            "elapsed_ms": diagnostic["elapsed_ms"], "model": diagnostic["model"] }))
+    }
+
     pub fn new(data_dir: &Path) -> EngineResult<Self> {
         Self::build(data_dir, true, Arc::new(Mutex::new(HashMap::new())))
     }
@@ -5141,6 +5297,9 @@ exactly, character for character, from the list below.";
         let source_selection = investigation_context
             .as_ref()
             .map(|context| &context.source_selection);
+        let resolved_context_refs =
+            self.resolve_artifact_context_refs(context_refs, &turn_catalog, source_selection)?;
+        let context_refs = resolved_context_refs.as_slice();
         let context = self.context_packet_for_source_selection(
             &analysis_question,
             conversation_id,

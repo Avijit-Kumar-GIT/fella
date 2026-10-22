@@ -30,7 +30,7 @@
 		{ key: 'table_analysis', label: 'Table analysis', detail: 'Inspect schemas and field profiles; query with read-only SQL, including joins and grouped totals.' },
 		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search supported text and text-based PDFs; no OCR.' },
 		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed calculations using read-only data results.' },
-		{ key: 'visualizations', label: 'Visualizations', detail: 'Create validated charts from table results, with source lineage.' }
+		{ key: 'visualizations', label: 'Visualizations', detail: 'Compose data-bound analytical views and charts from saved results, with source lineage.' }
 	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
@@ -306,6 +306,10 @@
 						</Switch.Root>
 					</div>
 				{/each}
+				<div class="capability-row">
+					<div class="capability-copy"><strong>Interactive answers</strong><small>Compose rich views after new analyses. Uses an additional model call; saved views reopen without one.</small></div>
+					<Switch.Root class="fella-ui-switch" checked={prefs.richAnswers} aria-label={`Interactive answers: ${prefs.richAnswers ? 'on' : 'off'}`} onCheckedChange={(enabled) => prefs.setRichAnswers(enabled)}><Switch.Thumb class="fella-ui-switch-thumb" /></Switch.Root>
+				</div>
 			</div>
 			<details class="capability-details">
 				<summary>Statistics, forecasting, and chart types</summary>

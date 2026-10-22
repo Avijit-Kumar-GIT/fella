@@ -11,6 +11,9 @@ import type {
 	ProviderHealth,
 	ProviderInfo
 } from './types';
+import type { ResolvedArtifact } from './analytics-artifacts';
+import type { OutputTarget } from './analytical-output.svelte';
+import { prefs } from './prefs.svelte';
 
 const ensuredInvestigations = new Map<string, Promise<Investigation>>();
 
@@ -994,7 +997,8 @@ async function ask(
 	conv: Conversation,
 	clarificationTurnId?: string,
 	questionRef?: { investigationId: string; questionId: string },
-	knownInvestigation?: Investigation
+	knownInvestigation?: Investigation,
+	outputTarget?: OutputTarget
 ): Promise<void> {
 	if (!requireEngine()) return;
 	conv.busy = true;
@@ -1097,6 +1101,28 @@ async function ask(
 		conv.finishRun(failed);
 		if (questionRef) session.investigationsVersion += 1;
 	}
+	if (!failed && (prefs.richAnswers || outputTarget) && msg.answer?.workspace && msg.answer.turn_id && !msg.answer.clarification && session.settings?.capabilities?.visualizations !== false && msg.answer.evidence.some(item => !item.error && ['run_sql', 'run_python', 'forecast_analysis'].includes(item.tool) && (item.rows || item.result_table))) {
+		void import('./analytical-output.svelte').then(({ createAnalyticalOutput }) => createAnalyticalOutput(msg, msg.answer!.workspace!.path, conv.model || undefined, outputTarget));
+	}
+}
+
+/** Explicit artifact targets survive tab switches; source scope remains the
+ * receiving conversation's boundary and Rust validates the selected reference. */
+export async function requestArtifactChange(artifact: ResolvedArtifact, instruction: string): Promise<void> {
+	const text = instruction.trim();
+	const workspace = artifact.artifact.workspace;
+	if (!text || !requireEngine()) return;
+	if (session.catalog.workspace !== workspace) throw new Error('Open this analysis’s workspace before requesting a change.');
+	const conv = session.ensureChat();
+	if (conv.busy) throw new Error('Finish the current analysis before requesting this change.');
+	conv.bindWorkspaceScope(workspace);
+	if (conv.workspaceScope !== workspace) throw new Error('The conversation belongs to another workspace.');
+	const key = `${artifact.artifact.id}#${artifact.revision.revision}`;
+	conv.addContext({ kind: 'artifact', key, label: artifact.artifact.title });
+	conv.addUser(text);
+	try {
+		await ask(text, conv, undefined, undefined, undefined, { artifactId: artifact.artifact.id, baseRevision: artifact.artifact.current_revision, instruction: text });
+	} finally { conv.removeContext('artifact', key); session.persist(); }
 }
 
 /** Launch a saved Investigation Question from its linked conversation. The
@@ -1206,6 +1232,9 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);
+	}
+	if (!failed && prefs.richAnswers && msg.answer?.workspace && msg.answer.turn_id && !msg.answer.clarification && session.settings?.capabilities?.visualizations !== false && msg.answer.evidence.some(item => !item.error && ['run_sql', 'run_python', 'forecast_analysis'].includes(item.tool) && (item.rows || item.result_table))) {
+		void import('./analytical-output.svelte').then(({ createAnalyticalOutput }) => createAnalyticalOutput(msg, msg.answer!.workspace!.path, conv.model || undefined));
 	}
 }
 
