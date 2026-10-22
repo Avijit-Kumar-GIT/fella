@@ -18,6 +18,26 @@ use crate::engine::runtime::{
 const MAX_RECENT_TURNS: usize = 100;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Shared by canonical-run creation/deletion and artifact/Studio mutation.
+/// A file-backed lock also serializes separate engine processes using the same
+/// profile. Callers must not acquire it recursively; artifact internals use
+/// explicitly named unlocked helpers while this guard is held.
+pub(crate) fn lifecycle_lock(data_dir: &Path) -> EngineResult<std::fs::File> {
+    let directory = data_dir.join("analysis");
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| EngineError::io("create analysis directory", error))?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(directory.join(".lifecycle.lock"))
+        .map_err(|error| EngineError::io("open analysis lifecycle lock", error))?;
+    file.lock()
+        .map_err(|error| EngineError::io("lock analysis lifecycle", error))?;
+    Ok(file)
+}
+
 fn turns_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("analysis").join("turns")
 }
@@ -37,6 +57,7 @@ fn turn_path(data_dir: &Path, turn_id: &str) -> EngineResult<PathBuf> {
 /// The temporary file is linked into place only if the destination is absent,
 /// so duplicate IDs fail atomically instead of silently erasing history.
 pub fn create(data_dir: &Path, turn: &AnalysisTurn) -> EngineResult<String> {
+    let _lifecycle = lifecycle_lock(data_dir)?;
     let path = turn_path(data_dir, &turn.id)?;
     let parent = path
         .parent()
@@ -99,11 +120,12 @@ pub fn exists(data_dir: &Path, turn_id: &str) -> bool {
     turn_path(data_dir, turn_id).is_ok_and(|path| path.is_file())
 }
 
-/// Remove every persisted analysis record belonging to a deleted conversation.
-/// These records contain the question, answer, and evidence independently of
-/// the user-visible transcript archive, so deleting only that archive is not a
-/// complete deletion.
+/// Remove a conversation's runs except those supporting explicitly saved work.
+/// The transcript can be deleted independently; saved artifacts and all their
+/// revision inputs remain inspectable. The UI should disclose this retention.
 pub fn delete_conversation(data_dir: &Path, conversation_id: &str) -> EngineResult<usize> {
+    let _lifecycle = lifecycle_lock(data_dir)?;
+    let retained = super::artifacts::retained_run_ids_unlocked(data_dir)?;
     let directory = turns_dir(data_dir);
     let entries = match std::fs::read_dir(&directory) {
         Ok(entries) => entries,
@@ -142,6 +164,10 @@ pub fn delete_conversation(data_dir: &Path, conversation_id: &str) -> EngineResu
             .get("conversation_id")
             .and_then(serde_json::Value::as_str)
             == Some(conversation_id)
+            && !record
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| retained.contains(id))
         {
             matches.push(path);
         }

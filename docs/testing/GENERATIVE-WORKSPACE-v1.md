@@ -78,3 +78,12 @@ Each slice records its commit, checks, failures, and exclusions here or in a
 linked follow-up. This document specifies behavior; it is not proof of delivery.
 
 - Slice 0: acceptance contracts and baseline recorded; implementation pending.
+- Slice 1 (persistence): stable artifacts, immutable candidate revisions,
+  optimistic adoption, canonical result bindings, Studio documents/checkpoints,
+  and user-approved saved-work retention. `cargo test --manifest-path
+  backend/Cargo.toml --lib artifacts --locked`: 17 passed. The backend worker
+  additionally ran the eight existing analysis-store tests successfully.
+  No existing expectations changed. No UI/model/platform claim is made by
+  this library slice. A small rusqlite metadata store reuses the bundled
+  SQLite dependency to atomically commit document pins and retention markers;
+  canonical runs and result payloads remain in their existing store.
