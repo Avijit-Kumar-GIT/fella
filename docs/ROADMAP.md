@@ -5,6 +5,17 @@ schedule or a list of completed backlog items. The repository's versioned
 benchmarks and issues carry the detailed task contracts. Do not turn an
 individual failed example into a special-case production rule.
 
+## Proposed generative analytical workspace
+
+The [OpenUI analytical workspace plan](OPENUI-ANALYTICAL-WORKSPACE-PLAN.md)
+records the proposed path from flexible generated answers to reusable
+artifacts, Studio documents, analytical revisions, and deterministic portable
+reports. It distinguishes inspected implementation from proposed work and
+defines compatibility, security, performance, and delivery gates. It is a
+planning proposal, not a claim that OpenUI or Studio is implemented, and does
+not authorize a sweeping rewrite. Some interface descriptions below are
+historical; the plan identifies the current chat-plus-Tools baseline.
+
 ## Current priorities
 
 1. **Measure broad analytical quality.** Grow FQA-Bench beyond its initial
