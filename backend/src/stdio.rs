@@ -480,6 +480,12 @@ async fn dispatch(
             "presentation_propose" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let turn_id: String = required(&request.params, "turnId")?;
+                let design_plan = request
+                    .params
+                    .get("designPlan")
+                    .cloned()
+                    .map(crate::engine::presentation_intelligence::validate_design_plan_value)
+                    .transpose()?;
                 workspace_engine
                     .presentation_propose(
                         &workspace,
@@ -487,6 +493,7 @@ async fn dispatch(
                         request.params.get("model").and_then(Value::as_str),
                         request.params.get("instruction").and_then(Value::as_str),
                         request.params.get("operationId").and_then(Value::as_str),
+                        design_plan,
                     )
                     .await
             }

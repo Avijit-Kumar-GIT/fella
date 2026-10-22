@@ -16,7 +16,7 @@ use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
 use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
-    Answer, AskEvent, EvidenceItem, VerificationCheck, VerificationStatus,
+    Answer, AskEvent, EvidenceItem, Usage, VerificationCheck, VerificationStatus,
 };
 use crate::engine::ingest::docs;
 use crate::engine::investigation::{
@@ -27,6 +27,7 @@ use crate::engine::investigation::{
 };
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
+use crate::engine::presentation_intelligence::{self, PresentationDesignPlan};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
     AnalysisContract, AnalysisResult, AnalysisSourceScope, AnalysisTurn, AnalysisTurnReplayStatus,
@@ -2080,6 +2081,7 @@ impl EngineState {
         model: Option<&str>,
         instruction: Option<&str>,
         operation_id: Option<&str>,
+        design_plan: Option<PresentationDesignPlan>,
     ) -> EngineResult<serde_json::Value> {
         if !self.settings().capabilities.visualizations {
             return Err(EngineError::msg(
@@ -2099,22 +2101,43 @@ impl EngineState {
                 "this run has no reusable table results; its saved answer remains available",
             ));
         }
-        let manifest: Vec<_> = results.iter().map(|result| serde_json::json!({
-            "id": result["id"], "columns": result["columns"],
-            "row_count": result["row_count"], "complete": result["complete"],
-            "sample": result["exact_rows"].as_array().map(|rows| rows.iter().take(3).collect::<Vec<_>>())
-        })).collect();
+        let manifest: Vec<_> = results
+            .iter()
+            .map(|result| {
+                serde_json::json!({
+                    "id": result["id"], "columns": result["columns"],
+                    "row_count": result["row_count"], "complete": result["complete"]
+                })
+            })
+            .collect();
+        let bound_results: Vec<crate::engine::artifacts::BoundResult> =
+            serde_json::from_value(serde_json::Value::Array(results.clone()))?;
+        let profiles = presentation_intelligence::profile_results(&bound_results);
         let library: serde_json::Value =
             serde_json::from_str(include_str!("../../resources/presentation-library.json"))?;
-        let prompt = library["prompt"]
+        let composition_prompt = library["prompt"]
             .as_str()
             .ok_or_else(|| EngineError::msg("presentation library prompt is unavailable"))?;
-        let user = serde_json::json!({
+        let planner_prompt = library["planner_prompt"]
+            .as_str()
+            .ok_or_else(|| EngineError::msg("presentation design prompt is unavailable"))?;
+        let request_context = serde_json::json!({
             "question": input["run"]["question"].as_str().unwrap_or("").chars().take(4000).collect::<String>(),
             "saved_answer": input["run"]["result"]["text"].as_str().unwrap_or("").chars().take(8000).collect::<String>(),
             "verification_status": input["run"]["result"]["status"],
-            "results": manifest, "requested_presentation_change": instruction
+            "analysis_contract": input["run"]["contract"],
+            "results": manifest,
+            "result_profiles": profiles,
+            "requested_presentation_change": if instruction.is_empty() {
+                "Create an interactive presentation that makes this saved analysis easy to understand."
+            } else {
+                instruction
+            }
         });
+        let design_user = request_context.to_string();
+        if design_user.len() > 256 * 1024 {
+            return Err(EngineError::msg("saved results are too large to design one interactive view; the analytical answer is unchanged"));
+        }
         let started = Instant::now();
         let operation_id = operation_id.unwrap_or(turn_id);
         if operation_id.len() > 128
@@ -2136,27 +2159,74 @@ impl EngineState {
             }
             operations.insert(operation_key.clone(), cancel.clone());
         }
-        let user = user.to_string();
-        let response = tokio::select! {
-            response = tokio::time::timeout(std::time::Duration::from_secs(45), self.ask_once_usage(model, prompt, &user)) =>
-                response.map_err(|_| EngineError::msg("presentation generation timed out; the analytical answer is unchanged")).and_then(|value| value),
-            _ = async { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(std::time::Duration::from_millis(40)).await; } } =>
-                Err(EngineError::msg("presentation generation cancelled; the analytical answer is unchanged"))
-        };
+        let response: EngineResult<_> = async {
+            let (plan, design_usage, design_elapsed_ms) = if let Some(plan) = design_plan {
+                plan.validate()?;
+                (plan, None, None)
+            } else {
+                let design_started = Instant::now();
+                let (design_response, usage) = self
+                    .presentation_model_call(model, planner_prompt, &design_user, &cancel, "designing")
+                    .await?;
+                let plan = presentation_intelligence::parse_design_plan(&design_response)?;
+                (plan, usage, Some(design_started.elapsed().as_millis() as u64))
+            };
+
+            let composition_started = Instant::now();
+            let composition_user = serde_json::json!({
+                "question": request_context["question"],
+                "saved_answer": request_context["saved_answer"],
+                "verification_status": request_context["verification_status"],
+                "analysis_contract": request_context["analysis_contract"],
+                "results": request_context["results"],
+                "result_profiles": request_context["result_profiles"],
+                "requested_presentation_change": request_context["requested_presentation_change"],
+                "design_plan": plan
+            }).to_string();
+            if composition_user.len() > 256 * 1024 {
+                return Err(EngineError::msg("saved results are too large to compose into one interactive view; the analytical answer is unchanged"));
+            }
+            let (program, composition_usage) = self
+                .presentation_model_call(model, composition_prompt, &composition_user, &cancel, "composing")
+                .await?;
+            Ok((
+                program,
+                plan,
+                Usage::merge(design_usage, composition_usage),
+                design_elapsed_ms,
+                composition_started.elapsed().as_millis() as u64,
+                design_usage,
+                composition_usage,
+            ))
+        }
+        .await;
         self.cancel
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&operation_key);
-        let response = response?;
-        let (program, usage) = response;
+        let (
+            program,
+            plan,
+            usage,
+            design_elapsed_ms,
+            composition_elapsed_ms,
+            design_usage,
+            composition_usage,
+        ) = response?;
         if program.len() > 96 * 1024 {
             return Err(EngineError::msg("presentation exceeds the output budget"));
         }
         let diagnostic = serde_json::json!({
             "workspace": workspace, "turn_id": turn_id,
             "library_version": library["version"], "schema_hash": library["hash"],
+            "design_version": library["design_version"],
             "model": model.filter(|v| !v.trim().is_empty()).unwrap_or(&self.settings().model),
-            "elapsed_ms": started.elapsed().as_millis() as u64, "usage": usage,
+            "elapsed_ms": started.elapsed().as_millis() as u64,
+            "design_elapsed_ms": design_elapsed_ms,
+            "composition_elapsed_ms": composition_elapsed_ms,
+            "design_usage": design_usage,
+            "composition_usage": composition_usage,
+            "usage": usage,
             "program_bytes": program.len()
         });
         let folder = self.data_dir.join("analysis").join("presentation-attempts");
@@ -2170,7 +2240,30 @@ impl EngineState {
             }
         }
         Ok(serde_json::json!({ "program": program, "usage": usage,
+            "design_plan": plan,
             "elapsed_ms": diagnostic["elapsed_ms"], "model": diagnostic["model"] }))
+    }
+
+    async fn presentation_model_call(
+        &self,
+        model: Option<&str>,
+        system: &str,
+        user: &str,
+        cancel: &AtomicBool,
+        phase: &str,
+    ) -> EngineResult<(String, Option<Usage>)> {
+        tokio::select! {
+            response = tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                self.ask_once_usage(model, system, user),
+            ) => response
+                .map_err(|_| EngineError::msg(format!("presentation {phase} timed out; the analytical answer is unchanged")))?,
+            _ = async {
+                while !cancel.load(Ordering::Relaxed) {
+                    tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+                }
+            } => Err(EngineError::msg(format!("presentation {phase} cancelled; the analytical answer is unchanged"))),
+        }
     }
 
     pub fn new(data_dir: &Path) -> EngineResult<Self> {

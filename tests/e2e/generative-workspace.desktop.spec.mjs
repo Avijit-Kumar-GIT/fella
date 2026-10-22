@@ -4,9 +4,11 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Generative workspace contract v1; executable task set v1.1 (2026-10-21).
+ * Generative workspace contract v1; executable task set v1.2 (2026-10-21).
  * Expected semantics are fixed before candidate execution and come from
  * docs/testing/GENERATIVE-WORKSPACE-v1.md, not observed rendering output.
+ * v1.2 adds the design-plan/profile prompt contract; this deterministic
+ * desktop suite makes no live-model response-diversity or quality claim.
  *
  * 1. Recorded analysis -> persisted artifact -> Studio; narrative/order survive
  *    restart with exact saved values and no model call or source query.
@@ -38,8 +40,7 @@ const noExecutionMethods = [
 	'investigation_propose_questions', 'run_sql_direct', 'reindex',
 	'sample_source', 'preview_file'
 ];
-// Positional syntax confirmed against the rendering agent's
-// src/lib/presentation/manifest.ts example, not a custom guessed chart schema.
+// Positional syntax confirmed against the Fella OpenUI component schema.
 const comparisonProgram = `root = Document([
   Text("Presentation begins with the saved comparison."),
   Section("Quarter comparison", [

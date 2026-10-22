@@ -9,9 +9,11 @@ implementation status below was updated 2026-10-21.
 
 The initial local vertical slice is implemented across OpenUI-backed answers,
 saved artifacts, Studio, deterministic Markdown, and a validated portable
-report package. It preserves the existing Rust analytics harness and uses the
-existing model/provider transport for a separate presentation-generation step.
-The details and test evidence are recorded in the
+report package. Presentation generation now has separate data-aware design
+and composition passes over saved results. It preserves the existing Rust
+analytics harness and provider transport. This improves the generation
+process; live-provider presentation quality remains unmeasured. The details
+and test evidence are recorded in the
 [delivery ledger](testing/GENERATIVE-WORKSPACE-v1.md).
 
 Delivered in this slice:
@@ -21,9 +23,13 @@ Delivered in this slice:
   values, and a validated declarative Vega-Lite renderer. Legacy chart output
   remains supported. This broadens the supported presentation vocabulary; it
   does not provide arbitrary executable visualization code.
-- Separate, bounded presentation generation after eligible completed analysis,
-  with diagnostics and readable fallback that does not alter analytical
-  verification. Users can request a rich view or a targeted artifact change.
+- Separate, bounded two-pass presentation generation after eligible completed
+  analysis: a free-form design decision uses the saved question/contract/answer
+  and bounded result profiles, then OpenUI composition follows that decision.
+  The fixed revenue/bar/table example was removed from model context. Repairs
+  reuse the original design plan. Diagnostics separate design/composition
+  latency and token use; readable fallback does not alter analytical
+  verification. Live-provider quality/diversity is still unmeasured.
 - Workspace-owned artifact identities and immutable revisions, canonical saved
   result references, Studio documents/placements, revision-aware writes,
   checkpoints, and retention of saved work after conversation deletion.
@@ -245,7 +251,7 @@ User question / targeted analytical change
                     |
         Canonical result/evidence references
                     |
-      Optional presentation-generation phase
+      Optional design -> composition phases
       existing model transport; no new data tools
                     |
         Stored OpenUI program + bindings

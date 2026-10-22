@@ -35,7 +35,7 @@ import type {
 	UpdateStatus,
 	WorkspaceProgress
 } from './types';
-import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDocument, StudioPlacement, BoundResult } from './analytics-artifacts';
+import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDocument, StudioPlacement, BoundResult, PresentationDesignPlan } from './analytics-artifacts';
 
 export function isElectron(): boolean {
 	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
@@ -149,8 +149,8 @@ export const ipc = {
 		invoke<ArtifactComparison>('artifact_compare', { workspaceId, artifactId, beforeRevision, afterRevision }),
 	presentationResults: (workspaceId: string, turnId: string) =>
 		invoke<{ run: AnalysisTurn; results: BoundResult[] }>('presentation_results', { workspaceId, turnId }),
-	presentationPropose: (workspaceId: string, turnId: string, model?: string, instruction?: string, operationId?: string) =>
-		invoke<{ program: string; usage: { prompt_tokens: number; completion_tokens: number } | null; elapsed_ms: number; model: string }>('presentation_propose', { workspaceId, turnId, model, instruction, operationId }),
+	presentationPropose: (workspaceId: string, turnId: string, model?: string, instruction?: string, operationId?: string, designPlan?: PresentationDesignPlan) =>
+		invoke<{ program: string; design_plan: PresentationDesignPlan; usage: { prompt_tokens: number; completion_tokens: number } | null; elapsed_ms: number; model: string }>('presentation_propose', { workspaceId, turnId, model, instruction, operationId, designPlan }),
 	studioList: (workspaceId: string) => invoke<StudioDocument[]>('studio_list', { workspaceId }),
 	studioCreate: (workspaceId: string, title: string) => invoke<StudioDocument>('studio_create', { workspaceId, title }),
 	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),

@@ -1,6 +1,6 @@
 import { ipc } from './ipc';
 import { session } from './session.svelte';
-import type { ArtifactRecord, ResolvedArtifact } from './analytics-artifacts';
+import type { ArtifactRecord, PresentationDesignPlan, ResolvedArtifact } from './analytics-artifacts';
 import type { Message } from './types';
 
 /** Ephemeral work state: an app restart never regenerates a saved answer. */
@@ -20,10 +20,12 @@ export async function createAnalyticalOutput(message: Message, workspace: string
 		if (!results.length) throw new Error('No reusable table result was recorded. The original answer is unchanged.');
 		const { validatePresentation } = await import('./presentation/validate');
 		let program = '';
+		let designPlan: PresentationDesignPlan | undefined;
 		let repair = target?.instruction ?? '';
 		for (let attempt = 0; attempt < 2; attempt++) {
-			const response = await ipc.presentationPropose(workspace, turnId, model, repair, operationId);
+			const response = await ipc.presentationPropose(workspace, turnId, model, repair, operationId, designPlan);
 			if (!current()) return null;
+			designPlan = response.design_plan;
 			program = response.program.trim().replace(/^```(?:openui|openui-lang)?\s*\n/i, '').replace(/\n```\s*$/, '');
 			const checked = validatePresentation(program, results);
 			if (checked.valid) break;

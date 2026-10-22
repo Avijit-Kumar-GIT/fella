@@ -8,6 +8,16 @@ export interface BoundResult {
 	row_count: number;
 	complete: boolean;
 }
+/** Free-form, presentation-only design decision; not a closed chart enum. */
+export interface PresentationDesignPlan {
+	analytical_intent: string;
+	visual_thesis: string;
+	primary_form: string;
+	supporting_elements: string[];
+	interaction: string | null;
+	why_this_fits: string;
+	avoid: string[];
+}
 export interface ArtifactRevision {
 	revision: number;
 	parent_revision?: number | null;

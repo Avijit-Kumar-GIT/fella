@@ -4,6 +4,9 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
 `explore/composable-interface`. Scope follows
 [the implementation plan](../OPENUI-ANALYTICAL-WORKSPACE-PLAN.md).
 
+The frozen persistence/export/desktop contract below remains v1. Its executable
+task set is now v1.2; the v1.1 results below remain historical and unchanged.
+
 ## Frozen expected behavior
 
 1. Existing analytical runs remain canonical and immutable. Artifact creation
@@ -38,6 +41,38 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
     original-request fidelity, Tools tabs, and compact layouts retain their
     existing behavior. Presentation failures do not downgrade answer coverage.
 
+## Presentation-generation acceptance addition — task set v1.2
+
+Defined before validating the new presentation-generation path. This adds
+criteria; it does not revise v1/v1.1 assertions or claim a live model result.
+
+11. An explicit design pass receives the saved analytical question, contract,
+    answer/verification status, and bounded profiles of saved result rows.
+    Profiles describe field roles, missingness, cardinality, numeric shape,
+    temporal ordering, completeness, and a small representative sample. They
+    are labeled as design hints, not new evidence. Identifier, high-cardinality
+    text, and long-text cell values are omitted from the representative sample.
+12. The design decision is free-form; it is not a closed chart-family enum or a
+    required KPI/bar/table template. The composition pass receives the decision
+    and can choose prose, exact values, tables, declarative charts, or useful
+    combinations from the registered OpenUI components. A chart/control is
+    optional. OpenUI parsing, saved-result binding, and no-execution checks stay
+    mandatory. Invalid-program repair reuses the original design decision.
+13. Visual variety is not itself the quality metric. Provider evaluation must
+    judge appropriateness against the task and available data: scalar, direct
+    two-period comparison, time trend, ranking, distribution, and exact-record
+    retrieval should not all be forced into one generic composition. Repeating
+    a suitable design for equivalent inputs is acceptable; novelty without
+    analytical fit is not.
+
+The deterministic v1.2 checks cover prompt-template removal, plan parsing and
+bounds, profile behavior/privacy, OpenUI safety/binding, and the existing
+desktop persistence contract. They do **not** prove that a live provider
+follows the plan or produces different appropriate views. That claim requires
+an opt-in provider evaluation with a frozen, varied task set, blinded human
+appropriateness grading, first-attempt validity, exact-value binding, latency,
+and token-cost reporting. No quality score is inferred from unit tests.
+
 ## Test layers and independent grading
 
 - Rust tests: storage, canonical binding, scope, excluded/partial evidence,
@@ -48,7 +83,8 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
   deterministic export, and chat deletion/retention, using disposable profiles.
 - Provider evaluation: distinct opt-in stage. Freeze task versions and usage
   budget first; record first-attempt validity, repair/fallback rate, analytical
-  correctness, presentation appropriateness, latency, and token cost separately.
+  correctness, task/data fit, unnecessary-template rate, presentation
+  appropriateness, latency, and token cost separately.
   Deterministic fixtures do not establish live model compatibility.
 - Visual review: screenshots in ignored test-results, dark/light, compact and
   expanded views, keyboard, exact-values access, no nested-card dashboard chrome.
@@ -153,6 +189,39 @@ Validation evidence for the implementation candidate:
 - Linux Electron loading of `fella://app/` was exercised by the real desktop
   test. A user-reported Windows `ERR_FAILED (-2)` startup was not reproduced
   or verified on Windows; cross-platform packaged startup remains untested.
+
+### Slice 3 — data-aware presentation design (task set v1.2)
+
+The repeated-template failure was in the generation context, not the OpenUI
+renderer: the composer had been shown the same quarterly-revenue metric/bar/
+table example and only three leading result rows. The design pass now receives
+the saved question, analysis contract, answer/verification status, result
+metadata, and deterministic bounded profiles. Profiles sample at most 1,024
+saved rows, 32 fields per result, and 16 result tables, disclose omissions,
+summarize null/cardinality/numeric shape/temporal ordering, and include up to
+eight evenly spaced representative rows. Identifier, high-cardinality, and
+long-text values are redacted from those rows. Profile summaries are marked as
+design hints, never analytical evidence.
+
+The model first selects a free-form visual thesis/form—without a chart-family
+enum—then composes an OpenUI program from registered components and the saved
+bindings. The quarterly-revenue example has been removed from the model-facing
+prompt. A validation repair carries the same plan forward. Rust still enforces
+the existing component, result-binding, and visualization-safety checks. The
+saved analytical run is not rerun. Diagnostics separate planner/composer token
+usage and latency. This adds a model call in the normal case, so token and
+latency costs are expected to rise; no cost or quality improvement is claimed.
+
+Validation: the analytical presentation contract v1.2 passed 47/47; Studio
+report checks passed; `cargo test --manifest-path backend/Cargo.toml --lib
+--locked` passed 425/425; `pnpm check` reported zero errors/warnings; and
+`pnpm electron:build` passed (existing large-chunk warning remains). The
+generative Electron suite first failed before assertions because sandboxed
+Electron could not create its Linux sandbox host (`Operation not permitted`).
+It was rerun outside the sandbox without changing expectations and passed
+7/7. No live provider was called: actual view appropriateness, cross-question
+variation, first-attempt validity, and added token/latency costs remain to be
+evaluated against the v1.2 rubric above.
 
 No hosted/live model evaluation was run. The deterministic fixtures do not
 establish model quality, first-attempt validity, token cost, or provider

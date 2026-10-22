@@ -65,7 +65,7 @@
 	{/if}
 	{#if !message.artifact_id && workspace && turnId}
 		<div class="answer-actions">
-			{#if job?.busy}<span role="status">Preparing interactive view…</span><Button variant="ghost" size="sm" onclick={() => workspace && turnId && outputModule?.cancelAnalyticalOutput(turnId, workspace)}>Cancel view</Button>
+			{#if job?.busy}<span role="status">Designing and building view…</span><Button variant="ghost" size="sm" onclick={() => workspace && turnId && outputModule?.cancelAnalyticalOutput(turnId, workspace)}>Cancel view</Button>
 			{:else if outputModule}<Button variant="ghost" size="sm" onclick={() => workspace && outputModule && void outputModule.createAnalyticalOutput(message, workspace, session.activeChat.model || undefined)}>Create interactive view</Button>{/if}
 		</div>
 	{/if}

@@ -1,9 +1,10 @@
-// Contract v1, task set v1.1: real OpenUI parsing/registration, strict
+// Contract v1, task set v1.2: data-aware design planning, real OpenUI parsing/registration, strict
 // invalid-output and binding rejection, exact values, safe broad Vega-Lite
 // composition, deterministic export, and visible fallback. v1.1 corrects two
 // fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
 // test intent and assertions are unchanged. No model or IPC calls.
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 
 const server = await createServer({ configFile: 'vite.config.ts', appType: 'custom', logLevel: 'error', optimizeDeps: { noDiscovery: true, entries: [] }, server: { middlewareMode: true, hmr: false, ws: false } });
@@ -15,7 +16,7 @@ async function test(name, fn) {
 }
 try {
 	const { validatePresentation } = await server.ssrLoadModule('/src/lib/presentation/validate.ts');
-	const { presentationSchema, presentationPrompt, PRESENTATION_EXAMPLE, presentationManifest } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
+	const { presentationSchema, presentationPrompt, PRESENTATION_EXAMPLE, PRESENTATION_DESIGN_PROMPT, PRESENTATION_DESIGN_VERSION, presentationManifest } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
 	const { analyticalLibrary } = await server.ssrLoadModule('/src/lib/presentation/library.ts');
 	const { exportPresentation } = await server.ssrLoadModule('/src/lib/presentation/export.ts');
 	const { validateChartSpec, bindChartSpec } = await server.ssrLoadModule('/src/lib/presentation/chart.ts');
@@ -24,6 +25,7 @@ try {
 	const { default: AnalyticalPresentation } = await server.ssrLoadModule('/src/lib/components/presentation/AnalyticalPresentation.svelte');
 	const result = { id: 'revenue', columns: ['quarter', 'revenue', 'region', 'low', 'high'], rows: [['Q3', 123.45, 'North', 100, 130], ['Q4', 200, 'South', 180, 220]], exact_rows: [['Q3', '123.450000', 'North', '100', '130'], ['Q4', '200.00', 'South', '180', '220']], row_count: 2, complete: true };
 	const results = [result];
+	const generated = JSON.parse(await readFile(new URL('../backend/resources/presentation-library.json', import.meta.url), 'utf8'));
 	const chart = (spec, id = 'revenue') => `root = Document([Chart(${JSON.stringify(id)}, ${JSON.stringify(spec)}, "Revenue")])`;
 	const basic = { mark: 'bar', encoding: { x: { field: 'quarter', type: 'nominal' }, y: { field: 'revenue', type: 'quantitative' } } };
 	const layered = { encoding: { x: { field: 'quarter', type: 'nominal' } }, layer: [{ mark: 'bar', encoding: { y: { field: 'revenue', type: 'quantitative' } } }, { mark: { type: 'rule', strokeWidth: 2 }, encoding: { y: { field: 'low', type: 'quantitative' }, y2: { field: 'high' } } }, { mark: { type: 'text', dy: -8 }, encoding: { y: { field: 'revenue', type: 'quantitative' }, text: { field: 'revenue', type: 'quantitative' } } }] };
@@ -37,6 +39,15 @@ try {
 		assert.match(presentationPrompt(results), /Metric\(resultId: string, field: string, row: integer, title: string, unit\?: string\)/);
 		assert.match(presentationPrompt(results), /No expressions/);
 		assert.match(presentationPrompt(results), /"id":"revenue"/);
+	});
+	await test('generated prompt has no canonical visualization template and carries an open-ended design brief', () => {
+		assert.equal(generated.design_version, PRESENTATION_DESIGN_VERSION);
+		assert.match(generated.planner_prompt, /no closed list of acceptable visualization forms/i);
+		assert.match(generated.prompt, /design plan and result profiles/i);
+		assert.doesNotMatch(generated.prompt, /Quarterly revenue|Metric\("revenue"/);
+		assert.doesNotMatch(presentationPrompt(results), /Quarterly revenue|Metric\("revenue"/);
+		assert.match(PRESENTATION_DESIGN_PROMPT, /single saved scalar often needs a metric and brief context, not a chart/i);
+		assert.equal('example' in presentationManifest(), false);
 	});
 	await test('canonical fixture and resolved official OpenUI references validate', () => {
 		assert.equal(validatePresentation(PRESENTATION_EXAMPLE, results).valid, true);
@@ -132,6 +143,6 @@ try {
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.1): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v1 (task set v1.2): ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }
