@@ -564,7 +564,11 @@ async fn dispatch(
                     &artifact_id,
                     Some(after_revision),
                 )?;
-                serialized(crate::engine::artifact_exchange::compare(&before, &after))
+                value_result(crate::engine::artifact_exchange::compare_with_dependencies(
+                    engine.analytical_data_dir(),
+                    &before,
+                    &after,
+                ))
             }
             "studio_list" => {
                 let workspace: String = required(&request.params, "workspaceId")?;

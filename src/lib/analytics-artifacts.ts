@@ -51,6 +51,50 @@ export interface ArtifactComparison {
 		key_fields: string[];
 		values: Array<{ key: string[]; field: string; unit: string; before: string; after: string; delta: NumericDelta }>;
 	}>;
+	analytical_diff?: AnalyticalDiff;
+}
+export interface AnalyticalDiffItem {
+	label: string;
+	before: string | null;
+	after: string | null;
+	changed: boolean;
+}
+export interface AnalyticalDiffDimension {
+	status: 'changed' | 'unchanged' | 'unavailable';
+	summary: string;
+	items: AnalyticalDiffItem[];
+	limitations: string[];
+}
+export interface AnalyticalDiffRevision {
+	artifact_id: string;
+	revision: number;
+	run_id: string;
+	role: 'current' | 'proposed' | 'historical';
+	change_note: string;
+}
+export interface AnalyticalDiffConsumer {
+	document_id: string;
+	document_title: string;
+	placement_id: string;
+	checkpoint_id: string | null;
+	checkpoint_title: string | null;
+	pinned_revision: number;
+}
+export interface AnalyticalDiff {
+	version: 1;
+	before: AnalyticalDiffRevision;
+	after: AnalyticalDiffRevision;
+	meaning: AnalyticalDiffDimension;
+	inputs: AnalyticalDiffDimension;
+	method: AnalyticalDiffDimension;
+	results: AnalyticalDiffDimension;
+	impact: {
+		scanned: boolean;
+		complete: boolean;
+		summary: string;
+		consumers: AnalyticalDiffConsumer[];
+		limitations: string[];
+	};
 }
 export interface StudioPlacement {
 	id: string;

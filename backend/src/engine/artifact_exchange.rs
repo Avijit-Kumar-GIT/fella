@@ -68,6 +68,423 @@ pub struct ArtifactComparison {
     pub source_revision_changed: bool,
     pub definitions_or_filters_changed: bool,
     pub tables: Vec<TableComparison>,
+    /// Additive metadata; old reports remain readable. None for untrusted inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analytical_diff: Option<AnalyticalDiff>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DiffStatus {
+    Changed,
+    Unchanged,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffItem {
+    pub label: String,
+    pub before: Option<String>,
+    pub after: Option<String>,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffDimension {
+    pub status: DiffStatus,
+    pub summary: String,
+    pub items: Vec<DiffItem>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffRevision {
+    pub artifact_id: String,
+    pub revision: u64,
+    pub run_id: String,
+    /// current, proposed (not adopted), or historical. Never inferred from prose.
+    pub role: String,
+    pub change_note: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffConsumer {
+    pub document_id: String,
+    pub document_title: String,
+    pub placement_id: String,
+    pub checkpoint_id: Option<String>,
+    pub checkpoint_title: Option<String>,
+    pub pinned_revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiffImpact {
+    pub scanned: bool,
+    pub complete: bool,
+    pub summary: String,
+    pub consumers: Vec<DiffConsumer>,
+    pub limitations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AnalyticalDiff {
+    pub version: u32,
+    pub before: DiffRevision,
+    pub after: DiffRevision,
+    pub meaning: DiffDimension,
+    pub inputs: DiffDimension,
+    pub method: DiffDimension,
+    pub results: DiffDimension,
+    pub impact: DiffImpact,
+}
+
+fn recorded(value: impl Into<String>) -> Option<String> {
+    Some(value.into())
+}
+
+fn item(label: &str, before: Option<String>, after: Option<String>) -> DiffItem {
+    DiffItem {
+        label: label.into(),
+        changed: before != after,
+        before,
+        after,
+    }
+}
+
+fn json_text(value: &impl Serialize) -> Option<String> {
+    serde_json::to_string(value).ok()
+}
+
+fn dimension(items: Vec<DiffItem>, noun: &str, limitations: Vec<String>) -> DiffDimension {
+    let changed = items.iter().filter(|item| item.changed).count();
+    let available = items
+        .iter()
+        .any(|item| item.before.is_some() || item.after.is_some());
+    DiffDimension {
+        status: if !available {
+            DiffStatus::Unavailable
+        } else if changed > 0 {
+            DiffStatus::Changed
+        } else {
+            DiffStatus::Unchanged
+        },
+        summary: if !available {
+            format!("No recorded {noun} to compare.")
+        } else if changed == 0 {
+            format!("No recorded {noun} changed.")
+        } else {
+            format!("{changed} recorded {noun} changed.")
+        },
+        items,
+        limitations,
+    }
+}
+
+fn measures(run: &AnalysisTurn) -> Option<String> {
+    run.contract.as_ref().map(|contract| {
+        contract
+            .measures
+            .iter()
+            .map(|m| {
+                format!(
+                    "{}: {}({}) [{}]",
+                    m.concept,
+                    m.operation,
+                    m.field.as_deref().unwrap_or("field not recorded"),
+                    m.unit.as_deref().unwrap_or("unit not recorded")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+fn filters(run: &AnalysisTurn) -> Option<String> {
+    run.contract.as_ref().map(|contract| {
+        if contract.filters.is_empty() {
+            "No filters recorded".into()
+        } else {
+            contract
+                .filters
+                .iter()
+                .map(|filter| {
+                    format!(
+                        "{} {}: {}",
+                        if filter.exclude { "Exclude" } else { "Include" },
+                        filter.field.as_deref().unwrap_or(&filter.concept),
+                        if filter.resolved_values.is_empty() {
+                            format!("{} (unresolved)", filter.candidate_values.join(", "))
+                        } else {
+                            filter.resolved_values.join(", ")
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    })
+}
+
+fn definitions(run: &AnalysisTurn) -> Option<String> {
+    run.investigation_context.as_ref().map(|context| {
+        if context.definitions.is_empty() {
+            "No saved definitions".into()
+        } else {
+            context
+                .definitions
+                .iter()
+                .map(|definition| {
+                    format!(
+                        "{} · revision {}: {}",
+                        definition.id, definition.revision, definition.text
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+    })
+}
+
+fn sources(run: &AnalysisTurn) -> Option<String> {
+    source_keys(run).map(|sources| {
+        sources
+            .into_iter()
+            .map(|(source, table)| {
+                table.map_or(source.clone(), |table| format!("{source} · {table}"))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+}
+
+fn selection(run: &AnalysisTurn) -> Option<String> {
+    selected_sources(run).map(|(all, paths)| {
+        if all {
+            "All workspace sources eligible".into()
+        } else {
+            paths.into_iter().collect::<Vec<_>>().join("\n")
+        }
+    })
+}
+
+fn methods(run: &AnalysisTurn) -> Option<String> {
+    let entries = run
+        .result
+        .evidence
+        .iter()
+        .filter_map(|evidence| {
+            let tool = evidence.get("tool").and_then(Json::as_str)?;
+            if !matches!(tool, "run_sql" | "run_python") {
+                return None;
+            }
+            let sql = evidence
+                .get("sql")
+                .or_else(|| evidence.get("args").and_then(|args| args.get("sql")))
+                .and_then(Json::as_str);
+            let code = evidence
+                .get("python_calculation")
+                .and_then(|python| python.get("code"))
+                .or_else(|| evidence.get("args").and_then(|args| args.get("code")))
+                .and_then(Json::as_str);
+            Some(format!(
+                "{} · {tool}\n{}",
+                evidence
+                    .get("id")
+                    .and_then(Json::as_str)
+                    .unwrap_or("unlabelled evidence"),
+                sql.or(code).unwrap_or("Computation text not recorded")
+            ))
+        })
+        .collect::<Vec<_>>();
+    (!entries.is_empty()).then(|| entries.join("\n\n"))
+}
+
+fn revision_label(value: &ResolvedArtifact) -> DiffRevision {
+    DiffRevision {
+        artifact_id: value.artifact.id.clone(),
+        revision: value.revision.revision,
+        run_id: value.run.id.clone(),
+        role: if value.revision.revision == value.artifact.current_revision {
+            "current"
+        } else if value.revision.revision > value.artifact.current_revision {
+            "proposed"
+        } else {
+            "historical"
+        }
+        .into(),
+        change_note: value.revision.change_note.clone(),
+    }
+}
+
+fn analytical_diff(
+    before: &ResolvedArtifact,
+    after: &ResolvedArtifact,
+    report: &ArtifactComparison,
+) -> AnalyticalDiff {
+    let a = &before.run;
+    let b = &after.run;
+    let field = |run: &AnalysisTurn, get: fn(&AnalysisContract) -> Option<String>| {
+        run.contract.as_ref().and_then(get)
+    };
+    let mut meaning_limits = vec!["Recorded interpretation only; this comparison does not independently establish business meaning or causation.".into()];
+    if a.contract.is_none() || b.contract.is_none() {
+        meaning_limits.push("At least one analytical contract was not recorded.".into());
+    }
+    if a.investigation_context.is_none() || b.investigation_context.is_none() {
+        meaning_limits.push("At least one run has no Investigation definition snapshot.".into());
+    }
+    let meaning = dimension(
+        vec![
+            item(
+                "Question",
+                recorded(a.question.clone()),
+                recorded(b.question.clone()),
+            ),
+            item(
+                "Subject",
+                field(a, |c| c.subject.clone()),
+                field(b, |c| c.subject.clone()),
+            ),
+            item(
+                "Population",
+                field(a, |c| c.population.clone()),
+                field(b, |c| c.population.clone()),
+            ),
+            item("Measures and units", measures(a), measures(b)),
+            item(
+                "Grain",
+                field(a, |c| c.grain.clone()),
+                field(b, |c| c.grain.clone()),
+            ),
+            item(
+                "Grouping keys",
+                field(a, |c| Some(c.group_by.join(", "))),
+                field(b, |c| Some(c.group_by.join(", "))),
+            ),
+            item("Filters", filters(a), filters(b)),
+            item(
+                "Period and timezone",
+                a.contract
+                    .as_ref()
+                    .and_then(|c| c.time.as_ref())
+                    .and_then(json_text),
+                b.contract
+                    .as_ref()
+                    .and_then(|c| c.time.as_ref())
+                    .and_then(json_text),
+            ),
+            item("Definitions", definitions(a), definitions(b)),
+            item(
+                "Assumptions",
+                field(a, |c| Some(c.assumptions.join("\n"))),
+                field(b, |c| Some(c.assumptions.join("\n"))),
+            ),
+            item(
+                "Value semantics",
+                field(a, |c| c.value_semantics.clone()),
+                field(b, |c| c.value_semantics.clone()),
+            ),
+            item(
+                "Denominator",
+                field(a, |c| c.denominator.clone()),
+                field(b, |c| c.denominator.clone()),
+            ),
+            item(
+                "Missing-value policy",
+                field(a, |c| c.missing_policy.clone()),
+                field(b, |c| c.missing_policy.clone()),
+            ),
+        ],
+        "meaning fields",
+        meaning_limits,
+    );
+    let inputs = dimension(vec![
+        item("Used sources", sources(a), sources(b)),
+        item("Eligible source scope", selection(a), selection(b)),
+        item("Source revision", a.workspace_revision.clone(), b.workspace_revision.clone()),
+    ], "input fields", vec!["Source revisions identify retained snapshots; source files were not queried or replayed.".into()]);
+    let method = dimension(
+        vec![
+            item("Saved computations", methods(a), methods(b)),
+            item(
+                "Joins",
+                a.contract.as_ref().and_then(|c| json_text(&c.joins)),
+                b.contract.as_ref().and_then(|c| json_text(&c.joins)),
+            ),
+            item(
+                "Derived metrics",
+                a.contract
+                    .as_ref()
+                    .and_then(|c| json_text(&c.derived_metrics)),
+                b.contract
+                    .as_ref()
+                    .and_then(|c| json_text(&c.derived_metrics)),
+            ),
+            item(
+                "Presentation program",
+                recorded(before.revision.program.clone()),
+                recorded(after.revision.program.clone()),
+            ),
+        ],
+        "method fields",
+        {
+            let mut limits = vec![
+                "Computation and presentation text are shown as saved, never executed by the diff."
+                    .into(),
+            ];
+            if methods(a).is_none() || methods(b).is_none() {
+                limits.push("At least one run has no saved SQL/Python computation details.".into());
+            }
+            limits
+        },
+    );
+    let changed = report
+        .tables
+        .iter()
+        .flat_map(|table| &table.values)
+        .filter(|value| value.before != value.after)
+        .count();
+    let mut results = dimension(
+        vec![
+            item(
+                "Saved answer",
+                recorded(a.result.text.clone()),
+                recorded(b.result.text.clone()),
+            ),
+            item(
+                "Verification status",
+                json_text(&a.result.status),
+                json_text(&b.result.status),
+            ),
+            item(
+                "Recorded checks",
+                json_text(&a.result.verification),
+                json_text(&b.result.verification),
+            ),
+            item(
+                "Run checks",
+                a.verification.as_ref().and_then(json_text),
+                b.verification.as_ref().and_then(json_text),
+            ),
+        ],
+        "result fields",
+        report.reasons.clone(),
+    );
+    results.summary = if report.compatible {
+        format!(
+            "{changed} aligned saved values differ. Recorded verification is unchanged by review."
+        )
+    } else {
+        "Numeric comparison is unavailable. Saved answers and checks remain inspectable.".into()
+    };
+    if !report.compatible {
+        results.status = DiffStatus::Unavailable;
+    } else if changed > 0 {
+        results.status = DiffStatus::Changed;
+    }
+    AnalyticalDiff { version: 1, before: revision_label(before), after: revision_label(after), meaning, inputs, method, results,
+        impact: DiffImpact { scanned: false, complete: false, summary: "Dependencies have not been scanned.".into(), consumers: vec![], limitations: vec!["Only explicit Studio placements/checkpoints can be indexed; Findings, Questions, prose references and exported reports/snapshots are not tracked here.".into(), "Existing pins and snapshots never update automatically.".into()] }
+    }
 }
 
 fn err(message: impl Into<String>) -> EngineError {
@@ -355,14 +772,16 @@ pub fn compare(before: &ResolvedArtifact, after: &ResolvedArtifact) -> ArtifactC
         before_revision:before.revision.revision,after_revision:after.revision.revision,
         source_revision_changed:before.run.workspace_revision != after.run.workspace_revision,
         definitions_or_filters_changed:before.run.investigation_context.as_ref().map(|c|&c.definitions) != after.run.investigation_context.as_ref().map(|c|&c.definitions)
-            || before.run.contract.as_ref().map(|c|&c.filters) != after.run.contract.as_ref().map(|c|&c.filters),tables:vec![],
+            || before.run.contract.as_ref().map(|c|&c.filters) != after.run.contract.as_ref().map(|c|&c.filters),tables:vec![],analytical_diff:None,
     };
+    let mut trusted = false;
     let attempt = (|| {
         if before.artifact.workspace != after.artifact.workspace {
             return Err(err("Artifacts belong to different workspaces."));
         }
         let a = validated_resolved(before)?;
         let b = validated_resolved(after)?;
+        trusted = true;
         let (contract, _) = semantics(&before.run, &after.run)?;
         compare_tables(&a, &b, &contract)
     })();
@@ -384,7 +803,78 @@ pub fn compare(before: &ResolvedArtifact, after: &ResolvedArtifact) -> ArtifactC
     {
         report.warnings.push("At least one run has unresolved verification limitations. Comparison does not clear its recorded checks.".into());
     }
+    // Semantic detail is useful even when numeric alignment fails, but must not
+    // leak renderer-forged data or another workspace's source/method metadata.
+    if trusted {
+        report.analytical_diff = Some(analytical_diff(before, after, &report));
+    }
     report
+}
+
+/// Add only known, explicit baseline-revision consumers. This does not change
+/// adoption, pinned placements, checkpoints, runs, or downloaded report files.
+pub fn compare_with_dependencies(
+    data_dir: &Path,
+    before: &ResolvedArtifact,
+    after: &ResolvedArtifact,
+) -> EngineResult<ArtifactComparison> {
+    let mut report = compare(before, after);
+    let Some(diff) = report.analytical_diff.as_mut() else {
+        return Ok(report);
+    };
+    let documents = artifacts::studio_list(data_dir, &before.artifact.workspace)?;
+    let mut impact = diff.impact.clone();
+    impact.scanned = true;
+    impact.complete = documents.len() <= MAX_ITEMS;
+    for document in documents.iter().take(MAX_ITEMS) {
+        let references = std::iter::once((None, None, &document.placements)).chain(
+            document.checkpoints.iter().map(|checkpoint| {
+                (
+                    Some(checkpoint.id.clone()),
+                    Some(checkpoint.title.clone()),
+                    &checkpoint.placements,
+                )
+            }),
+        );
+        for (checkpoint_id, checkpoint_title, placements) in references {
+            for placement in placements {
+                if placement.artifact_id != before.artifact.id
+                    || placement.revision != before.revision.revision
+                {
+                    continue;
+                }
+                if impact.consumers.len() >= 512 {
+                    impact.complete = false;
+                    break;
+                }
+                impact.consumers.push(DiffConsumer {
+                    document_id: document.id.clone(),
+                    document_title: document.title.clone(),
+                    placement_id: placement.id.clone(),
+                    checkpoint_id: checkpoint_id.clone(),
+                    checkpoint_title: checkpoint_title.clone(),
+                    pinned_revision: placement.revision,
+                });
+            }
+        }
+    }
+    impact.consumers.sort_by(|a, b| {
+        (&a.document_id, &a.checkpoint_id, &a.placement_id).cmp(&(
+            &b.document_id,
+            &b.checkpoint_id,
+            &b.placement_id,
+        ))
+    });
+    impact.summary = if impact.consumers.is_empty() {
+        "No baseline-revision pins found in the indexed Studio records.".into()
+    } else {
+        format!("{} Studio placements/checkpoint references remain pinned to revision {}. Adoption will not move these pins.", impact.consumers.len(), before.revision.revision)
+    };
+    if !impact.complete {
+        impact.limitations.push("Dependency scan reached its document/reference budget; additional Studio consumers may exist.".into());
+    }
+    diff.impact = impact;
+    Ok(report)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1211,6 +1701,224 @@ mod tests {
     fn rechecksum(package: &mut ReportPackage) -> String {
         package.manifest.content_sha256 = content_digest(package).unwrap();
         String::from_utf8(canonical(package).unwrap()).unwrap()
+    }
+
+    // Analytical diff contract v1: new assertions are independent of the
+    // pre-existing numerical-comparison and portable-report contracts below.
+    #[test]
+    fn analytical_diff_records_five_dimensions_without_mutating_revisions() {
+        let a = resolved("diff-before", json!([["East", 10]]));
+        let mut b = resolved("diff-after", json!([["East", 8]]));
+        b.revision.revision = 2;
+        b.revision.parent_revision = Some(1);
+        b.revision.change_note = "Exclude refunded orders".into();
+        b.artifact.revisions = vec![a.revision.clone(), b.revision.clone()];
+        b.run.contract.as_mut().unwrap().population = Some("Non-refunded orders".into());
+        b.run.contract.as_mut().unwrap().filters = serde_json::from_value(
+            json!([{"concept":"refunded","exclude":true,"resolved_values":["true"]}]),
+        )
+        .unwrap();
+        b.run.contract.as_mut().unwrap().assumptions = vec!["Posted refunds only".into()];
+        b.run.workspace_revision = Some("source-v2".into());
+        // Contract v1.1: the source snapshot and its trace describe one run.
+        b.run.trace.workspace_revision = Some("source-v2".into());
+        b.run.result.evidence[0]["sql"] = json!(
+            "SELECT region, SUM(amount) AS revenue FROM sales WHERE NOT refunded GROUP BY region"
+        );
+        let original = canonical(&b).unwrap();
+        let report = compare(&a, &b);
+        assert!(report.compatible);
+        let diff = report.analytical_diff.unwrap();
+        assert_eq!(diff.before.role, "current");
+        assert_eq!(diff.after.role, "proposed");
+        assert_eq!(diff.meaning.status, DiffStatus::Changed);
+        assert!(diff
+            .meaning
+            .items
+            .iter()
+            .any(|i| i.label == "Filters" && i.changed));
+        assert!(diff
+            .inputs
+            .items
+            .iter()
+            .any(|i| i.label == "Source revision" && i.changed));
+        assert!(diff
+            .method
+            .items
+            .iter()
+            .any(|i| i.label == "Saved computations"
+                && i.after.as_ref().unwrap().contains("WHERE NOT refunded")));
+        assert_eq!(diff.results.status, DiffStatus::Changed);
+        assert!(!diff.impact.scanned);
+        assert!(!diff.impact.complete);
+        assert_eq!(
+            report.tables[0].values[0].delta,
+            NumericDelta::ExactInteger { delta: "-2".into() }
+        );
+        assert_eq!(canonical(&b).unwrap(), original);
+        assert_eq!(b.artifact.current_revision, 1);
+    }
+
+    #[test]
+    fn analytical_diff_presentation_changes_do_not_claim_recomputation() {
+        let a = resolved("diff-same-run", json!([["East", 10]]));
+        let mut b = a.clone();
+        b.revision.revision = 2;
+        b.revision.parent_revision = Some(1);
+        b.revision.program = "root = Document([Text(\"A clearer layout\")])".into();
+        b.artifact.revisions.push(b.revision.clone());
+        let report = compare(&a, &b);
+        assert!(report.compatible);
+        let diff = report.analytical_diff.unwrap();
+        assert_eq!(diff.before.run_id, diff.after.run_id);
+        assert_eq!(diff.meaning.status, DiffStatus::Unchanged);
+        assert_eq!(diff.inputs.status, DiffStatus::Unchanged);
+        assert_eq!(diff.method.status, DiffStatus::Changed);
+        assert_eq!(diff.results.status, DiffStatus::Unchanged);
+        assert!(diff
+            .results
+            .summary
+            .starts_with("0 aligned saved values differ"));
+        assert_eq!(
+            report.tables[0].values[0].delta,
+            NumericDelta::ExactInteger { delta: "0".into() }
+        );
+    }
+
+    #[test]
+    fn analytical_diff_missing_contract_explains_limits_without_fabricating_meaning() {
+        let mut a = resolved("diff-untyped-before", json!([["East", 10]]));
+        let mut b = resolved("diff-untyped-after", json!([["East", 20]]));
+        a.run.contract = None;
+        b.run.contract = None;
+        let report = compare(&a, &b);
+        assert!(!report.compatible);
+        assert!(report.tables.is_empty());
+        let diff = report.analytical_diff.unwrap();
+        assert_eq!(diff.results.status, DiffStatus::Unavailable);
+        assert!(diff
+            .meaning
+            .items
+            .iter()
+            .find(|i| i.label == "Measures and units")
+            .unwrap()
+            .before
+            .is_none());
+        assert!(diff
+            .meaning
+            .limitations
+            .iter()
+            .any(|l| l.contains("contract was not recorded")));
+    }
+
+    #[test]
+    fn analytical_diff_untrusted_or_cross_workspace_records_expose_no_details() {
+        let a = resolved("diff-private-before", json!([["East", 10]]));
+        let mut forged = a.clone();
+        forged.results[0].rows[0][1] = json!(999);
+        let report = compare(&a, &forged);
+        assert!(report.analytical_diff.is_none());
+        assert!(report.tables.is_empty());
+        let mut foreign = a.clone();
+        foreign.artifact.workspace = "/different-workspace".into();
+        foreign.run.workspace = Some("/different-workspace".into());
+        assert!(compare(&a, &foreign).analytical_diff.is_none());
+    }
+
+    #[test]
+    fn analytical_diff_impact_indexes_exact_studio_and_checkpoint_pins_without_adopting() {
+        let profile = Profile::new();
+        let first = resolved("diff-durable-before", json!([["East", 10]]));
+        let second = resolved("diff-durable-after", json!([["East", 8]]));
+        super::super::analysis_store::create(&profile.0, &first.run).unwrap();
+        super::super::analysis_store::create(&profile.0, &second.run).unwrap();
+        let record =
+            artifacts::create_from_run(&profile.0, WORKSPACE, &first.run.id, "Revenue", "")
+                .unwrap();
+        let record = artifacts::revise(
+            &profile.0,
+            WORKSPACE,
+            &record.id,
+            1,
+            Some(&second.run.id),
+            Some(""),
+            "Candidate",
+        )
+        .unwrap();
+        let doc = artifacts::studio_create(&profile.0, WORKSPACE, "Pinned review").unwrap();
+        let doc = artifacts::studio_save(
+            &profile.0,
+            WORKSPACE,
+            &doc.id,
+            1,
+            StudioUpdate {
+                title: doc.title.clone(),
+                body: "Preserve this review".into(),
+                placements: vec![StudioPlacement {
+                    id: "baseline-placement".into(),
+                    artifact_id: record.id.clone(),
+                    revision: 1,
+                    view_state: json!({}),
+                }],
+            },
+        )
+        .unwrap();
+        let doc = artifacts::studio_checkpoint(
+            &profile.0,
+            WORKSPACE,
+            &doc.id,
+            doc.version,
+            "Before changes",
+        )
+        .unwrap();
+        let foreign =
+            artifacts::studio_create(&profile.0, "/other-workspace", "Private other workspace")
+                .unwrap();
+        let a = artifacts::resolve(&profile.0, WORKSPACE, &record.id, Some(1)).unwrap();
+        let b = artifacts::resolve(&profile.0, WORKSPACE, &record.id, Some(2)).unwrap();
+        // Contract v1.1: report creation intentionally retains the artifact.
+        // Capture the baseline after setup, immediately before comparison.
+        let record = artifacts::load(&profile.0, WORKSPACE, &record.id).unwrap();
+        let original_run = std::fs::read(
+            profile
+                .0
+                .join("analysis/turns")
+                .join(format!("{}.json", first.run.id)),
+        )
+        .unwrap();
+        let report = compare_with_dependencies(&profile.0, &a, &b).unwrap();
+        let repeated = compare_with_dependencies(&profile.0, &a, &b).unwrap();
+        assert_eq!(report, repeated);
+        let impact = report.analytical_diff.unwrap().impact;
+        assert!(impact.scanned && impact.complete);
+        assert_eq!(impact.consumers.len(), 2);
+        assert!(impact.consumers.iter().all(|c| c.document_id == doc.id
+            && c.document_id != foreign.id
+            && c.pinned_revision == 1));
+        assert!(impact.consumers.iter().any(|c| c.checkpoint_id.is_some()));
+        assert!(impact
+            .limitations
+            .iter()
+            .any(|l| l.contains("exported reports")));
+        assert_eq!(
+            artifacts::load(&profile.0, WORKSPACE, &record.id).unwrap(),
+            record
+        );
+        assert_eq!(
+            artifacts::studio_load(&profile.0, WORKSPACE, &doc.id).unwrap(),
+            doc
+        );
+        assert_eq!(
+            std::fs::read(
+                profile
+                    .0
+                    .join("analysis/turns")
+                    .join(format!("{}.json", first.run.id))
+            )
+            .unwrap(),
+            original_run
+        );
+        assert_eq!(record.current_revision, 1);
     }
 
     #[test]
