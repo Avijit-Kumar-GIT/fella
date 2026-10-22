@@ -108,6 +108,28 @@ answer-specific visual quality, or that views differ appropriately across
 questions. Those require a separately frozen provider evaluation and blinded
 grading; no such quality claim is inferred from these tests.
 
+## Presentation-language validation — task set v1.4
+
+Defined 2026-10-22 after a real-model OpenUI run exposed the mismatch between
+OpenUI's expression AST and Fella's static-prop validator. Literal-only numeric
+arithmetic and string concatenation are folded deterministically before prop
+schema validation. They do not read results or execute application code.
+Variables, state, runtime references, member/index access, builtins, queries,
+mutations, actions, and non-constant expressions remain unsupported. Existing
+result/field binding, chart safety, exact-value display, and fallback behavior
+remain required. The task set adds positive literal-expression coverage while
+retaining negative cases for runtime expressions and builtins.
+
+Validation record: the deterministic analytical-presentation suite passed 51
+checks, and the real Electron/OpenAI acceptance test passed twice on a synthetic
+eight-row workspace. Both runs persisted an automatically generated answer;
+the final run also exercised the normalized renderer. An earlier real-model
+characterization returned an invalid facet shape (`columns` nested inside
+`facet`) and was rejected; the model-facing instructions were clarified and
+the test was rerun against a rebuilt bundle. These are operational acceptances,
+not a quality or diversity score. Generated answers were not graded for
+analytical accuracy.
+
 ## Test layers and independent grading
 
 - Rust tests: storage, canonical binding, scope, excluded/partial evidence,

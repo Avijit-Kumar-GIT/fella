@@ -8,12 +8,13 @@ import { PRESENTATION_LIMITS as limits, type BoundResult, type PresentationIssue
 export interface PresentationValidation {
 	valid: boolean;
 	root: ElementNode | null;
+	normalizedProgram: string;
 	issues: PresentationIssue[];
 	resultIds: string[];
 }
 
 /** Resource preflight only; grammar and references are parsed by OpenUI itself. */
-function preflight(program: string) {
+function preflight(program: string): string {
 	if (typeof program !== 'string' || !program.trim()) throw new Error('The presentation is empty.');
 	if (new TextEncoder().encode(program).length > limits.programBytes) throw new Error('The presentation exceeds its size budget.');
 	let quote = '';
@@ -34,6 +35,17 @@ function preflight(program: string) {
 	const tokens = tokenize(program);
 	const statements = split(tokens);
 	const ids = new Set<string>();
+	const normalizedStatements: string[] = [];
+	const literalExpression = (node: ASTNode): boolean => {
+		switch (node.k) {
+			case 'Str': case 'Num': case 'Bool': case 'Null': return true;
+			case 'Arr': return node.els.every(literalExpression);
+			case 'Obj': return node.entries.every(([, value]) => literalExpression(value));
+			case 'BinOp': return ['+', '-', '*', '/', '%'].includes(node.op) && literalExpression(node.left) && literalExpression(node.right);
+			case 'UnaryOp': return node.op === '-' && node.operand.k === 'Num';
+			default: return false;
+		}
+	};
 	function staticTokenCount(node: ASTNode): number {
 		switch (node.k) {
 			case 'Str': case 'Num': case 'Bool': case 'Null': case 'Ref': return 1;
@@ -48,8 +60,13 @@ function preflight(program: string) {
 			}
 			// Vega-Lite negative offsets are parsed as unary numeric literals by OpenUI.
 			case 'UnaryOp': if (node.op === '-' && node.operand.k === 'Num') return 2; else break;
+			// Permit only closed, literal-only arithmetic. References, state, member
+			// access, ternaries, calls, and runtime values remain outside the DSL.
+			case 'BinOp':
+				if (literalExpression(node)) return 1 + staticTokenCount(node.left) + staticTokenCount(node.right);
+				break;
 		}
-		throw new Error('Presentation prop expressions, builtins and executable plans are not supported.');
+		throw new Error('Only literal-only arithmetic is supported in presentation props; references, variables, builtins and executable plans are not.');
 	}
 	let accounted = 0;
 	for (const statement of statements) {
@@ -58,25 +75,98 @@ function preflight(program: string) {
 		// Token enum values are supplied by the pinned core API (not exported at runtime).
 		// 7=comma, 2/4/6=closing delimiters. Ignore legal trailing commas in count checks.
 		const expression = statement.tokens.filter((token, index, list) => !(token.t === 7 && [2, 4, 6].includes(list[index + 1]?.t)));
-		if (staticTokenCount(parseExpression(expression)) !== expression.length) throw new Error('The presentation contains unparsed or malformed expression tokens.');
+		const ast = parseExpression(expression);
+		if (staticTokenCount(ast) !== expression.length) throw new Error('The presentation contains unparsed or malformed expression tokens.');
+		normalizedStatements.push(`${statement.id} = ${serializeStatic(ast)}`);
 		accounted += statement.tokens.length + 2;
 	}
 	if (tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid statement.');
+	return normalizedStatements.join('\n');
+}
+
+function serializeStatic(node: ASTNode): string {
+	switch (node.k) {
+		case 'Str': return JSON.stringify(node.v);
+		case 'Num': return JSON.stringify(node.v) ?? 'null';
+		case 'Bool': return String(node.v);
+		case 'Null': return 'null';
+		case 'Ref': return node.n;
+		case 'Arr': return `[${node.els.map(serializeStatic).join(', ')}]`;
+		case 'Obj': return `{${node.entries.map(([key, value]) => `${JSON.stringify(key)}: ${serializeStatic(value)}`).join(', ')}}`;
+		case 'Comp':
+			if (!Object.hasOwn(componentDefinitions, node.name) || node.mappedProps) throw new Error(`Unsupported component, builtin or named prop in “${node.name}”.`);
+			return `${node.name}(${node.args.map(serializeStatic).join(', ')})`;
+		case 'BinOp': case 'UnaryOp': return JSON.stringify(evaluateLiteralExpression(node)) ?? 'null';
+		default: throw new Error('Only static presentation values can be normalized.');
+	}
+}
+
+function isOpenUiAst(value: unknown): value is ASTNode {
+	if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+	const kind = (value as { k?: unknown }).k;
+	return ['Comp', 'Str', 'Num', 'Bool', 'Null', 'Arr', 'Obj', 'Ref', 'Ph', 'StateRef', 'RuntimeRef', 'BinOp', 'UnaryOp', 'Ternary', 'Member', 'Index', 'Assign'].includes(String(kind));
+}
+
+/** Evaluate the tiny constant-expression subset accepted by preflight. */
+function evaluateLiteralExpression(node: ASTNode): unknown {
+	switch (node.k) {
+		case 'Str': return node.v;
+		case 'Num': return node.v;
+		case 'Bool': return node.v;
+		case 'Null': return null;
+		case 'Arr': return node.els.map(evaluateLiteralExpression);
+		case 'Obj': return Object.fromEntries(node.entries.map(([key, value]) => [key, evaluateLiteralExpression(value)]));
+		case 'UnaryOp': {
+			const operand = evaluateLiteralExpression(node.operand);
+			if (node.op !== '-' || typeof operand !== 'number') break;
+			return -operand;
+		}
+		case 'BinOp': {
+			const left = evaluateLiteralExpression(node.left);
+			const right = evaluateLiteralExpression(node.right);
+			if (node.op === '+' && typeof left === 'string' && typeof right === 'string') return left + right;
+			if (typeof left !== 'number' || typeof right !== 'number') break;
+			if ((node.op === '/' || node.op === '%') && right === 0) throw new Error('Presentation arithmetic cannot divide by zero.');
+			let result: number | undefined;
+			switch (node.op) {
+				case '+': result = left + right; break;
+				case '-': result = left - right; break;
+				case '*': result = left * right; break;
+				case '/': result = left / right; break;
+				case '%': result = left % right; break;
+				default: throw new Error('Unsupported presentation arithmetic operator.');
+			}
+			if (result !== undefined && Number.isFinite(result) && Math.abs(result) <= 1e15) return result;
+			break;
+		}
+	}
+	throw new Error('Presentation arithmetic must use finite numeric literals or concatenate string literals.');
+}
+
+function materializeStaticValues(value: unknown): unknown {
+	if (isOpenUiAst(value)) return evaluateLiteralExpression(value);
+	if (Array.isArray(value)) return value.map(materializeStaticValues);
+	if (value && typeof value === 'object') {
+		if ((value as { type?: unknown }).type === 'element') return value;
+		return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, materializeStaticValues(item)]));
+	}
+	return value;
 }
 
 /** Complete programs only. During streaming retain the previous valid frame/fallback. */
 export function validatePresentation(program: string, results: BoundResult[]): PresentationValidation {
 	const issues: PresentationIssue[] = [];
 	const resultIds = new Set<string>();
+	let normalizedProgram = '';
 	try {
-		preflight(program);
+		normalizedProgram = preflight(program);
 		validateResults(results);
-		const parsed = createParser(presentationSchema()).parse(program);
+		const parsed = createParser(presentationSchema()).parse(normalizedProgram);
 		if (parsed.meta.incomplete || parsed.meta.unresolved.length) throw new Error(`The presentation is incomplete or has unresolved references${parsed.meta.unresolved.length ? `: ${parsed.meta.unresolved.join(', ')}` : '.'}`);
 		if (parsed.meta.statementCount > limits.components || parsed.meta.orphaned.length) throw new Error('The presentation contains unused statements or exceeds the statement budget.');
 		if (parsed.meta.errors.length) {
 			for (const error of parsed.meta.errors) issues.push({ path: `${error.component}${error.path}`, message: error.message });
-			return { valid: false, root: null, issues, resultIds: [] };
+			return { valid: false, root: null, normalizedProgram, issues, resultIds: [] };
 		}
 		if (parsed.queryStatements.length || parsed.mutationStatements.length || Object.keys(parsed.stateDeclarations).length) throw new Error('Queries, mutations and reactive state plans are not permitted in presentations.');
 		if (!parsed.root || parsed.root.typeName !== 'Document' || parsed.root.statementId !== 'root') throw new Error('The presentation must have an explicit root = Document(...) statement.');
@@ -89,6 +179,7 @@ export function validatePresentation(program: string, results: BoundResult[]): P
 			ancestry.add(value);
 			const node = value as ElementNode;
 			if (node.type !== 'element' || node.partial || !Object.hasOwn(componentDefinitions, node.typeName)) throw new Error(`${path} uses an unknown, partial or unsupported component.`);
+			node.props = materializeStaticValues(node.props) as Record<string, unknown>;
 			const definition = componentDefinitions[node.typeName as ComponentName];
 			const check = definition.props.safeParse(node.props);
 			if (!check.success) throw new Error(`${path}: ${check.error.issues.map((item) => item.message).join('; ')}`);
@@ -115,9 +206,9 @@ export function validatePresentation(program: string, results: BoundResult[]): P
 			ancestry.delete(value);
 		}
 		walk(parsed.root, 'root', 0);
-		return { valid: true, root: parsed.root, issues, resultIds: [...resultIds] };
+		return { valid: true, root: parsed.root, normalizedProgram, issues, resultIds: [...resultIds] };
 	} catch (error) {
 		issues.push({ path: 'root', message: error instanceof Error ? error.message : 'The presentation could not be validated.' });
-		return { valid: false, root: null, issues, resultIds: [...resultIds] };
+		return { valid: false, root: null, normalizedProgram, issues, resultIds: [...resultIds] };
 	}
 }

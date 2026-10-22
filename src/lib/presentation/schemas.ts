@@ -33,7 +33,7 @@ export const componentDefinitions = {
 		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional() }).strict()
 	},
 	Chart: {
-		description: 'A data-bound Vega-Lite JSON specification: layers, facets, concat, encodings, marks and style. No data, datasets, expressions, parameters, transforms, URLs or executable code. Fields must exist in resultId. Values come only from that result.',
+		description: 'A data-bound Vega-Lite JSON specification: layers, facets, concat, encodings, marks and style. No data, datasets, runtime expressions, parameters, transforms, URLs or executable code. Literal-only style arithmetic is allowed. Fields must exist in resultId. Values come only from that result.',
 		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.optional() }).strict()
 	},
 	Tabs: {

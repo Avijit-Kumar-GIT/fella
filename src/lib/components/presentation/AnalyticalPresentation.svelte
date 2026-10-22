@@ -36,7 +36,7 @@
 
 <div class="analytical-presentation" data-presentation-version="fella-openui-v1">
 	{#if validation.valid}
-		<Renderer response={program} library={analyticalLibrary} />
+		<Renderer response={validation.normalizedProgram} library={analyticalLibrary} />
 	{:else}
 		<div class="fallback" role="status"><p>This presentation could not be displayed. The saved analysis has not changed.</p>
 			<details><summary>Presentation details</summary><ul>{#each validation.issues as issue}<li>{issue.message}</li>{/each}</ul></details>

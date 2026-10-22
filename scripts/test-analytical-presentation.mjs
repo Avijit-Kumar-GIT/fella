@@ -1,6 +1,6 @@
-// Contract v1, task set v1.3: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
-// invalid-output and binding rejection, exact values, safe broad Vega-Lite
-// composition, deterministic export, and visible fallback. v1.1 corrects two
+// Contract v1, task set v1.4: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
+// invalid-output and binding rejection, literal-only presentation arithmetic,
+// exact values, safe broad Vega-Lite composition, deterministic export, and visible fallback. v1.1 corrects two
 // fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
 // test intent and assertions are unchanged. No model or IPC calls.
 import assert from 'node:assert/strict';
@@ -39,7 +39,7 @@ try {
 		for (const [name, definition] of Object.entries(schema.$defs)) assert.deepEqual(definition.properties, analyticalLibrary.toJSONSchema().$defs[name].properties, name);
 		assert.equal(presentationManifest().version, 'fella-openui-v1');
 		assert.match(presentationPrompt(results), /Metric\(resultId: string, field: string, row: integer, title: string, unit\?: string\)/);
-		assert.match(presentationPrompt(results), /No expressions/);
+		assert.match(presentationPrompt(results), /Literal-only arithmetic and string concatenation/);
 		assert.match(presentationPrompt(results), /"id":"revenue"/);
 	});
 	await test('same-turn OpenUI generation is the primary answer contract, not a second design pass', () => {
@@ -95,6 +95,20 @@ try {
 		assert.equal(validation.valid, true, JSON.stringify(validation.issues));
 		assert.deepEqual(validation.resultIds, ['revenue']);
 	});
+	await test('literal-only prop arithmetic is folded before schema validation', () => {
+		const program = 'root = Document([Section("Q" + "3", [Text("Revenue " + "comparison"), Columns([Text("A"), Text("B")], 1 + 1), Chart("revenue", {"mark":"line","width":120 * 2,"encoding":{"x":{"field":"quarter","type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}}, "Trend")])])';
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		const section = check.root?.props.children?.[0];
+		assert.ok(section);
+		assert.equal(section.props.title, 'Q3');
+		assert.equal(section.props.children[0].props.content, 'Revenue comparison');
+		assert.equal(section.props.children[1].props.count, 2);
+		assert.equal(section.props.children[2].props.spec.width, 240);
+		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
+		assert.match(html, /Q3/);
+		assert.match(html, /Revenue comparison/);
+	});
 	for (const [name, program] of [
 		['empty', ''], ['truncated', 'root = Document([Text("unfinished")'],
 		['unknown component', 'root = Document([Iframe("https://evil.invalid")])'],
@@ -105,7 +119,8 @@ try {
 		['unresolved reference', 'root = Document([missing])'],
 		['unused statement', 'root = Document([Text("ok")])\nunused = Text("hidden")'],
 		['noncomponent children', 'root = Document(["invented",42])'],
-		['prop expressions', 'root = Document([Text(1 + 2)])'],
+		['nonliteral prop expressions', 'root = Document([Text("Revenue " + field)])'],
+		['OpenUI builtin calls', 'root = Document([Text(Abs(1))])'],
 		['query plan', 'root = Document([Text("ok")])\ndata = Query("execute",{})'],
 		['reactive state', '$state = 1\nroot = Document([Text("ok")])'],
 		['duplicate control names', 'root = Document([Tabs("same",["A"],[Text("ok")]),ResultFilter("revenue","region","same")])'],
@@ -183,6 +198,6 @@ try {
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.3): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v1 (task set v1.4): ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }
