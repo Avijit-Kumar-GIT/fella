@@ -140,6 +140,30 @@ Primary implementation anchors:
 
 ## 3. Product and UX model
 
+### Layout clarification — Chat and Notebook
+
+The mounted **Workspace** remains the folder/data/context boundary. **Chat** and
+**Notebook** name two organizations of the same application window, not new
+Workspaces or execution modes. Chat prioritizes conversation; Notebook places
+the analytical document beside its conversation with navigation on the left.
+At compact widths, document and chat are switchable without losing their state.
+Switching layouts does not create work, mount a folder or invoke the model.
+
+The historical "Studio" UI is now presented as **Reports**: ordered documents
+that reference saved results and pinned revisions. Its persistence/API names
+remain compatible. Investigations are ongoing work; results are reusable
+outputs; reports communicate selected outputs. Opening a result does not
+require adding it to a report. Advanced planning/source controls remain
+available from the Investigation notebook rather than defining its default
+six-screen interaction.
+
+Analytical diff v1 compares recorded meaning, inputs, method and results and
+lists indexed report/checkpoint pins. It preserves current/proposed versions
+and does not automatically update reports. The dependency index does not claim
+complete Finding/Question/prose/exported-report coverage. See
+[the diff contract](testing/ANALYTICAL-DIFF-v1.md) and
+[the layout contract](testing/CHAT-NOTEBOOK-v1.md).
+
 Ask, Investigate, and Studio describe ways of working, not three mutually
 exclusive application modes, engines, or mandatory top-level navigation tabs.
 

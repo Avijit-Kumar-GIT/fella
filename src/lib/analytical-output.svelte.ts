@@ -105,7 +105,7 @@ export async function ensureAnalyticalOutput(
 
 export async function saveOutputToStudio(resolved: ResolvedArtifact): Promise<void> {
 	const workspace = resolved.artifact.workspace;
-	if (session.catalog.workspace !== workspace) throw new Error('Open the output’s workspace before adding it to Studio.');
+	if (session.catalog.workspace !== workspace) throw new Error('Open the result’s workspace before creating a report.');
 	const documents = await ipc.studioList(workspace);
 	const existing = documents.find(document => document.placements.some(placement => placement.artifact_id === resolved.artifact.id && placement.revision === resolved.revision.revision));
 	if (existing) { session.openStudioToolTab(existing.id); return; }

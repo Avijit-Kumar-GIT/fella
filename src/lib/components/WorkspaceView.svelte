@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
 	import { requestArtifactChange } from '$lib/commands';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
@@ -11,11 +11,12 @@
 	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
-	import InvestigationBriefView from './InvestigationBriefView.svelte';
+	import NotebookInvestigation from './NotebookInvestigation.svelte';
+	import ResultDocument from './ResultDocument.svelte';
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 	import CompanionPane from './CompanionPane.svelte';
-	let { onexpand }: { onexpand?: () => void } = $props();
+	let { onexpand, notebook = false }: { onexpand?: () => void; notebook?: boolean } = $props();
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
@@ -31,6 +32,15 @@
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
 	let terminalTabs = $derived(session.workspaceToolTabs.filter((tab) => tab.kind === 'terminal'));
+	$effect(() => {
+		const records = investigations, path = workspacePath;
+		const tabIdentity = session.workspaceToolTabs.map(tab => [tab.id, tab.conversationId, tab.investigationId].join(':')).join('|');
+		void tabIdentity;
+		if (!path || records.some(record => record.workspace_id !== path)) return;
+		// A layout can open an unbound tab after the record list has loaded.
+		// Reconcile on tab identity too, not only after an IPC list response.
+		untrack(() => session.reconcileWorkspaceToolTabs(records));
+	});
 	$effect(() => {
 		const id = activeTab?.id;
 		const count = session.workspaceToolTabs.length;
@@ -219,7 +229,8 @@
 	}
 
 	function baseTabLabel(tab: WorkspaceToolTab): string {
-		if (tab.kind === 'studio') return tab.title || 'Studio';
+		if (tab.kind === 'result') return tab.title || 'Result';
+		if (tab.kind === 'studio') return tab.title || 'Report';
 		if (tab.kind === 'context') return 'Workspace context';
 		if (tab.kind === 'source') return tab.sourceName?.split(/[\\/]/).at(-1) || 'File preview';
 		if (tab.kind === 'terminal') return 'Shell';
@@ -266,7 +277,7 @@
 						>
 							{#if tab.kind === 'context'}
 								<Icon name="table" size={14} />
-							{:else if tab.kind === 'source'}
+							{:else if tab.kind === 'source' || tab.kind === 'studio' || tab.kind === 'result'}
 								<Icon name="file" size={14} />
 							{:else if tab.kind === 'terminal'}
 								<span class="workspace-terminal-tab-icon" aria-hidden="true">›_</span>
@@ -335,8 +346,8 @@
 		<div class="workspace-tool-chooser" data-testid="workspace-tool-chooser">
 			<div class="workspace-tool-chooser-inner">
 				<header class="workspace-tool-chooser-heading">
-					<h2>Open a tool</h2>
-					<p>Open an Investigation, Studio, context, or Shell.</p>
+					<h2>{notebook ? 'Open a document' : 'Open a tool'}</h2>
+					<p>Choose an Investigation, report, context, or Shell.</p>
 				</header>
 			<div class="workspace-tool-list" aria-label="Available workspace tools">
 				<DropdownMenu.Root open={investigationsOpen} onOpenChange={setInvestigationsOpen}>
@@ -421,7 +432,7 @@
 				<div class="workspace-tool-group-label workspace-tool-group-secondary">Workspace</div>
 				<button class="workspace-tool-option" type="button" data-testid="workspace-tool-studio" onclick={() => session.openStudioToolTab()}>
 					<span class="workspace-tool-option-icon"><Icon name="file" size={16} /></span>
-					<span class="workspace-tool-option-copy"><strong>Studio</strong><small>Saved analyses and reports</small></span>
+					<span class="workspace-tool-option-copy"><strong>Reports</strong><small>Arrange results and narrative</small></span>
 					<Icon name="chevron-right" size={16} />
 				</button>
 				<button
@@ -456,17 +467,19 @@
 	</div>
 	{:else if activeTab && activeTab.kind !== 'terminal'}
 		<div class="workspace-content" id="workspace-tool-content" role="tabpanel" aria-label={tabLabel(activeTab)}>
-			{#if activeTab.kind === 'studio' && workspacePath}
+			{#if activeTab.kind === 'result' && workspacePath && activeTab.artifactId && activeTab.artifactRevision}
+				<ResultDocument workspace={workspacePath} artifactId={activeTab.artifactId} revision={activeTab.artifactRevision} />
+			{:else if activeTab.kind === 'studio' && workspacePath}
 				{@const ownerTab = activeTab}
 				{#key `${workspacePath}:${ownerTab.id}`}
 					{#await import('./StudioView.svelte')}
-						<p role="status">Opening Studio…</p>
+						<p role="status">Opening report…</p>
 					{:then module}
-						<module.default workspace={workspacePath} documentId={ownerTab.documentId} initialArtifactId={ownerTab.initialArtifactId} onopen={(id) => session.setStudioTabDocument(ownerTab.id, id)} onrequestchange={async (artifact, instruction) => {
+						<module.default workspace={workspacePath} documentId={ownerTab.documentId} newReport={ownerTab.newReport} initialArtifactId={ownerTab.initialArtifactId} onopen={(id, title) => session.setStudioTabDocument(ownerTab.id, id, title)} onrequestchange={async (artifact, instruction) => {
 							await requestArtifactChange(artifact, instruction);
 						}} />
 					{:catch error}
-						<p role="alert">Could not open Studio: {String(error)}</p>
+						<p role="alert">Could not open report: {String(error)}</p>
 					{/await}
 				{/key}
 			{:else if activeTab.kind === 'preview' && activeTab.preview}
@@ -477,7 +490,7 @@
 				<ContextView />
 			{:else}
 				{#key `${workspacePath}:${activeTab.id}`}
-					<InvestigationBriefView viewKey={`${workspacePath}:${activeTab.id}`} />
+					<NotebookInvestigation workspace={workspacePath!} investigationId={activeTab.investigationId ?? undefined} conversationId={activeTab.conversationId ?? undefined} onopenconversation={() => session.setContentLayout('chat')} />
 				{/key}
 			{/if}
 		</div>

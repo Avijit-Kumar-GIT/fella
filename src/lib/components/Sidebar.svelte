@@ -2,6 +2,9 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { focusInvestigationConversation } from '$lib/investigation-navigation';
+	import type { Investigation } from '$lib/types';
+	import type { StudioDocument } from '$lib/analytics-artifacts';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
@@ -20,7 +23,39 @@
 		onworkspaceselect: (id: string) => void | Promise<void>;
 	} = $props();
 
-	let sidebarMode = $state<'chats' | 'environment'>('chats');
+	let sidebarMode = $state<'chats' | 'environment' | 'reports'>('chats');
+	let notebookInvestigations = $state<Investigation[]>([]);
+	let notebookReports = $state<StudioDocument[]>([]);
+	let notebookError = $state('');
+	let notebookRequest = 0;
+	let navigationRequest = 0;
+	$effect(() => {
+		const path = session.catalog.workspace, layout = session.contentLayout;
+		const version = session.investigationsVersion, tabs = session.workspaceToolTabs.length;
+		const reportsVersion = session.reportsVersion;
+		void version; void tabs; void reportsVersion;
+		const request = ++notebookRequest;
+		if (layout !== 'notebook' || !path) { notebookInvestigations = []; notebookReports = []; return; }
+		notebookError = '';
+		void Promise.all([ipc.investigationsList(), ipc.studioList(path)]).then(([investigations, reports]) => {
+			if (request !== notebookRequest) return;
+			notebookInvestigations = investigations.filter(item => item.workspace_id === path).sort((a,b) => b.updated_at_ms - a.updated_at_ms);
+			notebookReports = reports;
+		}).catch(() => { if (request === notebookRequest) notebookError = 'Could not load saved work.'; });
+	});
+	async function openNotebookInvestigation(item: Investigation): Promise<void> {
+		const request = ++navigationRequest;
+		const outgoingTabId = session.activeWorkspaceToolTab?.id;
+		const isCurrent = () => request === navigationRequest && session.contentLayout === 'notebook'
+			&& session.catalog.workspace === item.workspace_id
+			&& (session.activeWorkspaceToolTab?.id === outgoingTabId
+				|| session.activeWorkspaceToolTab?.kind === 'investigation' && session.activeWorkspaceToolTab.conversationId === item.conversation_id);
+		session.setWorkspacePaneOpen(false);
+		try {
+			const linked = await focusInvestigationConversation(item, 'preserve', undefined, isCurrent);
+			if (linked && isCurrent()) session.openWorkspaceToolTab('investigation', linked.id, linked.conversation_id ?? session.activeChat.id);
+		} catch (error) { if (request === navigationRequest) notebookError = errMsg(error); }
+	}
 
 	type Repository = {
 		key: string;
@@ -228,13 +263,26 @@
 	</nav>
 	<div class="sidebar-mode-switch" role="group" aria-label="Sidebar view">
 		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'chats' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'chats'} onclick={() => (sidebarMode = 'chats')}>
-			<Icon name="ask" size={14} /><span>Chats</span>
+			<Icon name="ask" size={14} /><span>{session.contentLayout === 'notebook' ? 'Work' : 'Chats'}</span>
 		</Button>
 		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'environment' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'environment'} onclick={() => (sidebarMode = 'environment')}>
 			<Icon name="folder" size={14} /><span>Files</span>
 		</Button>
+		{#if session.contentLayout === 'notebook'}<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'reports' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'reports'} onclick={() => (sidebarMode = 'reports')}><Icon name="file" size={14} /><span>Reports</span></Button>{/if}
 	</div>
-	{#if sidebarMode === 'chats'}
+	{#if session.contentLayout === 'notebook' && sidebarMode !== 'environment'}
+		<section class="repository-section" aria-label={sidebarMode === 'reports' ? 'Workspace reports' : 'Workspace Investigations'}>
+			<div class="section-head"><h2>{sidebarMode === 'reports' ? 'Reports' : 'Investigations'}</h2>{#if sidebarMode === 'reports'}<Button variant="ghost" size="icon" aria-label="New report" onclick={() => session.openNewReportTab()}><Icon name="plus" size={14} /></Button>{/if}</div>
+			{#if notebookError}<p class="sidebar-empty" role="status">{notebookError}</p>{/if}
+			<div class="repositories">
+				{#if sidebarMode === 'reports'}
+					{#each notebookReports as report (report.id)}<Button variant="ghost" class="conversation-row" title={report.title} onclick={() => session.openStudioToolTab(report.id)}><span class="preview">{report.title}</span></Button>{:else}<p class="sidebar-empty">No reports yet.</p>{/each}
+				{:else}
+					{#each notebookInvestigations as item (item.id)}<Button variant="ghost" class={`conversation-row${session.activeInvestigationId === item.id ? ' active' : ''}`} title={item.title} onclick={() => void openNotebookInvestigation(item)}><span class="preview">{item.title || 'Untitled Investigation'}</span></Button>{:else}<p class="sidebar-empty">Ask a question to start an Investigation.</p>{/each}
+				{/if}
+			</div>
+		</section>
+	{:else if sidebarMode === 'chats' || sidebarMode === 'reports'}
 	<section class="repository-section" aria-label="Workspace conversations">
 		<div class="section-head">
 			<h2>Recent</h2>
@@ -314,7 +362,7 @@
 					Delete {workspaceDeleteTarget?.name ?? 'workspace'}?
 				</Dialog.Title>
 				<Dialog.Description class="workspace-delete-description">
-					This removes the workspace from the sidebar and deletes its conversations. Saved Studio analyses and their supporting records are kept; reconnect the folder to open them. The folder, files, and project notes are not deleted.
+					This removes the workspace from the sidebar and deletes its conversations. Saved results, reports and their supporting records are kept; reconnect the folder to open them. The folder, files, and project notes are not deleted.
 				</Dialog.Description>
 			</div>
 			{#if workspaceDeleteError}
@@ -336,7 +384,7 @@
 		<Dialog.Content class="fella-ui-dialog-content conversation-delete-dialog">
 			<Dialog.Title class="workspace-delete-title" level={2}>Delete conversation?</Dialog.Title>
 			<Dialog.Description class="workspace-delete-description">
-				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}” and its transcript will be deleted. Saved Studio outputs, their supporting analysis records, and revisions will remain available in this workspace.
+				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}” and its transcript will be deleted. Saved results, reports, their supporting analysis records, and revisions will remain available in this workspace.
 			</Dialog.Description>
 			{#if conversationDeleteError}<p class="workspace-delete-error" role="alert">{conversationDeleteError}</p>{/if}
 			<div class="workspace-delete-actions">

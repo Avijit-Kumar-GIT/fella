@@ -13,10 +13,11 @@
 	import MarkdownContent from './MarkdownContent.svelte';
 	import Icon from './Icon.svelte';
 
-	let { workspace, documentId = null, onopen, initialArtifactId = null, onrequestchange }: {
+	let { workspace, documentId = null, onopen, initialArtifactId = null, onrequestchange, newReport = false }: {
 		workspace: string;
 		documentId?: string | null;
-		onopen?: (id: string) => void;
+		onopen?: (id: string, title?: string) => void;
+		newReport?: boolean;
 		initialArtifactId?: string | null;
 		onrequestchange?: (artifact: ResolvedArtifact, instruction: string) => void | Promise<void>;
 	} = $props();
@@ -62,6 +63,7 @@
 	let checkpointOpen = $state(false);
 	let checkpointTitle = $state('');
 	let restoreTarget = $state<StudioCheckpoint | null>(null);
+	$effect(() => { if (newReport) untrack(() => { newTitle = ''; createError = ''; createOpen = true; }); });
 	let announcement = $state('');
 	let requestedKey = '';
 	let navigation = 0;
@@ -118,6 +120,7 @@
 					const saved = await ipc.studioSave(target.document.workspace, target.document.id, target.document.version, payload);
 					target.document = saved; target.savedEdits = edits; target.error = '';
 					remember(saved);
+					if (!disposed && workspace === saved.workspace && current === target) onopen?.(saved.id, saved.title);
 				}
 				return true;
 			} catch (cause) {
@@ -163,7 +166,7 @@
 			documents = available;
 			void refreshOutputs(root);
 			let document = id ? available.find(item => item.id === id) : available[0];
-			if (id && !document) throw new Error('This Studio document is no longer available in the selected workspace.');
+			if (id && !document) throw new Error('This report is no longer available in the selected workspace.');
 			if (!document && artifactId) {
 				const output = await ipc.artifactResolve(root, artifactId);
 				if (disposed || request !== navigation) return;
@@ -237,7 +240,7 @@
 		resolved = { ...resolved, [resultKey(target.document.workspace, placement)]: output };
 		target.placements = [...target.placements, placement];
 		changed(target); pickerOpen = false;
-		announcement = `${output.artifact.title} added to Studio.`;
+		announcement = `${output.artifact.title} added to the report.`;
 	}
 
 	async function addArtifact(id: string): Promise<void> {
@@ -321,7 +324,7 @@
 		if (!target || target.locked) return;
 		target.locked = true;
 		try {
-			const copy = await ipc.studioCreate(target.document.workspace, `${target.title.trim() || 'Untitled Studio'} copy`);
+			const copy = await ipc.studioCreate(target.document.workspace, `${target.title.trim() || 'Untitled report'} copy`);
 			const saved = await ipc.studioSave(copy.workspace, copy.id, copy.version, clone({ title: copy.title, body: target.body, placements: target.placements }));
 			remember(saved);
 			if (!disposed && current === target) {
@@ -437,23 +440,22 @@
 	});
 </script>
 
-<section class="studio" aria-label="Studio" aria-busy={loading}>
+<section class="studio" aria-label="Report editor" aria-busy={loading}>
 	<header class="studio-toolbar">
 		<DropdownMenu.Root>
-			<DropdownMenu.Trigger class="studio-document-trigger" aria-label="Choose Studio document"><Icon name="file" size={14} /><span>{current?.title.trim() || 'Studio'}</span><Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
+			<DropdownMenu.Trigger class="studio-document-trigger" aria-label="Choose report"><Icon name="file" size={14} /><span>{current?.title.trim() || 'Reports'}</span><Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
 			<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content studio-document-menu" align="start">
 				{#each documents as document (document.id)}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => switchDocument(document.id)}>{document.title}{#if current?.document.id === document.id}<Icon name="check" size={14} />{/if}</DropdownMenu.Item>{/each}
-				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New document</DropdownMenu.Item>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</DropdownMenu.Item>
 			</DropdownMenu.Content></DropdownMenu.Portal>
 		</DropdownMenu.Root>
 		<div class="toolbar-actions">
-			<Button variant="ghost" size="sm" onclick={() => { reportManagerOpen = true; reportPreview = null; reportJson = ''; reportError = ''; void refreshReportList(); }}>Reports</Button>
+			<Button variant="ghost" size="sm" onclick={() => { reportManagerOpen = true; reportPreview = null; reportJson = ''; reportError = ''; void refreshReportList(); }}>Import</Button>
 			{#if current}
 				<span class="save-status" role="status" aria-live="polite">{status}</span>
-				<Button variant="ghost" size="sm" disabled={current.locked || current.saving || current.edits === current.savedEdits} onclick={() => current && void saveDraft(current)}>Save</Button>
 				<Button variant="ghost" size="sm" disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={14} />{exportBusy ? 'Exporting…' : 'Export'}</Button>
-				<Button variant="ghost" size="sm" aria-label="Export portable report snapshot" disabled={packageBusy || current.locked} onclick={() => void downloadPackage()}>{packageBusy ? 'Preparing…' : 'Snapshot'}</Button>
-				<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="Studio history and actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
+				<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="Report history and actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
+					<DropdownMenu.Item class="fella-ui-menu-item" disabled={packageBusy || current.locked} onSelect={() => void downloadPackage()}>Export portable snapshot</DropdownMenu.Item>
 					<DropdownMenu.Item class="fella-ui-menu-item" disabled={current.locked} onSelect={() => { checkpointTitle = ''; checkpointOpen = true; }}>Save checkpoint…</DropdownMenu.Item>
 					<DropdownMenu.Item class="fella-ui-menu-item" disabled={current.locked} onSelect={() => void saveCopy()}>Save a copy</DropdownMenu.Item>
 				</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
@@ -461,20 +463,20 @@
 		</div>
 	</header>
 	<div class="studio-scroll">
-		{#if loading}<div class="empty-state" role="status"><Spinner size={16} /><p>Opening Studio…</p></div>
-		{:else if loadError}<div class="empty-state"><h1>Couldn’t open Studio</h1><p role="alert">{loadError}</p><Button size="sm" variant="outline" onclick={() => void open(workspace, documentId, initialArtifactId)}>Retry</Button></div>
-		{:else if !current}<div class="empty-state"><Icon name="file" size={20} /><h1>Keep useful analysis together.</h1><p>Add saved outputs and your own notes. Arrange them here without rerunning the analysis.</p><Button size="sm" onclick={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New document</Button></div>
+		{#if loading}<div class="empty-state" role="status"><Spinner size={16} /><p>Opening report…</p></div>
+		{:else if loadError}<div class="empty-state"><h1>Couldn’t open report</h1><p role="alert">{loadError}</p><Button size="sm" variant="outline" onclick={() => void open(workspace, documentId, initialArtifactId)}>Retry</Button></div>
+		{:else if !current}<div class="empty-state"><Icon name="file" size={20} /><h1>Keep useful analysis together.</h1><p>Add saved outputs and your own notes. Arrange them here without rerunning the analysis.</p><Button size="sm" onclick={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</Button></div>
 		{:else}
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>
-				<div class="document-heading"><input class="document-title" aria-label="Studio document title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled Studio" /><p class="document-caption">Saved outputs, pinned revisions, and your notes.</p></div>
+				<div class="document-heading"><input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" /><p class="document-caption">Selected results and your explanation.</p></div>
 				{#if target.error}<div class="save-error"><p role="alert">{target.error}</p><div><Button size="sm" variant="outline" disabled={target.locked || target.saving} onclick={() => void saveDraft(target)}>Retry save</Button><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => void saveCopy()}>Save a copy</Button></div></div>{:else if target.notice}<p class="document-notice" role="status">{target.notice}</p>{/if}
 				<section class="document-notes" aria-label="Document notes">
-					{#if notesEditing}<label class="notes-label">Notes <textarea class="notes-input" aria-label="Studio notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label><div class="notes-actions"><Button variant="ghost" size="sm" disabled={target.locked} onclick={() => { notesEditing = false; void saveDraft(target); }}>Done</Button></div>
+					{#if notesEditing}<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label><div class="notes-actions"><Button variant="ghost" size="sm" disabled={target.locked} onclick={() => { notesEditing = false; void saveDraft(target); }}>Done</Button></div>
 					{:else if target.body.trim()}<MarkdownContent text={target.body} /><Button variant="ghost" size="sm" onclick={() => notesEditing = true}><Icon name="pencil" size={14} />Edit notes</Button>
 					{:else}<button class="add-notes" onclick={() => notesEditing = true}><Icon name="pencil" size={14} />Add notes</button>{/if}
 				</section>
-				<ol class="placements" aria-label="Studio outputs">
+				<ol class="placements" aria-label="Report results">
 					{#each target.placements as placement, index (placement.id)}
 						{@const key = resultKey(target.document.workspace, placement)}
 						<li class="placement" data-placement-id={placement.id}>
@@ -498,7 +500,7 @@
 <input class="sr-only" bind:this={reportFileInput} type="file" accept=".json,application/json,application/vnd.fella.report+json" aria-label="Choose a Fella report snapshot" onchange={event => void chooseReportFile(event)} />
 
 <Dialog.Root bind:open={reportManagerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content report-manager">
-	<div class="picker-heading"><div><Dialog.Title class="dialog-title">Report snapshots</Dialog.Title><Dialog.Description class="dialog-description">Portable, read-only copies of a Studio document and its saved analysis.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close report snapshots"><Icon name="x" size={16} /></Dialog.Close></div>
+	<div class="picker-heading"><div><Dialog.Title class="dialog-title">Report snapshots</Dialog.Title><Dialog.Description class="dialog-description">Portable, read-only copies of a report and its saved analysis.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close report snapshots"><Icon name="x" size={16} /></Dialog.Close></div>
 	{#if reportPreview}
 		<div class="report-preview-summary"><h3>{reportPreview.title}</h3><p>{reportPreview.artifact_count} saved outputs · {reportPreview.run_count} analysis runs</p><p>Fella will retain this as a read-only snapshot. It cannot query original files; imported presentation programs stay inactive.</p><ul>{#each reportPreview.warnings as warning}<li>{warning}</li>{/each}</ul><div class="dialog-actions"><Button variant="ghost" size="sm" disabled={reportBusy} onclick={() => { reportPreview = null; reportJson = ''; }}>Cancel</Button><Button size="sm" disabled={reportBusy} onclick={() => void importReport()}>{reportBusy ? 'Importing…' : 'Import read-only snapshot'}</Button></div></div>
 	{:else}
@@ -511,9 +513,9 @@
 
 <Dialog.Root bind:open={reportViewerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content report-viewer"><div class="picker-heading"><div><Dialog.Title class="dialog-title">{selectedReport?.preview.title ?? 'Imported report'}</Dialog.Title><Dialog.Description class="dialog-description">Read-only snapshot · saved checks are not reverified.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close imported report"><Icon name="x" size={16} /></Dialog.Close></div>{#if selectedReport}<ImportedReportView report={selectedReport.preview.package} />{/if}</Dialog.Content></Dialog.Portal></Dialog.Root>
 
-<Dialog.Root bind:open={createOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><form class="dialog-form" onsubmit={event => { event.preventDefault(); void create(); }}><Dialog.Title class="dialog-title">New Studio document</Dialog.Title><Dialog.Description class="dialog-description">Arrange saved analysis and your own notes.</Dialog.Description><label>Name<Input aria-label="New Studio document name" bind:value={newTitle} maxlength={120} placeholder="For example, quarterly review" /></label>{#if createError}<p class="dialog-error" role="alert">{createError}</p>{/if}<div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button type="submit" size="sm" disabled={!newTitle.trim() || creating}>{creating ? 'Creating…' : 'Create document'}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>
+<Dialog.Root bind:open={createOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><form class="dialog-form" onsubmit={event => { event.preventDefault(); void create(); }}><Dialog.Title class="dialog-title">New report</Dialog.Title><Dialog.Description class="dialog-description">Arrange saved analysis and your own notes.</Dialog.Description><label>Name<Input aria-label="New report name" bind:value={newTitle} maxlength={120} placeholder="For example, quarterly review" /></label>{#if createError}<p class="dialog-error" role="alert">{createError}</p>{/if}<div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button type="submit" size="sm" disabled={!newTitle.trim() || creating}>{creating ? 'Creating…' : 'Create report'}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>
 
-<Dialog.Root bind:open={pickerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-picker"><div class="picker-heading"><div><Dialog.Title class="dialog-title">Add saved output</Dialog.Title><Dialog.Description class="dialog-description">Uses the saved result. No analysis is rerun.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close saved outputs"><Icon name="x" size={16} /></Dialog.Close></div><Input aria-label="Find saved outputs" bind:value={pickerSearch} placeholder="Find an output…" />{#if listError}<p class="dialog-error" role="alert">{listError}</p><Button size="sm" variant="ghost" onclick={() => void refreshOutputs(workspace)}>Retry</Button>{/if}<ul class="output-picker-list">{#each filteredArtifacts as artifact (artifact.id)}<li><button onclick={() => void addArtifact(artifact.id)}><strong>{artifact.title}</strong><span>Revision {artifact.current_revision}</span><Icon name="plus" size={14} /></button></li>{/each}</ul>{#if !filteredArtifacts.length && !listError}<p class="document-caption">{pickerSearch.trim() ? 'No matching saved outputs.' : 'No saved outputs in this workspace yet. Save a result from a conversation first.'}</p>{/if}</Dialog.Content></Dialog.Portal></Dialog.Root>
+<Dialog.Root bind:open={pickerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-picker"><div class="picker-heading"><div><Dialog.Title class="dialog-title">Add saved output</Dialog.Title><Dialog.Description class="dialog-description">Uses the saved result. No analysis is rerun.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close saved outputs"><Icon name="x" size={16} /></Dialog.Close></div><Input aria-label="Find saved outputs" bind:value={pickerSearch} placeholder="Find an output…" />{#if listError}<p class="dialog-error" role="alert">{listError}</p><Button size="sm" variant="ghost" onclick={() => void refreshOutputs(workspace)}>Retry</Button>{/if}<ul class="output-picker-list">{#each filteredArtifacts as artifact (artifact.id)}<li><button onclick={() => void addArtifact(artifact.id)}><strong>{artifact.title}</strong><span>Revision {artifact.current_revision}</span><Icon name="plus" size={14} /></button></li>{/each}</ul>{#if !filteredArtifacts.length && !listError}<p class="document-caption">{pickerSearch.trim() ? 'No matching saved outputs.' : 'No saved results in this workspace yet. Ask a question to produce one.'}</p>{/if}</Dialog.Content></Dialog.Portal></Dialog.Root>
 
 <Dialog.Root bind:open={checkpointOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><form class="dialog-form" onsubmit={event => { event.preventDefault(); void checkpoint(); }}><Dialog.Title class="dialog-title">Save checkpoint</Dialog.Title><Dialog.Description class="dialog-description">Keep this document’s notes, order, selections, and pinned revisions.</Dialog.Description><label>Name<Input aria-label="Checkpoint name" bind:value={checkpointTitle} maxlength={120} /></label><div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button type="submit" size="sm" disabled={!checkpointTitle.trim() || current?.locked}>Save checkpoint</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>
 

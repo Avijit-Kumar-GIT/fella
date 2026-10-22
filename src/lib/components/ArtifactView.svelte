@@ -8,19 +8,27 @@
 	import { Select } from '$lib/components/ui/select';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import Icon from './Icon.svelte';
+	import AnalyticalDiff from './AnalyticalDiff.svelte';
+	import { session } from '$lib/session.svelte';
 
 	let {
 		resolved,
 		viewState = $bindable({}),
 		onstatechange,
 		onrevisionchange,
-		onrequestchange
+		onrequestchange,
+		reviewOnly = false,
+		autoCompare = false,
+		onadopted
 	}: {
 		resolved: ResolvedArtifact;
 		viewState?: Record<string, unknown>;
 		onstatechange?: (state: Record<string, unknown>) => void;
 		onrevisionchange?: (revision: number) => void;
 		onrequestchange?: (artifact: ResolvedArtifact, instruction: string) => void | Promise<void>;
+		reviewOnly?: boolean;
+		autoCompare?: boolean;
+		onadopted?: (output: ResolvedArtifact) => void;
 	} = $props();
 
 	let displayed = $state<ResolvedArtifact>(untrack(() => resolved));
@@ -38,6 +46,7 @@
 	let programDraft = $state('');
 	let operation = 0;
 	let comparisonOperation = 0;
+	let autoCompared = '';
 	let caveats = $derived(artifactCaveats(displayed));
 	let evidence = $derived(displayed.run.result.evidence.filter((item): item is EvidenceItem => Boolean(item && typeof item === 'object' && 'tool' in item)));
 	let revisions = $derived([...displayed.artifact.revisions].sort((a, b) => b.revision - a.revision));
@@ -45,7 +54,6 @@
 		? displayed.artifact.current_revision
 		: displayed.revision.parent_revision ?? null);
 	let initialState = $derived(JSON.parse(JSON.stringify(viewState)) as Record<string, unknown>);
-
 	$effect(() => {
 		const next = resolved;
 		++operation; ++comparisonOperation;
@@ -53,6 +61,10 @@
 		busy = false; actionError = ''; notice = ''; comparisonVersions = []; comparisonReport = null;
 		compareOpen = false; layoutEditing = false; programDraft = next.revision.program;
 		instruction = ''; changeOpen = false;
+	});
+	$effect(() => {
+		const key = `${displayed.artifact.id}:${displayed.revision.revision}:${baseline}`;
+		if (autoCompare && baseline && key !== autoCompared) { autoCompared = key; untrack(() => { void compare(); }); }
 	});
 
 	onMount(() => {
@@ -119,7 +131,9 @@
 			const next = await ipc.artifactAdopt(target.artifact.workspace, target.artifact.id, target.artifact.current_revision, target.revision.revision);
 			if (request !== operation) return;
 			displayed = next;
-			notice = 'Current revision updated. Other Studio placements keep their pinned revisions.';
+			compareOpen = false; comparisonReport = null; comparisonVersions = [];
+			notice = 'Current revision updated. Existing reports keep their pinned versions.';
+			onadopted?.(next);
 		} catch (cause) { if (request === operation) actionError = cause instanceof Error ? cause.message : String(cause); }
 		finally { if (request === operation) busy = false; }
 	}
@@ -203,21 +217,12 @@
 
 	{#if compareOpen && comparisonReport && comparisonVersions.length === 2}
 		<section class="comparison" aria-label="Saved revision comparison">
-			<h3>Revision {comparisonReport.before_revision} → {comparisonReport.after_revision}</h3>
-			<p class="quiet-note">Saved snapshots only. No analysis was rerun. Deltas use the runs’ recorded keys, periods, sources, definitions and units.</p>
-			{#if !comparisonReport.compatible}
-				<div class="comparison-limit"><h4>These results are not directly comparable</h4><ul>{#each comparisonReport.reasons as reason}<li>{reason}</li>{/each}</ul></div>
-			{:else}
-				{#each comparisonReport.tables as table}
-					<section class="delta-table" aria-label={`Differences for ${table.after_result_id}`}>
-						<h4>{table.after_result_id}</h4>
-						<table><thead><tr><th scope="col">{table.key_fields.join(' · ') || 'Result'}</th><th scope="col">Measure</th><th scope="col">Earlier</th><th scope="col">Later</th><th scope="col">Change</th></tr></thead>
-						<tbody>{#each table.values as value, index (`${value.key.join('|')}:${value.field}:${index}`)}<tr><th scope="row">{value.key.join(' · ') || 'All rows'}</th><td>{value.field}{value.unit ? ` (${value.unit})` : ''}</td><td>{value.before}</td><td>{value.after}</td><td>{#if value.delta.kind === 'exact_integer'}{value.delta.delta}{:else if value.delta.kind === 'finite_float'}{value.delta.delta}{:else}<span title={value.delta.reason}>Unavailable</span>{/if}</td></tr>{/each}</tbody></table>
-					</section>
-				{/each}
-			{/if}
-			{#if comparisonReport.warnings.length}<ul class="comparison-warnings">{#each comparisonReport.warnings as warning}<li>{warning}</li>{/each}</ul>{/if}
-			<div class="comparison-versions">
+			<AnalyticalDiff comparison={comparisonReport} {busy} error={actionError}
+				onadopt={() => void adopt()}
+				onkeep={() => { compareOpen = false; notice = 'Current version kept. The proposed version remains in history.'; }}
+				onopenrevision={revision => void chooseRevision(String(revision))}
+				onopenconsumer={consumer => { if (session.catalog.workspace === displayed.artifact.workspace) session.openStudioToolTab(consumer.document_id); }} />
+			<details><summary>Exact before and after records</summary><div class="comparison-versions">
 				{#each comparisonVersions as version (version.revision.revision)}
 					<section><h4>Revision {version.revision.revision}</h4><p class="quiet-note">Run {version.run.id} · source revision {artifactSourceRevision(version)}</p><MarkdownContent text={version.run.result.text} />
 						{#each version.results as result (result.id)}
@@ -226,12 +231,12 @@
 						{/each}
 					</section>
 				{/each}
-			</div>
+			</div></details>
 			<details><summary>Presentation changes</summary><div class="comparison-versions">{#each comparisonVersions as version (version.revision.revision)}<pre aria-label={`Revision ${version.revision.revision} presentation`}>{version.revision.program || '(No presentation)'}</pre>{/each}</div></details>
 		</section>
 	{/if}
 
-	<div class="artifact-presentation">
+	<div class="artifact-presentation" hidden={reviewOnly}>
 		{#if displayed.revision.program.trim() && Presentation && !rendererError}
 			{#key `${displayed.artifact.id}:${displayed.revision.revision}`}
 				<svelte:boundary>
@@ -315,13 +320,6 @@
 	pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; background: var(--bg-inset); border-radius: var(--radius); padding: var(--space-3); font: 11px/1.6 var(--mono); }
 	.layout-editor textarea { font: 12px/1.6 var(--mono); }
 	.comparison { display: grid; gap: var(--space-3); background: var(--bg-inset); padding: var(--space-4); border-radius: var(--radius-window); }
-	.comparison-limit { padding: var(--space-3); border-radius: var(--radius); background: var(--bg-raised); color: var(--text-dim); }
-	.comparison-limit h4, .delta-table h4 { margin: 0 0 var(--space-2); color: var(--text-primary); font-size: var(--fs-sm); font-weight: 600; }
-	.comparison-limit ul, .comparison-warnings { margin: 0; padding-left: 20px; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.55; }
-	.delta-table { min-width: 0; overflow: auto; }
-	.delta-table table { width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
-	.delta-table th, .delta-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border-subtle); white-space: nowrap; }
-	.delta-table thead th { color: var(--text-faint); font-weight: 500; }
 	.comparison-versions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
 	.comparison-versions > section { min-width: 0; display: grid; align-content: start; gap: var(--space-3); }
 	@container (max-width: 600px) { .comparison-versions { grid-template-columns: minmax(0, 1fr); } }

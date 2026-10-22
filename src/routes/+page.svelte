@@ -24,12 +24,23 @@
 	let dragging = $state(false);
 	let toolsExpanded = $state(false);
 	let toolsCompact = $state(false);
+	let windowWidth = $state(1440);
+	let narrowNavigation = $derived(windowWidth < (session.contentLayout === 'notebook' ? 1100 : 700));
+	$effect(() => {
+		if (narrowNavigation) untrack(() => { session.sidebarCollapsed = true; });
+	});
 
 	let activeView = $derived(session.workspaceView);
-	let showRightPane = $derived(session.workspacePaneOpen || Boolean(session.activeChat.companionPane));
+	let showRightPane = $derived(session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane));
 	let scopedWorkspaceActive = $derived(
 		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
 	);
+	$effect(() => {
+		const conversationId = session.activeChat.id;
+		if (session.contentLayout === 'notebook' && scopedWorkspaceActive) {
+			untrack(() => { if (!session.workspacePaneOpen) session.openWorkspaceToolTab('investigation', null, conversationId); });
+		}
+	});
 	$effect(() => {
 		const pane = session.activeChat.companionPane;
 		if (!pane || !scopedWorkspaceActive) return;
@@ -140,6 +151,7 @@
 		if (e.defaultPrevented) return;
 		const commandKey = e.ctrlKey || e.metaKey;
 		const key = e.key.toLowerCase();
+		if (key === 'escape' && narrowNavigation && !session.sidebarCollapsed && !paletteOpen) { session.sidebarCollapsed = true; return; }
 		if (commandKey && key === 'k') {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
@@ -292,9 +304,10 @@
 	});
 </script>
 
-<svelte:window onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
+<svelte:window bind:innerWidth={windowWidth} onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
 
-	<div class="shell">
+	<div class="shell" class:narrow-navigation={narrowNavigation}>
+		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
 			<Sidebar
 				onsearch={() => (paletteOpen = true)}
@@ -327,7 +340,7 @@
 					{#if activeView === 'settings'}
 						<SettingsView />
 					{:else}
-						<WorkspacePanelLayout open={showRightPane} bind:expanded={toolsExpanded} bind:compact={toolsCompact}>
+						<WorkspacePanelLayout open={showRightPane} notebook={session.contentLayout === 'notebook'} bind:expanded={toolsExpanded} bind:compact={toolsCompact}>
 							{#snippet conversation()}
 								<div class="conversation-workspace">
 									<Transcript bind:this={transcript} />
@@ -336,11 +349,13 @@
 							{/snippet}
 							{#snippet tools()}
 								{#if scopedWorkspaceActive}
-									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen}>
-										<WorkspaceView onexpand={() => (toolsExpanded = true)} />
+									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen && session.contentLayout !== 'notebook'}>
+										<WorkspaceView notebook={session.contentLayout === 'notebook'} onexpand={() => (toolsExpanded = true)} />
 									</div>
 								{/if}
-								{#if showRightPane && !session.workspacePaneOpen}
+								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive}
+									<div class="notebook-empty"><Icon name="folder" size={20} /><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
+								{:else if showRightPane && !session.workspacePaneOpen}
 									<CompanionPane />
 								{/if}
 							{/snippet}
@@ -363,6 +378,12 @@
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
 
 <style>
+	.navigation-backdrop { position: absolute; inset: 0; z-index: 39; border: 0; background: rgb(0 0 0 / .25); }
+	.narrow-navigation :global(.sidebar) { position: absolute; inset: 0 auto 0 0; z-index: 40; max-width: calc(100% - 48px); box-shadow: var(--shadow-pop); }
+	.notebook-empty { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 16px; padding: clamp(20px, 6vw, 64px); }
+	.notebook-empty h1 { font-size: var(--fs-xl); margin: 0; }
+	.notebook-empty p { max-width: 44ch; color: var(--text-dim); line-height: 1.6; }
+	.notebook-empty button { padding: 8px 16px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); color: var(--text); cursor: pointer; }
 	.shell {
 		position: relative;
 		display: flex;

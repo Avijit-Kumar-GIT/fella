@@ -108,7 +108,7 @@ async function createWindow() {
 	const win = new BrowserWindow({
 		width: 1280,
 		height: 800,
-		minWidth: 960,
+		minWidth: 560,
 		minHeight: 640,
 		resizable: true,
 		show: false,

@@ -137,6 +137,9 @@ export interface WorkspaceToolTab {
 	documentId?: string | null;
 	title?: string;
 	initialArtifactId?: string | null;
+	artifactId?: string | null;
+	artifactRevision?: number | null;
+	newReport?: boolean;
 }
 
 interface SavedWorkspaceContextState {
@@ -186,7 +189,8 @@ function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 		? source.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
 			if (!rawTab || typeof rawTab !== 'object') return [];
 			const tab = rawTab as Record<string, unknown>;
-			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal', 'preview', 'studio'].includes(String(tab.kind))) return [];
+			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal', 'preview', 'studio', 'result'].includes(String(tab.kind))) return [];
+			if (tab.kind === 'result' && (typeof tab.artifactId !== 'string' || !Number.isSafeInteger(tab.artifactRevision) || Number(tab.artifactRevision) < 1)) return [];
 			const preview = parseCompanionPane(tab.preview);
 			if (tab.kind === 'preview' && !preview) return [];
 			return [{
@@ -199,6 +203,8 @@ function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 				documentId: typeof tab.documentId === 'string' ? tab.documentId : null,
 				title: typeof tab.title === 'string' ? tab.title : undefined,
 				initialArtifactId: typeof tab.initialArtifactId === 'string' ? tab.initialArtifactId : null,
+				artifactId: typeof tab.artifactId === 'string' ? tab.artifactId : null,
+				artifactRevision: typeof tab.artifactRevision === 'number' ? tab.artifactRevision : null,
 				preview
 			}];
 		}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
@@ -604,7 +610,7 @@ export class Conversation {
 
 export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
-export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal' | 'preview' | 'studio';
+export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal' | 'preview' | 'studio' | 'result';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -629,6 +635,19 @@ class Session {
 	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The app-level page; an unbound conversation is the initial destination. */
 	workspaceView = $state<WorkspaceView>('ask');
+	/** Window organization only; never a mounted Workspace or an execution mode. */
+	contentLayout = $state<'chat' | 'notebook'>('chat');
+	setContentLayout(layout: 'chat' | 'notebook'): void {
+		this.contentLayout = layout;
+		if (layout === 'chat') { this.setWorkspacePaneOpen(false); return; }
+		if (layout !== 'notebook' || !this.catalog.workspace) return;
+		// Reuse the current tab/chat identity. Opening a layout is not permission
+		// to create an Investigation or start an analytical run.
+		const tab = this.activeWorkspaceToolTab;
+		if (!tab || tab.kind === 'investigation' && tab.conversationId !== this.activeChat.id) {
+			this.openWorkspaceToolTab('investigation', null, this.activeChat.id);
+		} else this.setWorkspacePaneOpen(true);
+	}
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('investigation');
 	/** The tool chooser is a transient entry state, not a persisted workspace tool. */
@@ -655,6 +674,7 @@ class Session {
 	historyVersion = $state<number>(0);
 	/** Bumped when the ask path automatically creates/resolves an Investigation. */
 	investigationsVersion = $state<number>(0);
+	reportsVersion = $state(0);
 	/** Presentation labels, hydrated from durable Investigations; never transcript edits. */
 	investigationNames = $state<Record<string, string>>({});
 	rememberInvestigationNames(records: readonly { title: string; conversation_id?: string | null }[]): void {
@@ -1283,12 +1303,32 @@ class Session {
 		return tab;
 	}
 
+	openNewReportTab(): void {
+		const tab = this.openStudioToolTab();
+		if (tab) tab.newReport = true;
+	}
+
+	openResultToolTab(artifactId: string, revision: number, title: string): WorkspaceToolTab | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace || !artifactId || !Number.isSafeInteger(revision) || revision < 1) return null;
+		context.workspaceToolTabs ??= [];
+		let tab = context.workspaceToolTabs.find(item => item.kind === 'result' && item.artifactId === artifactId && item.artifactRevision === revision);
+		if (!tab) {
+			tab = { id: `result:${uid()}`, kind: 'result', artifactId, artifactRevision: revision, title };
+			context.workspaceToolTabs.push(tab);
+		}
+		this.activateWorkspaceToolTab(tab.id);
+		return tab;
+	}
+
 	setStudioTabDocument(tabId: string, documentId: string, title?: string): void {
 		const tab = this.workspaceToolTabs.find((item) => item.id === tabId && item.kind === 'studio');
 		if (!tab) return;
 		tab.documentId = documentId;
+		tab.newReport = false;
 		if (title) tab.title = title;
 		tab.initialArtifactId = null;
+		this.reportsVersion++;
 		this.#writeWorkspaceState();
 	}
 

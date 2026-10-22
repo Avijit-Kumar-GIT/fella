@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalPresentation from './presentation/AnalyticalPresentation.svelte';
+	import ArtifactView from './ArtifactView.svelte';
 	import { ensureAnalyticalOutput, outputJobs, saveOutputToStudio } from '$lib/analytical-output.svelte';
 	import { transcriptPresentation } from '$lib/presentation/snapshot';
 	let { message }: { message: Message } = $props();
@@ -14,6 +15,17 @@
 	let error = $state('');
 	let loading = $state(false);
 	let saving = $state(false);
+	let reviewing = $state(false);
+	async function inspect(review = false): Promise<void> {
+		if (!workspace || workspace !== session.catalog.workspace) return;
+		try {
+			const output = resolved?.run.id === turnId ? resolved : await ensureAnalyticalOutput(message, workspace);
+			if (!output) { error = 'Could not open the saved result.'; return; }
+			resolved = output;
+			if (review) reviewing = !reviewing;
+			else { session.setContentLayout('notebook'); session.openResultToolTab(output.artifact.id, output.revision.revision, output.artifact.title); }
+		} catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+	}
 	let sequence = 0;
 	let retry = $state(0);
 	let workspace = $derived(message.answer?.workspace?.path);
@@ -78,9 +90,12 @@
 				})().catch(cause => error = cause instanceof Error ? cause.message : String(cause));
 			}} />
 		<div class="answer-actions">
-			<Button variant="ghost" size="sm" disabled={saving} onclick={() => void save()}>{saving ? 'Saving…' : resolved?.artifact.saved ? 'Open in Studio' : 'Save to Studio'}</Button>
+			<Button variant="ghost" size="sm" onclick={() => void inspect()}>Open result</Button>
+			{#if (message.artifact_revision ?? 1) > 1}<Button variant="ghost" size="sm" aria-expanded={reviewing} onclick={() => void inspect(true)}>{reviewing ? 'Close review' : 'Review changes'}</Button>{/if}
+			<Button variant="ghost" size="sm" disabled={saving} onclick={() => void save()}>{saving ? 'Opening report…' : 'Create report'}</Button>
 			{#if message.artifact_revision}<span>Analysis · revision {message.artifact_revision}</span>{/if}
 		</div>
+		{#if reviewing && resolved}<ArtifactView {resolved} reviewOnly autoCompare onrequestchange={requestArtifactChange} onadopted={output => { resolved = output; reviewing = false; }} />{/if}
 		<details class="original"><summary>Analysis details</summary><MarkdownContent text={message.answer?.text ?? message.text} /></details>
 	{:else}
 		<MarkdownContent text={message.answer?.text ?? message.text} />

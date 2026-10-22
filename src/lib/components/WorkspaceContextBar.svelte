@@ -19,16 +19,19 @@
 	);
 </script>
 
-{#if workspacePath && isWorkspaceView}
+{#if isWorkspaceView}
 	<div class="workspace-context-bar">
-		<div class="workspace-identity" role="group" aria-label={`Workspace: ${workspaceName}`}>
-			<Icon name="folder" size={16} />
-			<strong class="workspace-name" title={workspacePath}>{workspaceName}</strong>
+		<div class="workspace-identity" role="group" aria-label={workspaceName ? `Workspace: ${workspaceName}` : 'General conversation'}>
+			{#if workspacePath}<Icon name="folder" size={16} />{/if}
+			<strong class="workspace-name" title={workspacePath ?? undefined}>{workspaceName || 'General'}</strong>
 		</div>
-
+		<div class="layout-switch" role="group" aria-label="Window layout">
+			<button class:active={session.contentLayout === 'chat'} aria-pressed={session.contentLayout === 'chat'} onclick={() => { session.setContentLayout('chat'); ontoggleexpand && expanded && ontoggleexpand(); }}>Chat</button>
+			<button class:active={session.contentLayout === 'notebook'} aria-pressed={session.contentLayout === 'notebook'} onclick={() => session.setContentLayout('notebook')}>Notebook</button>
+		</div>
 		{#if workspaceAvailable}
 			<div class="workspace-context-actions">
-				{#if session.workspacePaneOpen && (compact || expanded)}
+				{#if session.contentLayout === 'chat' && session.workspacePaneOpen && (compact || expanded)}
 					<Button variant="ghost" size="sm" class="workspace-pane-toggle" title="Return to the current conversation" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} />Conversation{#if session.activeChat.busy}<span class="conversation-activity" aria-label="Analysis running"> · Running</span>{/if}</Button>
 				{/if}
 				{#if session.workspacePaneOpen && !compact}
@@ -41,12 +44,12 @@
 					type="button"
 					aria-expanded={session.workspacePaneOpen}
 					aria-controls="workspace-tools-pane"
-					aria-label={session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
-					title={session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
-					onclick={() => session.toggleWorkspacePane()}
+					aria-label={session.contentLayout === 'notebook' ? 'Open a document' : session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
+					title={session.contentLayout === 'notebook' ? 'Open a document' : session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
+					onclick={() => session.contentLayout === 'notebook' ? session.openWorkspaceToolChooser() : session.toggleWorkspacePane()}
 				>
 					<Icon name="panel" size={16} />
-					<span>Tools</span>
+					<span>{session.contentLayout === 'notebook' ? 'Documents' : 'Tools'}</span>
 				</Button>
 			</div>
 		{:else if session.workspaceView === 'ask' && historyOnly}
@@ -56,7 +59,7 @@
 					variant="outline"
 					size="sm"
 					class="workspace-open-investigation"
-					onclick={() => void openRepository(workspacePath, { reportFailure: true })}
+					onclick={() => { if (workspacePath) void openRepository(workspacePath, { reportFailure: true }); }}
 				>
 					<Icon name="refresh" size={14} />Reconnect folder
 				</Button>
@@ -66,6 +69,11 @@
 {/if}
 
 <style>
+	.layout-switch { display: flex; flex: none; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-inset); }
+	.layout-switch button { min-height: 28px; padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
+	.layout-switch button.active { background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-sm); }
+	.layout-switch button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+	@media (max-width: 650px) { .workspace-context-bar { gap: 8px; padding-inline: 12px; flex-wrap: wrap; padding-block: 6px; } .workspace-context-actions { gap: 4px; } }
 	.workspace-context-bar {
 		flex: none;
 		display: flex;

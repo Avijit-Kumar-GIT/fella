@@ -353,6 +353,7 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 		// restore the workspace's previous Investigation/Workbench pane here: the
 		// user expects to land on the conversation they selected.
 		session.setWorkspacePaneOpen(false);
+		if (session.contentLayout === 'notebook' && workspaceId) session.openWorkspaceToolTab('investigation', null, summary.id);
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
