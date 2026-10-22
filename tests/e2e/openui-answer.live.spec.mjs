@@ -22,11 +22,16 @@ async function invoke(page, command, args = {}) {
 	return page.evaluate(({ command, args }) => window.fella.invoke(command, args), { command, args });
 }
 
-test('real model OpenUI answer validates and renders as the primary workspace answer', async () => {
-	test.setTimeout(300_000);
+const modelCases = [
+	{ provider: 'openai', model: 'gpt-5.6-luna', credential: 'apikey:openai' },
+	{ provider: 'ollama-cloud', model: 'gemma4:31b', credential: 'apikey:ollama-cloud' }
+];
+
+for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.model} OpenUI answer validates and renders as the primary workspace answer`, async () => {
+	test.setTimeout(360_000);
 	const credentialPath = authPath();
 	const auth = JSON.parse(await readFile(credentialPath, 'utf8'));
-	assert.equal(typeof auth['apikey:openai'], 'string', `OpenAI credential missing from ${credentialPath}`);
+	assert.equal(typeof auth[modelCase.credential], 'string', `${modelCase.provider} credential missing from ${credentialPath}`);
 	await access(enginePath()).catch(() => { throw new Error('Electron sidecar is missing; run pnpm electron:build first.'); });
 
 	const profile = await mkdtemp(join(tmpdir(), 'fella-openui-model-'));
@@ -55,7 +60,7 @@ test('real model OpenUI answer validates and renders as the primary workspace an
 		});
 		const page = await app.firstWindow();
 		await page.waitForLoadState('domcontentloaded');
-		const settings = await invoke(page, 'set_settings', { settings: { provider: 'openai', model: 'gpt-5.6-luna' } });
+		const settings = await invoke(page, 'set_settings', { settings: { provider: modelCase.provider, model: modelCase.model } });
 		assert.equal(settings.has_credential, true);
 		await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, workspace);
 		await page.getByRole('button', { name: /Switch workspace\. Current:/ }).click();
@@ -63,7 +68,7 @@ test('real model OpenUI answer validates and renders as the primary workspace an
 
 		const composer = page.getByRole('combobox', { name: /Ask about/ });
 		await expect(composer).toBeVisible();
-		const question = 'How did revenue change quarter by quarter for North and South, and how do orders compare? Use a visualization that makes both regional trends easy to compare, with a short explanation grounded in sales.csv.';
+		const question = 'Compare the quarter-by-quarter revenue trend between North and South, and explain how order volume moved alongside it, based on sales.csv.';
 		const priorAnswers = await page.locator('.msg.assistant').count();
 		await composer.fill(question);
 		await composer.press('Enter');
@@ -72,15 +77,16 @@ test('real model OpenUI answer validates and renders as the primary workspace an
 		await expect.poll(async () => {
 			if (await page.locator('.msg.assistant').count() <= priorAnswers) return false;
 			return !(await answer.locator('.text.rich.pending').count()) && !(await answer.locator('.thinking').count());
-		}, { timeout: 240_000, intervals: [500, 1000, 2000] }).toBe(true);
+		}, { timeout: 300_000, intervals: [500, 1000, 2000] }).toBe(true);
 
 		const turnId = await answer.getAttribute('data-analysis-turn-id');
 		assert.ok(turnId, 'the real-model response should link its canonical analysis turn');
 		const turn = await invoke(page, 'analysis_turn_load', { turnId });
 		const program = turn.result?.presentation_program;
-		console.log(`REAL_MODEL_OPENUI_PROGRAM\n${program ?? '(missing)'}\nEND_REAL_MODEL_OPENUI_PROGRAM`);
+		console.log(`REAL_MODEL_OPENUI_PROGRAM ${modelCase.provider}/${modelCase.model}\n${program ?? '(missing)'}\nEND_REAL_MODEL_OPENUI_PROGRAM`);
 		assert.equal(typeof program, 'string', 'the real model must return the same-turn OpenUI program');
 		assert.match(program, /^root\s*=\s*Document\(/, 'the real model program must use the required OpenUI root');
+		assert.match(program, /\bChart\s*\(/, 'a chart-worthy multi-period comparison should receive an OpenUI visualization without the user requesting one');
 
 		await expect(answer.getByRole('button', { name: 'Save to Studio' })).toBeVisible({ timeout: 30_000 });
 		await expect(answer.locator('.view-note')).toHaveCount(0);

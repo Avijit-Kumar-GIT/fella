@@ -5,7 +5,7 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
 [the implementation plan](../OPENUI-ANALYTICAL-WORKSPACE-PLAN.md).
 
 The frozen persistence/export/desktop contract below remains v1. Its executable
-task set is now v1.3; the v1.1 and v1.2 results below remain historical and
+task set is now v1.7; earlier v1.1–v1.6 results below remain historical and
 unchanged.
 
 ## Frozen expected behavior
@@ -129,6 +129,74 @@ characterization returned an invalid facet shape (`columns` nested inside
 the test was rerun against a rebuilt bundle. These are operational acceptances,
 not a quality or diversity score. Generated answers were not graded for
 analytical accuracy.
+
+## OpenUI static-expression compatibility — task set v1.5
+
+Defined 2026-10-22 after the user reported a generated answer rejected by the
+presentation validator and pointed to OpenUI Lang's Svelte integration. The
+validator now accepts local named references and OpenUI expression forms only
+when they resolve entirely from static values declared in the same program.
+Constant arithmetic, string operations, conditionals, comparisons, and safe
+member/index access are folded into ordinary literal props before the Svelte
+renderer sees them. This follows OpenUI's composition syntax without allowing
+runtime state, query/mutation results, built-in execution, or action plans.
+
+Existing binding, schema, chart-source, artifact, and output-safety assertions
+remain in force. The task set adds forward-reference and expression fixtures,
+while keeping explicit rejections for unresolved values, component-as-data,
+reactive state, and executable built-ins. No prior expected result is weakened.
+
+The opt-in real-model suite covers `openai/gpt-5.6-luna` and
+`ollama-cloud/gemma4:31b`. The Gemma run exercises Fella's configured Ollama
+Cloud provider, not a local inference server. Both latest Electron acceptance
+runs passed (OpenAI: 11.2s; Gemma: 15.3s) on the synthetic workspace. Each
+generated answer validated, rendered as the primary response, and persisted
+automatically. Gemma's output used reusable named OpenUI component references.
+These runs establish compatibility for these prompts/providers, not analytical
+accuracy or general model quality.
+
+## Question-led visual choice — task set v1.6
+
+Defined 2026-10-22 to test the product requirement that OpenUI selects a useful
+presentation from the question and evidence, rather than waiting for the user
+to request a chart or prescribing a chart family. The live-model task now asks
+for a comparison of regional quarter-by-quarter revenue and order volume but
+does not ask for a visualization. Acceptance requires a valid, persisted
+same-turn OpenUI answer and a chart component; it does not prescribe the chart
+mark, layout, or composition. The deterministic prompt contract also checks
+for positive guidance to visualize meaningful relationships without adding
+ornamental or redundant content. Existing safety and provenance assertions are
+unchanged. This is a newly versioned task set, not a post-hoc adjustment of the
+v1.5 result.
+
+The first v1.6 live-model attempt passed on Gemma but failed on OpenAI: its
+program selected a suitable line chart, then referenced an undeclared
+`trend_section`, and Fella correctly rejected the unresolved reference. This
+failure is retained here; the task's criteria were not weakened.
+
+## OpenUI reference completeness — task set v1.7
+
+Defined 2026-10-22 after the v1.6 OpenAI run exposed a missing named statement.
+The Fella prompt now explicitly requires every component/value reference to
+resolve exactly once and every non-root statement to be reachable from root.
+The OpenUI validator continues to reject missing, duplicate, and unused
+statements. The question, chart criterion, and other v1.6 expectations are
+unchanged. The initial v1.6 failure remains separately recorded; v1.7 reruns
+the same task after this prompt-only change.
+
+The v1.7 live rerun passed on both OpenAI and Ollama Cloud Gemma 4 31B (2/2,
+31.2 seconds total). Both selected and rendered a line-chart view without an
+explicit visualization request, and both answers were persisted as artifacts.
+Their compositions differed; the test does not grade analytical accuracy,
+visual quality, or whether a line chart is always the best choice.
+
+Scope limitation: this proves question-led selection within Fella's current
+registered components. It does not prove an unrestricted UI vocabulary: Fella
+still has a finite native component registry and applies a safety-constrained
+Vega-Lite subset that binds chart fields to saved results and excludes
+arbitrary code, remote resources, and unrecorded data transforms. Broadening
+that declarative vocabulary without weakening provenance is a separate design
+and implementation gap.
 
 ## Test layers and independent grading
 

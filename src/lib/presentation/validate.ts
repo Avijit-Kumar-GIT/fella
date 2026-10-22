@@ -35,38 +35,27 @@ function preflight(program: string): string {
 	const tokens = tokenize(program);
 	const statements = split(tokens);
 	const ids = new Set<string>();
-	const normalizedStatements: string[] = [];
-	const literalExpression = (node: ASTNode): boolean => {
+	const astById = new Map<string, ASTNode>();
+	const statementTokens: { id: string; tokens: typeof statements[number]['tokens']; ast: ASTNode }[] = [];
+	function tokenCount(node: ASTNode): number {
 		switch (node.k) {
-			case 'Str': case 'Num': case 'Bool': case 'Null': return true;
-			case 'Arr': return node.els.every(literalExpression);
-			case 'Obj': return node.entries.every(([, value]) => literalExpression(value));
-			case 'BinOp': return ['+', '-', '*', '/', '%'].includes(node.op) && literalExpression(node.left) && literalExpression(node.right);
-			case 'UnaryOp': return node.op === '-' && node.operand.k === 'Num';
-			default: return false;
-		}
-	};
-	function staticTokenCount(node: ASTNode): number {
-		switch (node.k) {
-			case 'Str': case 'Num': case 'Bool': case 'Null': case 'Ref': return 1;
+			case 'Str': case 'Num': case 'Bool': case 'Null': case 'Ref': case 'Ph': case 'StateRef': case 'RuntimeRef': return 1;
 			case 'Comp':
 				if (!Object.hasOwn(componentDefinitions, node.name)) throw new Error(`Unsupported component or builtin “${node.name}”.`);
-				return 3 + Math.max(0, node.args.length - 1) + node.args.reduce((sum, arg) => sum + staticTokenCount(arg), 0);
-			case 'Arr': return 2 + Math.max(0, node.els.length - 1) + node.els.reduce((sum, arg) => sum + staticTokenCount(arg), 0);
+				return 3 + Math.max(0, node.args.length - 1) + node.args.reduce((sum, arg) => sum + tokenCount(arg), 0);
+			case 'Arr': return 2 + Math.max(0, node.els.length - 1) + node.els.reduce((sum, arg) => sum + tokenCount(arg), 0);
 			case 'Obj': {
 				const keys = node.entries.map(([key]) => key);
 				if (new Set(keys).size !== keys.length || keys.some((key) => ['__proto__', 'constructor', 'prototype'].includes(key))) throw new Error('Duplicate or unsafe object keys are not allowed.');
-				return 2 + Math.max(0, node.entries.length - 1) + node.entries.reduce((sum, [, arg]) => sum + 2 + staticTokenCount(arg), 0);
+				return 2 + Math.max(0, node.entries.length - 1) + node.entries.reduce((sum, [, arg]) => sum + 2 + tokenCount(arg), 0);
 			}
-			// Vega-Lite negative offsets are parsed as unary numeric literals by OpenUI.
-			case 'UnaryOp': if (node.op === '-' && node.operand.k === 'Num') return 2; else break;
-			// Permit only closed, literal-only arithmetic. References, state, member
-			// access, ternaries, calls, and runtime values remain outside the DSL.
-			case 'BinOp':
-				if (literalExpression(node)) return 1 + staticTokenCount(node.left) + staticTokenCount(node.right);
-				break;
+			case 'BinOp': return 1 + tokenCount(node.left) + tokenCount(node.right);
+			case 'UnaryOp': return 1 + tokenCount(node.operand);
+			case 'Ternary': return 2 + tokenCount(node.cond) + tokenCount(node.then) + tokenCount(node.else);
+			case 'Member': return 2 + tokenCount(node.obj);
+			case 'Index': return 2 + tokenCount(node.obj) + tokenCount(node.index);
 		}
-		throw new Error('Only literal-only arithmetic is supported in presentation props; references, variables, builtins and executable plans are not.');
+		throw new Error('State assignments and unsupported OpenUI expressions are not allowed in presentations.');
 	}
 	let accounted = 0;
 	for (const statement of statements) {
@@ -76,28 +65,82 @@ function preflight(program: string): string {
 		// 7=comma, 2/4/6=closing delimiters. Ignore legal trailing commas in count checks.
 		const expression = statement.tokens.filter((token, index, list) => !(token.t === 7 && [2, 4, 6].includes(list[index + 1]?.t)));
 		const ast = parseExpression(expression);
-		if (staticTokenCount(ast) !== expression.length) throw new Error('The presentation contains unparsed or malformed expression tokens.');
-		normalizedStatements.push(`${statement.id} = ${serializeStatic(ast)}`);
+		if (tokenCount(ast) !== expression.length) throw new Error('The presentation contains unparsed or malformed expression tokens.');
+		astById.set(statement.id, ast);
+		statementTokens.push({ id: statement.id, tokens: statement.tokens, ast });
 		accounted += statement.tokens.length + 2;
 	}
 	if (tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid statement.');
-	return normalizedStatements.join('\n');
+
+	function collectReferences(node: ASTNode, into: Set<string>): void {
+		switch (node.k) {
+			case 'Ref': into.add(node.n); break;
+			case 'Comp': node.args.forEach((arg) => collectReferences(arg, into)); break;
+			case 'Arr': node.els.forEach((item) => collectReferences(item, into)); break;
+			case 'Obj': node.entries.forEach(([, item]) => collectReferences(item, into)); break;
+			case 'BinOp': collectReferences(node.left, into); collectReferences(node.right, into); break;
+			case 'UnaryOp': collectReferences(node.operand, into); break;
+			case 'Ternary': collectReferences(node.cond, into); collectReferences(node.then, into); collectReferences(node.else, into); break;
+			case 'Member': collectReferences(node.obj, into); break;
+			case 'Index': collectReferences(node.obj, into); collectReferences(node.index, into); break;
+			case 'Assign': collectReferences(node.value, into); break;
+		}
+	}
+	function reachableStatements(source: Map<string, ASTNode>): Set<string> {
+		const reachable = new Set<string>();
+		const pending = ['root'];
+		while (pending.length) {
+			const id = pending.pop()!;
+			if (reachable.has(id)) continue;
+			reachable.add(id);
+			const ast = source.get(id);
+			if (!ast) continue;
+			const references = new Set<string>();
+			collectReferences(ast, references);
+			pending.push(...references);
+		}
+		return reachable;
+	}
+
+	const sourceReachable = reachableStatements(astById);
+	if ([...ids].some((id) => !sourceReachable.has(id))) throw new Error('The presentation contains unused statements.');
+	const evaluationBudget = { remaining: 20_000 };
+	const normalizedStatements = statementTokens.map(({ id, ast }) => `${id} = ${serializeStatic(ast, astById, evaluationBudget)}`);
+	// Folding a local constant into an expression can make its definition redundant.
+	// Drop only those now-unreferenced definitions that were reachable in the source.
+	const normalizedAstById = new Map<string, ASTNode>();
+	for (const { id } of statementTokens) {
+		const normalized = normalizedStatements.find((line) => line.startsWith(`${id} = `));
+		if (!normalized) continue;
+		const normalizedTokens = split(tokenize(normalized))[0]?.tokens;
+		if (normalizedTokens) normalizedAstById.set(id, parseExpression(normalizedTokens));
+	}
+	const normalizedReachable = reachableStatements(normalizedAstById);
+	const normalized = normalizedStatements.filter((line) => normalizedReachable.has(line.slice(0, line.indexOf(' = ')))).join('\n');
+	if (new TextEncoder().encode(normalized).length > limits.programBytes) throw new Error('The normalized OpenUI presentation exceeds its size budget.');
+	return normalized;
 }
 
-function serializeStatic(node: ASTNode): string {
+function serializeStatic(node: ASTNode, declarations: Map<string, ASTNode>, budget: { remaining: number }): string {
 	switch (node.k) {
 		case 'Str': return JSON.stringify(node.v);
 		case 'Num': return JSON.stringify(node.v) ?? 'null';
 		case 'Bool': return String(node.v);
 		case 'Null': return 'null';
 		case 'Ref': return node.n;
-		case 'Arr': return `[${node.els.map(serializeStatic).join(', ')}]`;
-		case 'Obj': return `{${node.entries.map(([key, value]) => `${JSON.stringify(key)}: ${serializeStatic(value)}`).join(', ')}}`;
+		case 'Arr': return `[${node.els.map((item) => serializeStatic(item, declarations, budget)).join(', ')}]`;
+		case 'Obj': return `{${node.entries.map(([key, value]) => `${JSON.stringify(key)}: ${serializeStatic(value, declarations, budget)}`).join(', ')}}`;
 		case 'Comp':
 			if (!Object.hasOwn(componentDefinitions, node.name) || node.mappedProps) throw new Error(`Unsupported component, builtin or named prop in “${node.name}”.`);
-			return `${node.name}(${node.args.map(serializeStatic).join(', ')})`;
-		case 'BinOp': case 'UnaryOp': return JSON.stringify(evaluateLiteralExpression(node)) ?? 'null';
-		default: throw new Error('Only static presentation values can be normalized.');
+			return `${node.name}(${node.args.map((arg) => serializeStatic(arg, declarations, budget)).join(', ')})`;
+		case 'BinOp': case 'UnaryOp': case 'Ternary': case 'Member': case 'Index': {
+			const value = evaluateStaticExpression(node, declarations, new Set(), budget);
+			const serialized = JSON.stringify(value);
+			if (serialized === undefined) throw new Error('The OpenUI expression did not resolve to a serializable static value.');
+			if (new TextEncoder().encode(serialized).length > limits.programBytes) throw new Error('The normalized OpenUI expression exceeds its size budget.');
+			return serialized;
+		}
+		default: throw new Error(`Unsupported OpenUI expression “${node.k}”; use only expressions that resolve from local static values. Reactive state, runtime results, and executable built-ins are not allowed.`);
 	}
 }
 
@@ -107,27 +150,67 @@ function isOpenUiAst(value: unknown): value is ASTNode {
 	return ['Comp', 'Str', 'Num', 'Bool', 'Null', 'Arr', 'Obj', 'Ref', 'Ph', 'StateRef', 'RuntimeRef', 'BinOp', 'UnaryOp', 'Ternary', 'Member', 'Index', 'Assign'].includes(String(kind));
 }
 
-/** Evaluate the tiny constant-expression subset accepted by preflight. */
-function evaluateLiteralExpression(node: ASTNode): unknown {
+/** Resolve OpenUI expression syntax only when every input is a local static value. */
+function evaluateStaticExpression(node: ASTNode, declarations: Map<string, ASTNode>, visiting = new Set<string>(), budget = { remaining: 20_000 }): unknown {
+	if (--budget.remaining < 0) throw new Error('The OpenUI static expression exceeds its evaluation budget.');
 	switch (node.k) {
 		case 'Str': return node.v;
 		case 'Num': return node.v;
 		case 'Bool': return node.v;
 		case 'Null': return null;
-		case 'Arr': return node.els.map(evaluateLiteralExpression);
-		case 'Obj': return Object.fromEntries(node.entries.map(([key, value]) => [key, evaluateLiteralExpression(value)]));
+		case 'Ref': {
+			const target = declarations.get(node.n);
+			if (!target) throw new Error(`OpenUI expression refers to unknown static value “${node.n}”.`);
+			if (visiting.has(node.n)) throw new Error(`OpenUI expression contains a cyclic static reference at “${node.n}”.`);
+			visiting.add(node.n);
+			try { return evaluateStaticExpression(target, declarations, visiting, budget); }
+			finally { visiting.delete(node.n); }
+		}
+		case 'Arr': return node.els.map((item) => evaluateStaticExpression(item, declarations, visiting, budget));
+		case 'Obj': {
+			const entries = node.entries.map(([key, item]) => [key, evaluateStaticExpression(item, declarations, visiting, budget)] as const);
+			return Object.fromEntries(entries);
+		}
 		case 'UnaryOp': {
-			const operand = evaluateLiteralExpression(node.operand);
-			if (node.op !== '-' || typeof operand !== 'number') break;
-			return -operand;
+			const operand = evaluateStaticExpression(node.operand, declarations, visiting, budget);
+			if (node.op === '!') return !operand;
+			if (node.op === '-' && typeof operand === 'number') return checkedArithmetic(-operand);
+			break;
 		}
 		case 'BinOp': {
-			const left = evaluateLiteralExpression(node.left);
-			const right = evaluateLiteralExpression(node.right);
-			if (node.op === '+' && typeof left === 'string' && typeof right === 'string') return left + right;
+			const left = evaluateStaticExpression(node.left, declarations, visiting, budget);
+			const right = evaluateStaticExpression(node.right, declarations, visiting, budget);
+			if (node.op === '&&') return left ? right : left;
+			if (node.op === '||') return left ? left : right;
+			if (node.op === '+' && (typeof left === 'string' || typeof right === 'string') && ['string', 'number', 'boolean'].includes(typeof left) && ['string', 'number', 'boolean'].includes(typeof right)) {
+				const leftText = String(left ?? '');
+				const rightText = String(right ?? '');
+				if (leftText.length + rightText.length > limits.programBytes) throw new Error('Presentation string expression exceeds its size budget.');
+				return leftText + rightText;
+			}
+			if (node.op === '==' || node.op === '!=') {
+				const equal = openUiStaticEquality(left, right);
+				return node.op === '==' ? equal : !equal;
+			}
+			if (typeof left === 'number' && typeof right === 'number') {
+				switch (node.op) {
+					case '>': return left > right;
+					case '<': return left < right;
+					case '>=': return left >= right;
+					case '<=': return left <= right;
+				}
+			}
+			if (typeof left === 'string' && typeof right === 'string') {
+				switch (node.op) {
+					case '>': return left > right;
+					case '<': return left < right;
+					case '>=': return left >= right;
+					case '<=': return left <= right;
+				}
+			}
 			if (typeof left !== 'number' || typeof right !== 'number') break;
 			if ((node.op === '/' || node.op === '%') && right === 0) throw new Error('Presentation arithmetic cannot divide by zero.');
-			let result: number | undefined;
+			let result: number;
 			switch (node.op) {
 				case '+': result = left + right; break;
 				case '-': result = left - right; break;
@@ -136,15 +219,56 @@ function evaluateLiteralExpression(node: ASTNode): unknown {
 				case '%': result = left % right; break;
 				default: throw new Error('Unsupported presentation arithmetic operator.');
 			}
-			if (result !== undefined && Number.isFinite(result) && Math.abs(result) <= 1e15) return result;
+			return checkedArithmetic(result);
+		}
+		case 'Ternary': {
+			const condition = evaluateStaticExpression(node.cond, declarations, visiting, budget);
+			const thenValue = evaluateStaticExpression(node.then, declarations, visiting, budget);
+			const elseValue = evaluateStaticExpression(node.else, declarations, visiting, budget);
+			return condition ? thenValue : elseValue;
+		}
+		case 'Member': {
+			const object = evaluateStaticExpression(node.obj, declarations, visiting, budget);
+			if (typeof object === 'string' && node.field === 'length') return object.length;
+			if (Array.isArray(object)) {
+				if (node.field === 'length') return object.length;
+				if (['__proto__', 'constructor', 'prototype'].includes(node.field)) break;
+				return object.map((item) => item && typeof item === 'object' && Object.hasOwn(item, node.field) ? (item as Record<string, unknown>)[node.field] ?? null : null);
+			}
+			if (object && typeof object === 'object' && !['__proto__', 'constructor', 'prototype'].includes(node.field) && Object.hasOwn(object, node.field)) return (object as Record<string, unknown>)[node.field];
+			break;
+		}
+		case 'Index': {
+			const object = evaluateStaticExpression(node.obj, declarations, visiting, budget);
+			const index = evaluateStaticExpression(node.index, declarations, visiting, budget);
+			const key = String(index);
+			if (['__proto__', 'constructor', 'prototype'].includes(key)) break;
+			if (Array.isArray(object) && typeof index === 'number' && Number.isInteger(index) && Object.hasOwn(object, index)) return object[index];
+			if (typeof object === 'string' && typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < object.length) return object[index];
+			if (object && typeof object === 'object' && Object.hasOwn(object, key)) return (object as Record<string, unknown>)[key];
 			break;
 		}
 	}
-	throw new Error('Presentation arithmetic must use finite numeric literals or concatenate string literals.');
+	throw new Error(`OpenUI expression “${node.k}” must resolve from declared static values; runtime references, built-ins, and executable plans are not allowed.`);
+}
+
+function checkedArithmetic(value: number): number {
+	if (Number.isFinite(value) && Math.abs(value) <= 1e15) return value;
+	throw new Error('Presentation arithmetic must produce a finite, bounded number.');
+}
+
+function openUiStaticEquality(left: unknown, right: unknown): boolean {
+	if (left === null || right === null) return left === right;
+	if (typeof left === typeof right) return left === right;
+	if (typeof left === 'boolean') return (left ? 1 : 0) === right;
+	if (typeof right === 'boolean') return left === (right ? 1 : 0);
+	if (typeof left === 'number' && typeof right === 'string') return Number.isFinite(Number(right)) && left === Number(right);
+	if (typeof right === 'number' && typeof left === 'string') return Number.isFinite(Number(left)) && Number(left) === right;
+	return false;
 }
 
 function materializeStaticValues(value: unknown): unknown {
-	if (isOpenUiAst(value)) return evaluateLiteralExpression(value);
+	if (isOpenUiAst(value)) return evaluateStaticExpression(value, new Map());
 	if (Array.isArray(value)) return value.map(materializeStaticValues);
 	if (value && typeof value === 'object') {
 		if ((value as { type?: unknown }).type === 'element') return value;

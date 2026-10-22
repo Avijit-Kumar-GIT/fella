@@ -1,5 +1,5 @@
-// Contract v1, task set v1.4: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
-// invalid-output and binding rejection, literal-only presentation arithmetic,
+// Contract v1, task set v1.7: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
+// invalid-output and binding rejection, static OpenUI expressions and local references,
 // exact values, safe broad Vega-Lite composition, deterministic export, and visible fallback. v1.1 corrects two
 // fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
 // test intent and assertions are unchanged. No model or IPC calls.
@@ -39,19 +39,25 @@ try {
 		for (const [name, definition] of Object.entries(schema.$defs)) assert.deepEqual(definition.properties, analyticalLibrary.toJSONSchema().$defs[name].properties, name);
 		assert.equal(presentationManifest().version, 'fella-openui-v1');
 		assert.match(presentationPrompt(results), /Metric\(resultId: string, field: string, row: integer, title: string, unit\?: string\)/);
-		assert.match(presentationPrompt(results), /Literal-only arithmetic and string concatenation/);
+		assert.match(presentationPrompt(results), /every component or value reference must resolve to exactly one statement/i);
+		assert.match(presentationPrompt(results), /named OpenUI statements and local references/);
+		assert.match(presentationPrompt(results), /whole expression resolves to a static value/);
+		assert.match(presentationPrompt(results), /use one even if the user did not request it/);
 		assert.match(presentationPrompt(results), /"id":"revenue"/);
 	});
 	await test('same-turn OpenUI generation is the primary answer contract, not a second design pass', () => {
 		assert.equal(generated.version, presentationManifest().version);
 		assert.match(generated.prompt, /primary answer surface in the same analysis turn/i);
+		assert.match(generated.prompt, /model chooses the presentation; the user does not need to name a chart/i);
+		assert.match(generated.prompt, /use one without waiting to be asked/i);
 		assert.doesNotMatch(generated.prompt, /separate presentation design plan|design plan and result profiles/i);
 		assert.equal('design_version' in generated, false);
 		assert.equal('planner_prompt' in generated, false);
 		assert.doesNotMatch(generated.prompt, /Quarterly revenue|Metric\("revenue"/);
 		assert.doesNotMatch(presentationPrompt(results), /Quarterly revenue|Metric\("revenue"/);
-		assert.match(PRESENTATION_DESIGN_GUIDANCE, /single saved scalar often needs a metric and brief context, not a chart/i);
-		assert.match(presentationManifest().designGuidance, /no closed list of acceptable visualization forms/i);
+		assert.match(PRESENTATION_DESIGN_GUIDANCE, /model chooses the presentation; the user does not need to name a chart/i);
+		assert.match(PRESENTATION_DESIGN_GUIDANCE, /when a visual makes a meaningful comparison, trend, ranking, distribution, or relationship easier to understand, use one without waiting to be asked/i);
+		assert.match(presentationManifest().designGuidance, /do not prescribe a chart family/i);
 		assert.equal('example' in presentationManifest(), false);
 	});
 	await test('workspace transcript waits for OpenUI instead of showing canonical prose first', () => {
@@ -95,19 +101,33 @@ try {
 		assert.equal(validation.valid, true, JSON.stringify(validation.issues));
 		assert.deepEqual(validation.resultIds, ['revenue']);
 	});
-	await test('literal-only prop arithmetic is folded before schema validation', () => {
-		const program = 'root = Document([Section("Q" + "3", [Text("Revenue " + "comparison"), Columns([Text("A"), Text("B")], 1 + 1), Chart("revenue", {"mark":"line","width":120 * 2,"encoding":{"x":{"field":"quarter","type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}}, "Trend")])])';
+	await test('OpenUI local references and static expressions normalize before schema validation', () => {
+		const program = `root = Document([title, Chart("revenue", {"mark":"line","width":baseWidth * scale,"encoding":{"x":{"field":fields[0],"type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}}, heading)])
+title = Section("Q" + period, [Text(description), Columns([Text("A"), Text("B")], columnCount)])
+period = quarter
+quarter = 3
+description = label + " comparison"
+label = "Regional revenue"
+baseWidth = 120
+scale = 2
+fields = ["quarter"]
+heading = "Trend"
+columnCount = true ? 1 + 1 : 4`;
 		const check = validatePresentation(program, results);
 		assert.equal(check.valid, true, JSON.stringify(check.issues));
 		const section = check.root?.props.children?.[0];
 		assert.ok(section);
 		assert.equal(section.props.title, 'Q3');
-		assert.equal(section.props.children[0].props.content, 'Revenue comparison');
+		assert.equal(section.props.children[0].props.content, 'Regional revenue comparison');
 		assert.equal(section.props.children[1].props.count, 2);
-		assert.equal(section.props.children[2].props.spec.width, 240);
+		const trend = check.root?.props.children?.[1];
+		assert.ok(trend);
+		assert.equal(trend.props.spec.width, 240);
+		assert.equal(trend.props.spec.encoding.x.field, 'quarter');
+		assert.equal(trend.props.title, 'Trend');
 		const html = render(AnalyticalPresentation, { props: { program, results } }).body;
 		assert.match(html, /Q3/);
-		assert.match(html, /Revenue comparison/);
+		assert.match(html, /Regional revenue comparison/);
 	});
 	for (const [name, program] of [
 		['empty', ''], ['truncated', 'root = Document([Text("unfinished")'],
@@ -117,9 +137,12 @@ try {
 		['missing field', 'root = Document([Metric("revenue","invented",0,"Revenue")])'],
 		['missing row', 'root = Document([Metric("revenue","revenue",50,"Revenue")])'],
 		['unresolved reference', 'root = Document([missing])'],
+		['unresolved static expression reference', 'root = Document([Text("answer " + missing)])'],
+		['component reference used as a computed value', 'heading = Text("answer")\nroot = Document([Text(heading + "!")])'],
 		['unused statement', 'root = Document([Text("ok")])\nunused = Text("hidden")'],
 		['noncomponent children', 'root = Document(["invented",42])'],
-		['nonliteral prop expressions', 'root = Document([Text("Revenue " + field)])'],
+		['runtime state expression', 'root = Document([Text($selection)])'],
+		['nonstatic indexed value', 'root = Document([Text(rows[0])])'],
 		['OpenUI builtin calls', 'root = Document([Text(Abs(1))])'],
 		['query plan', 'root = Document([Text("ok")])\ndata = Query("execute",{})'],
 		['reactive state', '$state = 1\nroot = Document([Text("ok")])'],
@@ -198,6 +221,6 @@ try {
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.4): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v1 (task set v1.7): ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }
