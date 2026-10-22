@@ -77,7 +77,8 @@ zero-live-source-query behavioral budgets.
 Each slice records its commit, checks, failures, and exclusions here or in a
 linked follow-up. This document specifies behavior; it is not proof of delivery.
 
-- Slice 0: acceptance contracts and baseline recorded; implementation pending.
+- Slice 0: acceptance contract and pre-implementation baseline recorded at
+  `7b4867b`.
 - Slice 1 (persistence): stable artifacts, immutable candidate revisions,
   optimistic adoption, canonical result bindings, Studio documents/checkpoints,
   and user-approved saved-work retention. `cargo test --manifest-path
@@ -86,4 +87,76 @@ linked follow-up. This document specifies behavior; it is not proof of delivery.
   No existing expectations changed. No UI/model/platform claim is made by
   this library slice. A small rusqlite metadata store reuses the bundled
   SQLite dependency to atomically commit document pins and retention markers;
-  canonical runs and result payloads remain in their existing store.
+  canonical runs and result payloads remain in their existing store. Commit:
+  `4248c86`.
+
+### Slice 2 — initial local end-to-end vertical slice
+
+This is a bounded implementation across the first OpenUI answer, Studio, and
+portable-report path; it does not complete the entire plan. The implementation
+preserves the existing Rust analytical engine. Presentation generation uses
+the existing provider transport as a separate bounded operation, receives
+authorized saved-result context, and cannot invoke analysis tools. Vega-Lite
+adds a broader declarative rendering surface, but generated JavaScript/custom
+code remains unsupported. Commits: `271bf48` (OpenUI runtime/library),
+`5c2fc39` (artifact and Studio integration), and `76cd3ff` (Electron/Rust E2E).
+
+- OpenUI Svelte integration uses pinned package versions and Fella-owned
+  components, schema/prompt generation, parser and result-binding validation,
+  safe Vega-Lite binding/rendering, and readable fallback. Legacy charts remain
+  supported. Presentation/Studio code is lazy-loaded.
+- Saved artifacts and immutable revisions refer to canonical runs/results;
+  Studio documents pin revisions and support ordering, revision-aware writes,
+  checkpoints, restoration, and workspace-scoped views. Conversation deletion
+  discloses and retains saved Studio outputs and their supporting analysis.
+- Markdown generation is deterministic and uses saved exact values/evidence.
+  Versioned portable JSON report packages validate input and reopen read-only;
+  imported programs are not executed.
+
+Validation evidence for the implementation candidate:
+
+- `cargo test --manifest-path backend/Cargo.toml --lib --locked`: 417 passed,
+  0 failed. `cargo check --manifest-path backend/Cargo.toml --locked` passed.
+- `pnpm test:analytical-presentation`: contract v1, task set v1.1 — 46 passed,
+  0 failed. The original v1 run was 45/46; its lone failure came from two test
+  fixtures calling OpenUI's reserved `Filter` built-in where Fella's
+  result-bound component is `ResultFilter`. On 2026-10-21 the user approved
+  changing only those fixture calls and versioning the task set. Assertions and
+  behavior under test were unchanged. The v1.1 result is post-correction, not
+  an untouched v1 baseline.
+- `pnpm test:studio-report`: 3 test groups passed, covering exact values/state,
+  invalid/mismatched content disclosure, deterministic output, and no source or
+  model access.
+- Real Electron plus Rust E2E, executable task set v1.1:
+  `pnpm test:e2e:generative` — 7 passed, 0 failed. It covers immutable and
+  workspace-owned artifacts, optimistic writes/checkpoints, saved-work
+  retention on conversation deletion, invalid presentation fallback/no
+  authority, Studio edits/restart, Markdown export, and read-only package
+  reopen. A stale-write journey initially hung because `?` in the Rust IPC
+  dispatcher exited before serializing an error response; the dispatcher was
+  fixed to return command errors through the normal response path, and the
+  focused stale-write journey then passed.
+- The first E2E attempt was invalid as product evidence: its observer used a
+  dynamic import from Playwright's Electron evaluation context, which lacks an
+  import callback. After replacing that test harness path, the v1 run had 4/7
+  passing. The delete test looked for retention text in an icon tooltip instead
+  of the visible confirmation dialog, and the presentation fixture used the
+  reserved OpenUI `Filter` built-in. The user approved the correction on
+  2026-10-21; v1.1 asserts the dialog before confirming deletion and uses
+  `ResultFilter`, preserving the intended checks. This is a documented
+  post-hoc task-set correction, not an untouched baseline pass.
+- `pnpm check`: 0 errors, 0 warnings. `pnpm electron:build` passed. Vite still
+  emits its large-chunk warning: the main page bundle is about 820.86 kB raw /
+  217.36 kB gzip; separate lazy Vega-Lite and Vega chunks are about
+  253.56/81.49 kB and 486.25/172.23 kB respectively. These are bundle sizes,
+  not startup, latency, or memory measurements.
+- Linux Electron loading of `fella://app/` was exercised by the real desktop
+  test. A user-reported Windows `ERR_FAILED (-2)` startup was not reproduced
+  or verified on Windows; cross-platform packaged startup remains untested.
+
+No hosted/live model evaluation was run. The deterministic fixtures do not
+establish model quality, first-attempt validity, token cost, or provider
+compatibility. Startup time, answer latency, memory, macOS/Windows packaging,
+visual accessibility review, and production-scale result storage remain
+unmeasured. The code and tests intentionally do not claim the entire product
+plan is complete.

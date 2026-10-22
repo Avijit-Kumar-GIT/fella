@@ -1,9 +1,52 @@
 # Fella: generative analytical workspace plan
 
-Status: proposed implementation plan, not shipped functionality or authorization
-to begin implementation. Written 2026-10-21 against `d719208` on
-`explore/composable-interface`. This planning change does not alter application
-code, install dependencies, create GitHub issues, or run model evaluations.
+Status: implementation is underway in incremental slices. This document remains
+the target architecture and is not a claim that the complete product vision is
+shipped. Written 2026-10-21 against `d719208` on `explore/composable-interface`;
+implementation status below was updated 2026-10-21.
+
+### Implementation status — 2026-10-21
+
+The initial local vertical slice is implemented across OpenUI-backed answers,
+saved artifacts, Studio, deterministic Markdown, and a validated portable
+report package. It preserves the existing Rust analytics harness and uses the
+existing model/provider transport for a separate presentation-generation step.
+The details and test evidence are recorded in the
+[delivery ledger](testing/GENERATIVE-WORKSPACE-v1.md).
+
+Delivered in this slice:
+
+- A pinned OpenUI Svelte runtime and Fella component library, with generated
+  versioned prompt/schema assets, bounded parser/schema validation, result-bound
+  values, and a validated declarative Vega-Lite renderer. Legacy chart output
+  remains supported. This broadens the supported presentation vocabulary; it
+  does not provide arbitrary executable visualization code.
+- Separate, bounded presentation generation after eligible completed analysis,
+  with diagnostics and readable fallback that does not alter analytical
+  verification. Users can request a rich view or a targeted artifact change.
+- Workspace-owned artifact identities and immutable revisions, canonical saved
+  result references, Studio documents/placements, revision-aware writes,
+  checkpoints, and retention of saved work after conversation deletion.
+- Deterministic Markdown export and versioned portable JSON report packages;
+  imported packages are validated and opened read-only without executing their
+  saved presentation program.
+- Electron/Rust end-to-end coverage for persistence, saved-work retention,
+  restart/reopen, export, and portable-package journeys.
+
+Partially delivered or still open: adaptive multi-question Investigation
+orchestration; a complete review/adopt workflow for analytical candidate
+revisions and downstream impact; broader declarative visualization and
+interaction coverage; direct mdxcn interoperability and faithful SVG/PNG
+fallback for unsupported figures; cross-workspace reuse with explicit
+authorization; and full visual/accessibility review across compact, expanded,
+dark/light, and keyboard-only states.
+
+Not established by this slice: live-provider quality or model portability,
+startup/latency/memory improvement, packaged Windows/macOS/Linux behavior,
+historical source replay, or arbitrary custom visualization execution. The
+current production build reports a large-chunk warning; bundle splitting and
+performance budgets still need measurement. See the ledger for exact results
+and test-set changes.
 
 ## 1. Outcome and central decision
 
@@ -45,8 +88,10 @@ execution boundaries; domain-specific sources and definitions supply meaning.
 
 ## 2. Verified baseline: reuse, extend, and add
 
-These observations are based on source inspection, not a new functional or
-performance test run. Existing documentation includes historical board,
+This table describes the pre-implementation repository inspected at `d719208`;
+the implementation status above and test ledger below describe what has since
+changed. The original observations were based on source inspection, not a new
+functional or performance test run. Existing documentation includes historical board,
 environment, and external-terminal descriptions that do not all match the
 current UI. Those descriptions must not drive the new architecture.
 
@@ -312,17 +357,18 @@ changes so a concurrent deletion cannot orphan a newly saved artifact.
 
 Recommended policy: deleting a conversation removes its transcript but retains
 explicitly saved artifacts and the minimal supporting records they need.
-Explain retained analytical content before deletion; this changes the current
-meaning of conversation deletion and needs approval before implementation.
-Provide a separate dependency-aware deletion path for saved work. Workspace
-removal and permanent deletion must disclose their effect; source folders
-remain untouched unless the user explicitly authorizes otherwise.
+The user approved this behavior on 2026-10-21. The current delete confirmation
+discloses that saved Studio outputs, supporting analysis records, and revisions
+remain in the workspace. A separate dependency-aware permanent-deletion path
+for saved work is still needed. Workspace removal and permanent deletion must
+disclose their effect; source folders remain untouched unless the user
+explicitly authorizes otherwise.
 
-Until approved retention is implemented, block destructive operations that
-would leave saved references broken rather than silently claiming independence.
-Garbage collection must start as an inspectable reference audit, not an
-aggressive background deletion job. Preserve legacy archives and Projects;
-they are not silently converted into or deleted in favor of Studio.
+Do not allow destructive operations to leave saved references broken or imply
+that all saved work is removed when some is retained. Garbage collection must
+start as an inspectable reference audit, not an aggressive background deletion
+job. Preserve legacy archives and Projects; they are not silently converted
+into or deleted in favor of Studio.
 
 ### Freshness and reproducibility
 
@@ -592,10 +638,10 @@ work. Fix an underlying failure rather than weaken its assertion to fit output.
 
 ## 11. First vertical slice and its grading contract
 
-Do not implement every phase before obtaining a useful result. Deliver a thin
-end-to-end path through P1, a minimal P3 document, and basic P5 export, with
-the broader P2 renderer decision already tested in P0. This is an explicit
-slice of those phases, not a claim that all their packages are complete.
+The first thin end-to-end path through P1, a minimal P3 document, and basic P5
+export is implemented. It is an explicit slice of those phases, not a claim
+that all their packages or the whole product vision are complete. The contract
+and test evidence are versioned in the delivery ledger.
 
 Use a small, reviewable fixture with Q3/Q4 revenue, refunds, multiple categories,
 missing values, and independently specified expected totals. Include a second
@@ -687,17 +733,19 @@ an aesthetically pleasing screenshot is not evidence of reproducibility.
 
 Direction established in the discussion: preserve the engine, remove the old
 presentation ceiling, use shared durable artifacts, keep a simple chat-first
-desktop, and plan incremental delivery. The choices below remain proposals,
-not permission to enable new authority or destructive behavior.
+desktop, and deliver incrementally. The initial OpenUI/Studio/report slice is
+implemented. It does not authorize generated code execution or unreviewed
+changes to source/data access. The table distinguishes decisions already
+implemented from remaining gates.
 
 | Decision gate | Recommended default | Needed before |
 | --- | --- | --- |
-| Exact OpenUI/library/visualization dependency | Native Svelte with pinned compatible versions; select a broader renderer only after the P0 comparison | P1 dependency adoption |
-| Saved-work retention and deletion wording | Retain explicitly saved outputs/supporting records, disclose them, offer separate permanent deletion | P3 retention changes |
-| Studio interaction | Ordered documents in existing Tools tabs with expansion; no new mandatory app mode | P3 UI implementation |
+| Exact OpenUI/library/visualization dependency | Pinned native Svelte OpenUI integration and validated Vega-Lite surface are implemented; evaluate additional grammar/features before expanding | Broader P2 coverage and performance review |
+| Saved-work retention and deletion wording | Retain explicitly saved outputs/supporting records and disclose them; a separate permanent-deletion path remains | Initial policy approved and implemented; permanent-deletion UX remains |
+| Studio interaction | Ordered documents in existing Tools tabs with expansion; no new mandatory app mode | Initial P3 slice implemented; broader authoring/reuse remains |
 | Custom executable presentation | Separate opt-in implementation only after security/export review; no app authority | Level C / P7 |
 | Historical input retention | Saved results first; explicit opt-in source snapshots only when needed | Any claim of exact historical recomputation |
-| Artifact storage | Rust app-data records and reusable payload references; explicit export for portability | P1 persistence contract |
+| Artifact storage | Rust app-data records and canonical saved-result references; explicit export for portability | Initial P1 persistence implemented; lifecycle/recovery hardening remains |
 
 These choices do not block discussing or approving the first spike, but must
 be resolved at their stated boundaries rather than guessed during rollout.
