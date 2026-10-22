@@ -954,13 +954,16 @@ export function validatePresentation(program: string, results: BoundResult[], pe
 			if (node.typeName === 'Progress' && (typeof safeProps.value !== 'number' || !Number.isFinite(safeProps.value))) throw new Error(`${path} needs a finite numeric value.`);
 			if (['Table', 'Chart', 'ResultFilter'].includes(node.typeName)) {
 				const result = requireResult(results, String(safeProps.resultId)); resultIds.add(result.id);
-				if (node.typeName === 'Table' && Array.isArray(safeProps.fields) && safeProps.fields.some((field) => !result.columns.includes(String(field)))) throw new Error(`${path} references a missing saved table field.`);
+				if (node.typeName === 'Table') {
+					const tableData = safeProps.rows === undefined ? result : derivedRowsResult(result, safeProps.rows as unknown[]);
+					if (Array.isArray(safeProps.fields) && safeProps.fields.some((field) => !tableData.columns.includes(String(field)))) throw new Error(`${path} references a missing saved table field.`);
+					if (safeProps.columnFormats && Object.keys(safeProps.columnFormats).some((field) => !tableData.columns.includes(field))) throw new Error(`${path} formats a missing table field.`);
+				}
 				if (node.typeName === 'ResultFilter') {
 					if (!result.columns.includes(String(safeProps.field))) throw new Error(`${path} references a missing saved filter field.`);
 					const index = result.columns.indexOf(String(safeProps.field));
 					if (new Set(result.rows.map((row) => row[index])).size > 200) throw new Error('A display filter has too many choices; use a more focused result.');
 				}
-				if (node.typeName === 'Table' && safeProps.rows !== undefined) derivedRowsResult(result, safeProps.rows as unknown[]);
 				if (node.typeName === 'Chart') {
 					const chartData = safeProps.rows === undefined ? result : derivedRowsResult(result, safeProps.rows as unknown[]);
 					validateChartSpec(safeProps.spec, chartData);

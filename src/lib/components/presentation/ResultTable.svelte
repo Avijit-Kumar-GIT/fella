@@ -1,7 +1,8 @@
 <script lang="ts">
 	import type { BoundResult } from '../../presentation/types';
 	import { exactValue } from '../../presentation/results';
-	let { result, fields = result.columns, indices = result.rows.map((_, row) => row) }: { result: BoundResult; fields?: string[]; indices?: number[] } = $props();
+	import { formatPresentationValue, presentationColumnLabel, type PresentationFormatOptions } from '../../presentation/format';
+	let { result, fields = result.columns, indices = result.rows.map((_, row) => row), columnFormats = {}, exactValueLabel = 'Exact saved value', caption = `Exact values from saved result ${result.id}` }: { result: BoundResult; fields?: string[]; indices?: number[]; columnFormats?: Record<string, PresentationFormatOptions>; exactValueLabel?: string; caption?: string } = $props();
 	let page = $state(0);
 	const pageSize = 50;
 	let pages = $derived(Math.max(1, Math.ceil(indices.length / pageSize)));
@@ -12,9 +13,24 @@
 	<!-- Keyboard users must be able to scroll a wide saved-result table. -->
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<div class="table-scroll" role="region" aria-label="Saved result values" tabindex="0">
-		<table><caption class="sr-only">Exact values from saved result {result.id}</caption>
-			<thead><tr>{#each fields as field}<th scope="col">{field}</th>{/each}</tr></thead>
-			<tbody>{#each visible as row}<tr>{#each fields as field}<td>{exactValue(result, row, field)}</td>{/each}</tr>{/each}</tbody>
+		<table><caption class="sr-only">{caption}</caption>
+			<thead><tr>{#each fields as field}<th scope="col">{presentationColumnLabel(field, columnFormats[field])}</th>{/each}</tr></thead>
+			<tbody>
+				{#each visible as row}
+					<tr>
+						{#each fields as field}
+							{@const exact = exactValue(result, row, field)}
+							{@const column = result.columns.indexOf(field)}
+							{@const sourceValue = result.rows[row][column] === null ? null : exact}
+							{@const formatted = formatPresentationValue(sourceValue, columnFormats[field])}
+							<td title={formatted.formatted ? `${exactValueLabel}: ${formatted.exact}` : undefined}>
+								{formatted.display}
+								{#if formatted.formatted && formatted.exact !== formatted.display}<span class="sr-only">{exactValueLabel}: {formatted.exact}</span>{/if}
+							</td>
+						{/each}
+					</tr>
+				{/each}
+			</tbody>
 		</table>
 	</div>
 	<p class="extent">{indices.length} saved {indices.length === 1 ? 'row' : 'rows'}{#if !result.complete} · Incomplete result ({result.row_count} total rows); this is not the full dataset.{/if}</p>

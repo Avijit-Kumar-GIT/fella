@@ -6,7 +6,7 @@ import { join } from 'node:path';
 // no dev server, hosted model, existing config, or assertion is replaced.
 export default defineConfig({
 	testDir: './tests/e2e',
-	testMatch: '**/generative-workspace.desktop.spec.mjs',
+	testMatch: ['**/generative-workspace.desktop.spec.mjs', '**/openui-composition.desktop.spec.mjs'],
 	fullyParallel: false,
 	workers: 1,
 	retries: 0,

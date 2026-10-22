@@ -7,6 +7,7 @@ const resultId = z.string().min(1).max(240);
 // Element-node validation happens recursively after the real OpenUI parser resolves references.
 const children = z.array(z.unknown()).min(1).max(limits.components);
 const selectOptions = z.array(z.object({ value: z.string().max(240), label: z.string().max(240) }).strict()).min(1).max(200);
+const columnFormat = z.object({ label: label.optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), unit: z.string().max(40).optional(), decimals: z.number().int().min(0).max(8).optional() }).strict();
 
 /** One definition source drives the actual Svelte registry, prompt and strict validation. */
 export const componentDefinitions = {
@@ -27,8 +28,8 @@ export const componentDefinitions = {
 		props: z.object({ children, count: z.number().int().min(1).max(3).nullable().optional() }).strict()
 	},
 	Row: {
-		description: 'A flexible horizontal group. Wraps on narrow surfaces.',
-		props: z.object({ children, gap: z.number().int().min(0).max(8).nullable().optional(), align: z.enum(['start', 'center', 'end', 'stretch']).nullable().optional() }).strict()
+		description: 'A flexible horizontal group. Wraps on narrow surfaces. Gap is in 4px spacing units (prefer 0–8); the host clamps larger values to its spacing scale.',
+		props: z.object({ children, gap: z.number().min(0).nullable().optional(), align: z.enum(['start', 'center', 'end', 'stretch']).nullable().optional() }).strict()
 	},
 	Grid: {
 		description: 'A responsive grid for a small related set of items. It collapses to one column on narrow surfaces.',
@@ -83,8 +84,8 @@ export const componentDefinitions = {
 		props: z.object({ label, action: z.unknown().optional() }).strict()
 	},
 	Table: {
-		description: 'A table bound to saved result rows. An optional rows expression may filter, sort, or summarize those rows locally; exact source values remain accessible.',
-		props: z.object({ resultId, fields: z.array(label).min(1).max(100).nullable().optional(), rows: z.unknown().optional(), title: label.nullable().optional() }).strict()
+		description: 'A table for exact records and lookups, bound to saved result rows. Optional rows reshape those rows locally. Optional columnFormats maps field names to readable labels, numeric format, unit and decimal places. Original exact values remain accessible. Patterns and trends are usually clearer with a Chart.',
+		props: z.object({ resultId, fields: z.array(label).min(1).max(100).nullable().optional(), rows: z.unknown().optional(), title: label.nullable().optional(), columnFormats: z.record(label, columnFormat).nullable().optional() }).strict()
 	},
 	Chart: {
 		description: 'A flexible Vega-Lite visualization: layers, facets, concatenation, encodings, marks and style. Optional rows are a local view derived only from the bound saved result. No authored data, transforms, URL loaders or executable expressions.',

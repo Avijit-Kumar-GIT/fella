@@ -1,15 +1,17 @@
 <script lang="ts">
 	import type { BoundResult } from '../../presentation/types';
-	import { derivedRowsResult } from '../../presentation/results';
+	import { derivedRowsResult, exactValue } from '../../presentation/results';
+	import { formatPresentationValue, presentationColumnLabel, type PresentationFormatOptions } from '../../presentation/format';
 	import ResultTable from './ResultTable.svelte';
-	let { source, rows, fields = [] }: { source: BoundResult; rows: unknown[]; fields?: string[] } = $props();
+	let { source, rows, fields = [], columnFormats = {} }: { source: BoundResult; rows: unknown[]; fields?: string[]; columnFormats?: Record<string, PresentationFormatOptions> } = $props();
 	let result = $derived(derivedRowsResult(source, rows));
 	let columns = $derived(fields.length ? fields : result.columns);
 	let page = $state(0);
 	const pageSize = 50;
-	let pages = $derived(Math.max(1, Math.ceil(result.rows.length / pageSize)));
+	let indices = $derived(result.rows.map((_, index) => index));
+	let pages = $derived(Math.max(1, Math.ceil(indices.length / pageSize)));
 	let current = $derived(Math.min(page, pages - 1));
-	let visible = $derived(result.rows.slice(current * pageSize, (current + 1) * pageSize));
+	let visible = $derived(indices.slice(current * pageSize, (current + 1) * pageSize));
 </script>
 
 <div class="derived-table">
@@ -17,8 +19,23 @@
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 	<div class="table-scroll" role="region" aria-label="Display-derived rows" tabindex="0">
 		<table><caption class="sr-only">Rows derived locally from saved result {source.id}</caption>
-			<thead><tr>{#each columns as field}<th scope="col">{field}</th>{/each}</tr></thead>
-			<tbody>{#each visible as row}<tr>{#each columns as field}<td>{String(row[result.columns.indexOf(field)] ?? 'null')}</td>{/each}</tr>{/each}</tbody>
+			<thead><tr>{#each columns as field}<th scope="col">{presentationColumnLabel(field, columnFormats[field])}</th>{/each}</tr></thead>
+			<tbody>
+				{#each visible as rowIndex}
+					<tr>
+						{#each columns as field}
+							{@const exact = exactValue(result, rowIndex, field)}
+							{@const column = result.columns.indexOf(field)}
+							{@const sourceValue = result.rows[rowIndex][column] === null ? null : exact}
+							{@const formatted = formatPresentationValue(sourceValue, columnFormats[field])}
+							<td title={formatted.formatted ? `Exact derived value: ${formatted.exact}` : undefined}>
+								{formatted.display}
+								{#if formatted.formatted && formatted.exact !== formatted.display}<span class="sr-only">Exact derived value: {formatted.exact}</span>{/if}
+							</td>
+						{/each}
+					</tr>
+				{/each}
+			</tbody>
 		</table>
 	</div>
 	<p class="extent">{result.rows.length} display row{result.rows.length === 1 ? '' : 's'}{#if !source.complete} · Source result is incomplete ({source.rows.length} of {source.row_count} saved rows).{/if}</p>

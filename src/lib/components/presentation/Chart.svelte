@@ -37,7 +37,7 @@
 		const observer = new ResizeObserver(() => {
 			clearTimeout(timer);
 			timer = setTimeout(() => {
-				if (!disposed && view && !['facet', 'repeat', 'concat', 'hconcat', 'vconcat'].some((key) => key in spec)) void view.width(Math.max(160, Math.min(target.clientWidth - 70, 1200))).resize().runAsync().catch(() => {});
+				if (!disposed && view && typeof spec.width !== 'number' && !['facet', 'repeat', 'concat', 'hconcat', 'vconcat'].some((key) => key in spec)) void view.width(Math.max(160, Math.min(target.clientWidth - 70, 1200))).resize().runAsync().catch(() => {});
 			}, 80);
 		});
 		observer.observe(target);

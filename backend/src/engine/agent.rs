@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::engine::analytics::{provenance, verify};
@@ -80,10 +80,16 @@ fn max_steps() -> usize {
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
 const OPENUI_ANSWER_TOOL: &str = "fella_openui_answer";
 
-fn openui_answer_schema() -> ToolSchema {
-    let library: serde_json::Value =
+fn openui_library() -> &'static serde_json::Value {
+    static LIBRARY: OnceLock<serde_json::Value> = OnceLock::new();
+    LIBRARY.get_or_init(|| {
         serde_json::from_str(include_str!("../../resources/presentation-library.json"))
-            .expect("generated OpenUI library manifest must be valid JSON");
+            .expect("generated OpenUI library manifest must be valid JSON")
+    })
+}
+
+fn openui_answer_schema() -> ToolSchema {
+    let library = openui_library();
     let instructions = library["prompt"].as_str().unwrap_or("");
     ToolSchema {
         name: OPENUI_ANSWER_TOOL.into(),
@@ -2656,12 +2662,19 @@ sandbox with no filesystem, network, environment, or subprocess access."
         rules.push(
             "Choose an answer-specific presentation based on the question and the actual result shape. \
 Fella's OpenUI output is the answer surface: compose it creatively from saved evidence-bound components, \
-avoid repetitive templates, and do not add charts, metrics, tables, or controls unless they help explain \
-the result. Bind every displayed analytical value to a returned result; do not copy result numbers into \
+make the main analytical relationship visible and avoid repetitive templates. \
+Bind every displayed analytical value to a returned result; do not copy result numbers into \
 Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
 display-only calculations use @Rows(). Presentation choices never change analysis, source scope, or verification."
                 .into(),
         );
+        // Presentation design belongs in the model's main instructions too,
+        // rather than only inside a long finalizer-tool description. Both are
+        // generated from the same frontend library; this changes presentation
+        // guidance, never analytical execution or verification.
+        if let Some(guidance) = openui_library()["designGuidance"].as_str() {
+            rules.push(guidance.to_string());
+        }
     }
     if has_workspace && profile.docs_rule {
         rules.push(

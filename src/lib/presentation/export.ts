@@ -3,6 +3,7 @@ import type { ElementNode } from '@openuidev/svelte-lang';
 import type { BoundResult, PresentationExport, PresentationState } from './types';
 import { exactValue, filteredRows, requireResult, resolvePresentationState, validateResults, type FilterSelection } from './results';
 import { validatePresentation } from './validate';
+import { formatPresentationValue, presentationColumnLabel, type PresentationFormatOptions } from './format';
 
 export interface PresentationExportOptions {
 	state?: PresentationState;
@@ -46,11 +47,11 @@ interface DerivedTableExport {
 }
 
 /** Materialized expression values are snapshots, not provenance. Exact source rows are appended separately. */
-function exportDerivedTable(result: BoundResult, fields: string[], rows: Record<string, unknown>[], title?: string): DerivedTableExport {
+function exportDerivedTable(result: BoundResult, fields: string[], rows: Record<string, unknown>[], title?: string, formats?: Record<string, PresentationFormatOptions>): DerivedTableExport {
 	const heading = title ? `### ${escape(title)}\n\n` : '';
-	const header = `| ${fields.map((field) => `${escape(field)} †`).join(' | ')} |`;
+	const header = `| ${fields.map((field) => `${escape(presentationColumnLabel(field, formats?.[field]))} †`).join(' | ')} |`;
 	const separator = `| ${fields.map(() => '---').join(' | ')} |`;
-	const body = rows.map((row) => `| ${fields.map((field) => escape(jsonValue(row[field]))).join(' | ')} |`);
+	const body = rows.map((row) => `| ${fields.map((field) => escape(formats?.[field] ? formatPresentationValue(row[field], formats[field]).display : jsonValue(row[field]))).join(' | ')} |`);
 	const scope = `Display snapshot: ${rows.length} locally derived row${rows.length === 1 ? '' : 's'} from saved result ${escape(result.id)} (${result.rows.length} loaded source rows).`;
 	const caveat = '† Materialized display value; row lineage and exact numeric formatting are not retained in this snapshot. The exact saved source values are included below.';
 	return {
@@ -165,7 +166,7 @@ export function exportPresentation(program: string, results: BoundResult[], opti
 				return `${heading}${detail}${toneNote}${children(node, level)}`;
 			}
 			case 'Columns': return layout(node, level, `Layout snapshot: ${Number(props.count ?? 0) || 'responsive'} columns; content follows in source order.`);
-			case 'Row': return layout(node, level, `Layout snapshot: horizontal row (gap ${String(props.gap ?? 'default')}; align ${String(props.align ?? 'default')}); content follows in source order.`);
+			case 'Row': return layout(node, level, `Layout snapshot: horizontal row (gap ${typeof props.gap === 'number' && props.gap > 8 ? `8 spacing units; requested ${props.gap}, clamped to the design scale` : String(props.gap ?? 'default')}; align ${String(props.align ?? 'default')}); content follows in source order.`);
 			case 'Grid': return layout(node, level, `Layout snapshot: ${String(props.columns ?? 'responsive')} column grid; content follows in source order.`);
 			case 'Divider': return props.label ? `---\n\n**${escape(String(props.label))}**` : '---';
 			case 'Spacer': {
@@ -221,6 +222,7 @@ export function exportPresentation(program: string, results: BoundResult[], opti
 			case 'Table': {
 				const result = requireResult(results, String(props.resultId));
 				const title = typeof props.title === 'string' ? `### ${escape(props.title)}\n\n` : '';
+				const formats = props.columnFormats as Record<string, PresentationFormatOptions> | undefined;
 				if (props.rows !== undefined) {
 					const derivedRows = objectRows(props.rows);
 					if (!derivedRows) {
@@ -229,12 +231,21 @@ export function exportPresentation(program: string, results: BoundResult[], opti
 					}
 					const fields = (props.fields as string[] | undefined) ?? [...new Set(derivedRows.flatMap((row) => Object.keys(row)))];
 					if (!fields.length) fields.push(...result.columns);
-					const exported = exportDerivedTable(result, fields, derivedRows);
+					const exported = exportDerivedTable(result, fields, derivedRows, undefined, formats);
 					if (exported.containsDerivedValues) queueExactSource(result, `Table${props.title ? ` “${String(props.title)}”` : ''}`);
 					return `${title}${exported.markdown}`;
 				}
 				const rows = filteredRows(result, state);
 				const scope = rows.length !== result.rows.length ? `Snapshot: ${rows.length} of ${result.rows.length} loaded saved rows match the displayed filters.\n\n` : '';
+				if (formats && Object.keys(formats).length) {
+					const fields = (props.fields as string[] | undefined) ?? result.columns;
+					const header = `| ${fields.map((field) => escape(presentationColumnLabel(field, formats[field]))).join(' | ')} |`;
+					const separator = `| ${fields.map(() => '---').join(' | ')} |`;
+					const body = rows.map((row) => `| ${fields.map((field) => escape(formatPresentationValue(result.rows[row][result.columns.indexOf(field)] === null ? null : exactValue(result, row, field), formats[field]).display)).join(' | ')} |`);
+					exactAppendixIds.add(result.id);
+					exactAppendixNotes.set(result.id, result);
+					return `${title}${scope}${header}\n${separator}\n${body.join('\n')}\n\nDisplay formatting is applied; exact saved source values follow in the appendix.\n\n${extent(result)}`;
+				}
 				return `${title}${scope}${exportResultTable(result, props.fields as string[] | undefined, rows)}`;
 			}
 			case 'Chart': {
