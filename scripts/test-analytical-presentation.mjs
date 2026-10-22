@@ -1,4 +1,4 @@
-// Contract v1, task set v1.7: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
+// Contract v1, task set v1.10: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
 // invalid-output and binding rejection, static OpenUI expressions and local references,
 // exact values, safe broad Vega-Lite composition, deterministic export, and visible fallback. v1.1 corrects two
 // fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
@@ -129,6 +129,33 @@ columnCount = true ? 1 + 1 : 4`;
 		assert.match(html, /Q3/);
 		assert.match(html, /Regional revenue comparison/);
 	});
+	await test('OpenUI grammar: grouped expressions, operator semantics, references, collections, and lazy branches validate', () => {
+		const program = `root = Document([Section("Summary", [Text(summary), Text(selected), Text(coercions)])])
+rows = [{"period": "Q3", "value": "4"}, {"period": "Q4", "value": "8"},]
+base = -(-3)
+numeric = rows[1].value - 2
+flags = true && !false && 4 > 3 && 4 >= 4 && 2 < 3 && 2 <= 2 && 2 == 2 && 3 != 2 || false
+numericOrder = "12" > "3"
+coercion = true == "1"
+lazy = false && 1 / 0 || true || 1 / 0
+summary = rows[0].period + " → " + rows[1].period + " / " + ((2 + 4) * base - 8 / 2 % 3) + " / " + numeric + " / " + (3 / 0) + " / " + (3 % 0) + " / " + (numericOrder ? "numeric" : "lexical") + " / " + (coercion ? "coerced" : "strict") + " / " + (flags ? "up" : "down")
+
+coercions = ([1] == 1 ? "array-equal" : "not-equal") + " / " + ("list " + ["a", "b"]) + " / " + ("object " + {"value": 1})
+selected = true ? (lazy ? "safe" : "wrong") : 1 / 0`;
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		assert.deepEqual(check.root?.props.children?.[0]?.props.children?.map((child) => child.props.content), [
+			'Q3 → Q4 / 17 / 6 / 0 / 0 / numeric / coerced / up', 'safe', 'array-equal / list a,b / object [object Object]'
+		]);
+	});
+	await test('OpenUI preprocessing: fenced output and comments match the official parser without stripping string content', () => {
+		const program = ['```openui', '# A comment before the root', 'root = Document(', '  [', '    Text("Keep #, //, and ~ in strings"),', '    Text(\'single quoted\'),', '  ]', ') // trailing comment', '```'].join('\n');
+		const check = validatePresentation(program, results);
+		assert.equal(check.valid, true, JSON.stringify(check.issues));
+		assert.equal(check.root?.props.children?.[0]?.props.content, 'Keep #, //, and ~ in strings');
+		assert.equal(check.root?.props.children?.[1]?.props.content, 'single quoted');
+		assert.doesNotMatch(check.normalizedProgram, /trailing comment|A comment before/);
+	});
 	for (const [name, program] of [
 		['empty', ''], ['truncated', 'root = Document([Text("unfinished")'],
 		['unknown component', 'root = Document([Iframe("https://evil.invalid")])'],
@@ -138,17 +165,26 @@ columnCount = true ? 1 + 1 : 4`;
 		['missing row', 'root = Document([Metric("revenue","revenue",50,"Revenue")])'],
 		['unresolved reference', 'root = Document([missing])'],
 		['unresolved static expression reference', 'root = Document([Text("answer " + missing)])'],
+		['unresolved reference in an unselected conditional branch', 'root = Document([Text(true ? "answer" : missing)])'],
 		['component reference used as a computed value', 'heading = Text("answer")\nroot = Document([Text(heading + "!")])'],
 		['unused statement', 'root = Document([Text("ok")])\nunused = Text("hidden")'],
 		['noncomponent children', 'root = Document(["invented",42])'],
 		['runtime state expression', 'root = Document([Text($selection)])'],
 		['nonstatic indexed value', 'root = Document([Text(rows[0])])'],
 		['OpenUI builtin calls', 'root = Document([Text(Abs(1))])'],
+		['OpenUI @-prefixed builtins', 'root = Document([Text(@Avg([1,2]))])'],
 		['query plan', 'root = Document([Text("ok")])\ndata = Query("execute",{})'],
 		['reactive state', '$state = 1\nroot = Document([Text("ok")])'],
 		['duplicate control names', 'root = Document([Tabs("same",["A"],[Text("ok")]),ResultFilter("revenue","region","same")])'],
 		['tab arity', 'root = Document([Tabs("view",["A","B"],[Text("ok")])])'],
-		['nested root', 'root = Document([Document([Text("ok")])])']
+		['nested root', 'root = Document([Document([Text("ok")])])'],
+		['silently skipped source character', 'root = Document([Text("ok")]) ~'],
+		['missing array separator', 'root = Document([Text("one") Text("two")])'],
+		['missing object colon', 'root = Document([Chart("revenue", {"mark" "bar"})])'],
+		['malformed ternary', 'root = Document([Text(true ? "yes" "no")])'],
+		['malformed unary operator', 'root = Document([Text(+)])'],
+		['valid-token trailing expression', 'root = Document([Text("ok")]) 42'],
+		['single-character logical operator', 'root = Document([Text(true & false)])']
 	]) await test(`reject ${name}`, () => { const check = validatePresentation(program, results); assert.equal(check.valid, false, JSON.stringify(check)); assert.equal(check.root, null); assert.ok(check.issues.length); });
 
 	await test('exact metrics/tables preserve large integers, decimal scale, null and markup escaping', () => {
@@ -221,6 +257,6 @@ columnCount = true ? 1 + 1 : 4`;
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.7): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v1 (task set v1.10): ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }

@@ -108,6 +108,73 @@ struct OpenUiAnswer {
     program: String,
 }
 
+/// Catch incomplete OpenUI syntax before returning the finalizer tool result to
+/// the model. The renderer still performs authoritative OpenUI parsing and
+/// schema validation; this early check lets the existing finalizer retry repair
+/// common bracket mistakes without rerunning analysis.
+fn validate_openui_delimiters(program: &str) -> EngineResult<()> {
+    let chars: Vec<char> = program.chars().collect();
+    let mut brackets = Vec::new();
+    let mut quote = None;
+    let mut escaped = false;
+    let mut index = 0;
+
+    while index < chars.len() {
+        let character = chars[index];
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            index += 1;
+            continue;
+        }
+
+        if character == '"' || character == '\'' {
+            quote = Some(character);
+            index += 1;
+            continue;
+        }
+        if character == '#' || character == '/' && chars.get(index + 1) == Some(&'/') {
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+
+        if matches!(character, '(' | '[' | '{') {
+            brackets.push(character);
+            if brackets.len() > 72 {
+                return Err(EngineError::msg(
+                    "OpenUI presentation nesting is too deep; simplify the presentation structure.",
+                ));
+            }
+        } else if matches!(character, ')' | ']' | '}') {
+            let expected = match character {
+                ')' => '(',
+                ']' => '[',
+                _ => '{',
+            };
+            if brackets.pop() != Some(expected) {
+                return Err(EngineError::msg(
+                    "OpenUI presentation has mismatched delimiters; check the matching parentheses, brackets, and braces.",
+                ));
+            }
+        }
+        index += 1;
+    }
+
+    if quote.is_some() || !brackets.is_empty() {
+        return Err(EngineError::msg(
+            "OpenUI presentation has unclosed strings or delimiters; return a complete program.",
+        ));
+    }
+    Ok(())
+}
+
 fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnswer> {
     let text = arguments["answer"].as_str().unwrap_or_default().trim();
     let program = arguments["presentation_program"]
@@ -127,6 +194,7 @@ fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnsw
             "OpenUI presentation must begin with root = Document(...)",
         ));
     }
+    validate_openui_delimiters(program)?;
     Ok(OpenUiAnswer {
         text: text.to_owned(),
         program: program.to_owned(),
@@ -2550,9 +2618,34 @@ mod tests {
             serde_json::json!({"answer":"An answer", "presentation_program":""}),
             serde_json::json!({"answer":"An answer", "presentation_program":"Text(\"not rooted\")"}),
             serde_json::json!({"answer":"", "presentation_program":"root = Document([Text(\"x\")])"}),
+            serde_json::json!({
+                "answer":"An answer",
+                "presentation_program":"root = Document([Chart(\"sales\", {\"mark\":\"line\",\"encoding\":{\"x\":{\"field\":\"quarter\"}} , \"Trend\")])"
+            }),
         ] {
             assert!(parse_openui_answer(&arguments).is_err());
         }
+    }
+
+    #[test]
+    fn openui_answer_delimiter_check_ignores_string_and_comment_content() {
+        let answer = parse_openui_answer(&serde_json::json!({
+            "answer":"A complete answer",
+            "presentation_program":"root = Document([Text(\"brackets ) ] } and comment marks # //\")]) // [ {"
+        }))
+        .unwrap();
+
+        assert!(answer.program.starts_with("root = Document("));
+    }
+
+    #[test]
+    fn openui_answer_delimiter_check_reports_a_missing_chart_props_brace() {
+        let error = validate_openui_delimiters(
+            "root = Document([Chart(\"sales\", {\"mark\":\"line\",\"encoding\":{\"x\":{\"field\":\"quarter\"}} , \"Trend\")])",
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("mismatched delimiters"));
     }
 
     #[test]

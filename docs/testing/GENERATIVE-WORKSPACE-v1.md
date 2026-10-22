@@ -5,7 +5,7 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
 [the implementation plan](../OPENUI-ANALYTICAL-WORKSPACE-PLAN.md).
 
 The frozen persistence/export/desktop contract below remains v1. Its executable
-task set is now v1.7; earlier v1.1–v1.6 results below remain historical and
+task set is now v1.10; earlier v1.1–v1.9 results below remain historical and
 unchanged.
 
 ## Frozen expected behavior
@@ -197,6 +197,50 @@ Vega-Lite subset that binds chart fields to saved results and excludes
 arbitrary code, remote resources, and unrecorded data transforms. Broadening
 that declarative vocabulary without weakening provenance is a separate design
 and implementation gap.
+
+## OpenUI grammar compatibility — task set v1.8
+
+Defined 2026-10-22 before changing the validator. OpenUI accepts grouping
+parentheses, multiline expressions, line comments, and fenced model output; the
+validator must apply the same preprocessing and expression grammar before
+enforcing Fella's static-only boundary. Grouping delimiters must not be
+mistaken for unparsed AST tokens. Valid literals, arrays, objects, local
+references, component calls, member/index access, unary/binary operators,
+ternaries, and legal trailing commas must validate.
+
+The complete expression must be consumed. Inputs the upstream recovery parser
+silently skips or partially parses—unknown source characters, malformed
+operators, missing separators/colons, and trailing tokens—must not be accepted
+as a different presentation. Static evaluation must match OpenUI's primitive
+operator behavior and short-circuit/conditional branch selection, within
+Fella's finite-number and safe-object limits. Runtime state, query/mutation
+references, builtins/actions, unknown components, unsafe keys, invalid result
+bindings, and executable behavior remain rejected.
+
+This adds compatibility and rejection fixtures; no existing expected result is
+weakened. Live Gemma and OpenAI runs remain separate provider checks and cannot
+by themselves prove grammar coverage or analytical quality.
+
+## OpenUI static coercion parity — task set v1.9
+
+Defined 2026-10-22 after a source-level comparison found that Fella's static
+evaluator disagreed with OpenUI for loose equality and native string coercion
+of literal arrays/objects. Static expressions must preserve OpenUI's `==`, `!=`,
+and `+` behavior for values the model can construct from literals. This is a
+presentation-semantics check; it does not grant builtins, actions, queries, or
+runtime state access. The task set adds positive coercion cases and confirms
+that actual `@`-prefixed OpenUI builtins remain rejected by Fella's policy.
+
+## Final-answer syntax correction — task set v1.10
+
+Defined 2026-10-22 after a live model returned a chart call with an unclosed
+props object. Before accepting the finalizer tool call, the engine must reject
+mismatched/unclosed delimiters outside strings and line comments. Its existing
+finalizer-only correction turn must receive that syntax error, allowing the
+model to repair the presentation without rerunning analysis. Delimiter-like
+characters in strings and comments remain ordinary text. This check is an
+early syntax guard, not a replacement for the full OpenUI parser/schema
+validation in the renderer.
 
 ## Test layers and independent grading
 

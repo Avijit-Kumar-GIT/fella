@@ -1,4 +1,4 @@
-import { createParser, parseExpression, split, tokenize, type ASTNode, type ElementNode } from '@openuidev/lang-core';
+import { createParser, parseExpression, split, tokenize, toNumber, type ASTNode, type ElementNode, type Token } from '@openuidev/lang-core';
 import { componentDefinitions, type ComponentName } from './schemas';
 import { presentationSchema } from './manifest';
 import { requireResult, validateResults } from './results';
@@ -13,64 +13,258 @@ export interface PresentationValidation {
 	resultIds: string[];
 }
 
-/** Resource preflight only; grammar and references are parsed by OpenUI itself. */
-function preflight(program: string): string {
-	if (typeof program !== 'string' || !program.trim()) throw new Error('The presentation is empty.');
-	if (new TextEncoder().encode(program).length > limits.programBytes) throw new Error('The presentation exceeds its size budget.');
+function skipDoubleQuotedString(source: string, start: number): number {
+	if (source[start] !== '"') return start;
+	let index = start + 1;
+	while (index < source.length) {
+		if (source[index] === '\\') index += 2;
+		else if (source[index] === '"') return index + 1;
+		else index++;
+	}
+	return index;
+}
+
+/** Match OpenUI Lang's own extraction of fenced model output. */
+function stripOpenUiFences(input: string): string {
+	const blocks: string[] = [];
+	let index = 0;
+	while (index < input.length) {
+		let start = -1;
+		while (index < input.length) {
+			const afterString = skipDoubleQuotedString(input, index);
+			if (afterString > index) { index = afterString; continue; }
+			if (input.startsWith('```', index)) { start = index; break; }
+			index++;
+		}
+		if (start === -1) break;
+		let bodyStart = start + 3;
+		while (bodyStart < input.length && input[bodyStart] !== '\n') bodyStart++;
+		if (bodyStart >= input.length) {
+			blocks.push(input.slice(start + 3).replace(/^[^\n]*\n?/, ''));
+			break;
+		}
+		bodyStart++;
+		let close = -1;
+		let cursor = bodyStart;
+		while (cursor < input.length) {
+			const afterString = skipDoubleQuotedString(input, cursor);
+			if (afterString > cursor) { cursor = afterString; continue; }
+			if (input.startsWith('```', cursor)) { close = cursor; break; }
+			cursor++;
+		}
+		blocks.push(input.slice(bodyStart, close === -1 ? input.length : close));
+		if (close === -1) break;
+		index = close + 3;
+	}
+	if (blocks.length) return blocks.join('\n');
+	if (!input.startsWith('```')) return input;
+	let firstLineEnd = input.indexOf('\n', 3);
+	if (firstLineEnd === -1) firstLineEnd = input.length;
+	const body = input.slice(firstLineEnd === input.length ? 3 : firstLineEnd + 1);
+	const trailingFence = body.lastIndexOf('```');
+	return trailingFence === -1 ? body : body.slice(0, trailingFence);
+}
+
+/** OpenUI strips // and # line comments outside both supported string forms. */
+function stripOpenUiComments(input: string): string {
+	let quote = '';
+	return input.split('\n').map((line) => {
+		for (let index = 0; index < line.length; index++) {
+			const char = line[index];
+			if (quote) {
+				if (char === '\\' && index + 1 < line.length) index++;
+				else if (char === quote) quote = '';
+				continue;
+			}
+			if (char === '"' || char === "'") { quote = char; continue; }
+			if (char === '#' || char === '/' && line[index + 1] === '/') return line.slice(0, index).trimEnd();
+		}
+		return line;
+	}).join('\n');
+}
+
+function normalizeOpenUiSource(input: string): string {
+	return stripOpenUiComments(stripOpenUiFences(input.trim())).trim();
+}
+
+/** The OpenUI lexer skips unknown characters; reject those before trusting its tokens. */
+function validateOpenUiSourceCharacters(source: string): void {
+	const brackets: string[] = [];
 	let quote = '';
 	let escaped = false;
-	let depth = 0;
-	for (const char of program) {
+	for (let index = 0; index < source.length; index++) {
+		const char = source[index];
 		if (quote) {
 			if (escaped) escaped = false;
 			else if (char === '\\') escaped = true;
 			else if (char === quote) quote = '';
-		} else if (char === '"' || char === "'") quote = char;
-		else if ('([{'.includes(char)) { if (++depth > limits.depth * 3) throw new Error('The presentation nesting is too deep.'); }
-		else if (')]}'.includes(char)) depth--;
+			continue;
+		}
+		if (char === '"' || char === "'") { quote = char; continue; }
+		if (' \t\r\n'.includes(char)) continue;
+		if (/[A-Za-z0-9_]/.test(char)) continue;
+		if (char === '$' || char === '@') {
+			if (!/[A-Za-z_]/.test(source[index + 1] ?? '')) throw new Error('The presentation contains an unsupported OpenUI token.');
+			continue;
+		}
+		if (char === '&' || char === '|') {
+			if (source[index + 1] !== char) throw new Error('OpenUI logical operators must use && or ||.');
+			index++;
+			continue;
+		}
+		if ('([{'.includes(char)) {
+			brackets.push(char);
+			if (brackets.length > limits.depth * 3) throw new Error('The presentation nesting is too deep.');
+			continue;
+		}
+		if (')]}'.includes(char)) {
+			const expected = char === ')' ? '(' : char === ']' ? '[' : '{';
+			if (brackets.pop() !== expected) throw new Error('The presentation has mismatched delimiters.');
+			continue;
+		}
+		if ('},:.?=<>!+-*/%'.includes(char)) continue;
+		throw new Error('The presentation contains an unsupported character outside a string.');
 	}
-	if (quote || depth !== 0) throw new Error('The presentation is incomplete.');
-	// The upstream parser intentionally skips invalid lines/trailing tokens for streaming.
-	// Validate its own token/AST output as a complete static program before materialization.
-	const tokens = tokenize(program);
+	if (quote || brackets.length) throw new Error('The presentation is incomplete.');
+}
+
+/** Strictly consume the expression grammar that OpenUI's recovery parser accepts. */
+function assertCompleteOpenUiExpression(tokens: Token[]): void {
+	// Numeric token IDs are the public T enum from the pinned lang-core API.
+	const precedence = new Map<number, number>([
+		[34, 1], [32, 2], [31, 3], [25, 4], [26, 4], [27, 5], [28, 5], [29, 5], [30, 5],
+		[20, 6], [21, 6], [22, 7], [23, 7], [24, 7], [19, 9], [3, 9]
+	]);
+	let position = 0;
+	let nesting = 0;
+	const current = () => tokens[position];
+	const take = () => tokens[position++];
+	const expect = (kind: number) => {
+		if (current()?.t !== kind) throw new Error('The presentation contains malformed or unparsed OpenUI syntax.');
+		position++;
+	};
+	const enter = () => {
+		if (++nesting > limits.depth * 3) throw new Error('The presentation expression is nested too deeply.');
+	};
+	const leave = () => { nesting--; };
+	function parseExpression(minPrecedence = 0): void {
+		enter();
+		parsePrefix();
+		while (current() && (precedence.get(current().t) ?? 0) > minPrecedence) {
+			const operator = take().t;
+			if (operator === 19) {
+				if (![14, 15, 16, 17, 18].includes(current()?.t ?? -1)) throw new Error('The presentation contains malformed member access.');
+				take();
+			} else if (operator === 3) {
+				parseExpression(0);
+				expect(4);
+			} else if (operator === 34) {
+				parseExpression(0);
+				expect(8);
+				parseExpression(0);
+			} else parseExpression(precedence.get(operator)!);
+		}
+		leave();
+	}
+	function parseDelimitedList(close: number, parseItem: () => void): void {
+		if (current()?.t === close) { take(); return; }
+		while (true) {
+			parseItem();
+			if (current()?.t === close) { take(); return; }
+			expect(7);
+			if (current()?.t === close) { take(); return; }
+		}
+	}
+	function parseCall(): void {
+		expect(1);
+		parseDelimitedList(2, () => parseExpression(0));
+	}
+	function parsePrefix(): void {
+		const token = current();
+		if (!token) throw new Error('The presentation contains an empty expression.');
+		if ([10, 11, 12, 14, 15, 16].includes(token.t)) { take(); return; }
+		if (token.t === 17 || token.t === 35) {
+			take();
+			if (current()?.t === 1) parseCall();
+			return;
+		}
+		if (token.t === 18) {
+			take();
+			if (current()?.t === 9) { take(); parseExpression(0); }
+			return;
+		}
+		if (token.t === 3) { take(); parseDelimitedList(4, () => parseExpression(0)); return; }
+		if (token.t === 5) {
+			take();
+			parseDelimitedList(6, () => {
+				if (![14, 15, 16, 17, 18].includes(current()?.t ?? -1)) throw new Error('The presentation contains an invalid object key.');
+				take();
+				expect(8);
+				parseExpression(0);
+			});
+			return;
+		}
+		if (token.t === 33 || token.t === 21) { take(); parseExpression(8); return; }
+		if (token.t === 1) { take(); parseExpression(0); expect(2); return; }
+		throw new Error('The presentation contains malformed or unsupported OpenUI syntax.');
+	}
+	parseExpression(0);
+	if (position !== tokens.length) throw new Error('The presentation contains trailing or unparsed OpenUI syntax.');
+}
+
+function validateStaticAst(node: ASTNode, depth = 0, state = { nodes: 0 }): void {
+	if (++state.nodes > limits.programBytes || depth > limits.depth * 3) throw new Error('The presentation expression is too complex.');
+	switch (node.k) {
+		case 'Str': case 'Bool': case 'Null': case 'Ref': case 'Ph': case 'StateRef': case 'RuntimeRef': return;
+		case 'Num':
+			if (!Number.isFinite(node.v)) throw new Error('Presentation numbers must be finite.');
+			return;
+		case 'Comp':
+			if (!Object.hasOwn(componentDefinitions, node.name)) throw new Error(`Unsupported component or builtin “${node.name}”.`);
+			if (node.mappedProps) throw new Error('Named props are not supported in analytical presentations.');
+			node.args.forEach((arg) => validateStaticAst(arg, depth + 1, state));
+			return;
+		case 'Arr': node.els.forEach((item) => validateStaticAst(item, depth + 1, state)); return;
+		case 'Obj': {
+			const keys = node.entries.map(([key]) => key);
+			if (new Set(keys).size !== keys.length || keys.some((key) => ['__proto__', 'constructor', 'prototype'].includes(key))) throw new Error('Duplicate or unsafe object keys are not allowed.');
+			node.entries.forEach(([, item]) => validateStaticAst(item, depth + 1, state));
+			return;
+		}
+		case 'BinOp': validateStaticAst(node.left, depth + 1, state); validateStaticAst(node.right, depth + 1, state); return;
+		case 'UnaryOp': validateStaticAst(node.operand, depth + 1, state); return;
+		case 'Ternary': validateStaticAst(node.cond, depth + 1, state); validateStaticAst(node.then, depth + 1, state); validateStaticAst(node.else, depth + 1, state); return;
+		case 'Member': validateStaticAst(node.obj, depth + 1, state); return;
+		case 'Index': validateStaticAst(node.obj, depth + 1, state); validateStaticAst(node.index, depth + 1, state); return;
+		case 'Assign': throw new Error('State assignments and executable OpenUI expressions are not allowed in presentations.');
+		default: throw new Error(`Unsupported OpenUI expression “${(node as { k: string }).k}”.`);
+	}
+}
+
+/** Validate OpenUI's static expression subset without losing its grammar or recovery boundaries. */
+function preflight(program: string): string {
+	if (typeof program !== 'string' || !program.trim()) throw new Error('The presentation is empty.');
+	if (new TextEncoder().encode(program).length > limits.programBytes) throw new Error('The presentation exceeds its size budget.');
+	const source = normalizeOpenUiSource(program);
+	if (!source) throw new Error('The presentation is empty.');
+	validateOpenUiSourceCharacters(source);
+	const tokens = tokenize(source);
 	const statements = split(tokens);
 	const ids = new Set<string>();
 	const astById = new Map<string, ASTNode>();
-	const statementTokens: { id: string; tokens: typeof statements[number]['tokens']; ast: ASTNode }[] = [];
-	function tokenCount(node: ASTNode): number {
-		switch (node.k) {
-			case 'Str': case 'Num': case 'Bool': case 'Null': case 'Ref': case 'Ph': case 'StateRef': case 'RuntimeRef': return 1;
-			case 'Comp':
-				if (!Object.hasOwn(componentDefinitions, node.name)) throw new Error(`Unsupported component or builtin “${node.name}”.`);
-				return 3 + Math.max(0, node.args.length - 1) + node.args.reduce((sum, arg) => sum + tokenCount(arg), 0);
-			case 'Arr': return 2 + Math.max(0, node.els.length - 1) + node.els.reduce((sum, arg) => sum + tokenCount(arg), 0);
-			case 'Obj': {
-				const keys = node.entries.map(([key]) => key);
-				if (new Set(keys).size !== keys.length || keys.some((key) => ['__proto__', 'constructor', 'prototype'].includes(key))) throw new Error('Duplicate or unsafe object keys are not allowed.');
-				return 2 + Math.max(0, node.entries.length - 1) + node.entries.reduce((sum, [, arg]) => sum + 2 + tokenCount(arg), 0);
-			}
-			case 'BinOp': return 1 + tokenCount(node.left) + tokenCount(node.right);
-			case 'UnaryOp': return 1 + tokenCount(node.operand);
-			case 'Ternary': return 2 + tokenCount(node.cond) + tokenCount(node.then) + tokenCount(node.else);
-			case 'Member': return 2 + tokenCount(node.obj);
-			case 'Index': return 2 + tokenCount(node.obj) + tokenCount(node.index);
-		}
-		throw new Error('State assignments and unsupported OpenUI expressions are not allowed in presentations.');
-	}
+	const statementTokens: { id: string; ast: ASTNode }[] = [];
 	let accounted = 0;
 	for (const statement of statements) {
 		if (ids.has(statement.id) || statement.id.startsWith('$')) throw new Error('Duplicate statements and reactive variables are not allowed.');
 		ids.add(statement.id);
-		// Token enum values are supplied by the pinned core API (not exported at runtime).
-		// 7=comma, 2/4/6=closing delimiters. Ignore legal trailing commas in count checks.
-		const expression = statement.tokens.filter((token, index, list) => !(token.t === 7 && [2, 4, 6].includes(list[index + 1]?.t)));
-		const ast = parseExpression(expression);
-		if (tokenCount(ast) !== expression.length) throw new Error('The presentation contains unparsed or malformed expression tokens.');
+		assertCompleteOpenUiExpression(statement.tokens);
+		const ast = parseExpression(statement.tokens);
+		validateStaticAst(ast);
 		astById.set(statement.id, ast);
-		statementTokens.push({ id: statement.id, tokens: statement.tokens, ast });
+		statementTokens.push({ id: statement.id, ast });
 		accounted += statement.tokens.length + 2;
 	}
-	if (tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid statement.');
+	if (!statements.length || tokens.filter((token) => token.t !== 0 && token.t !== 13).length !== accounted) throw new Error('The presentation contains an invalid or incomplete statement.');
 
 	function collectReferences(node: ASTNode, into: Set<string>): void {
 		switch (node.k) {
@@ -103,6 +297,8 @@ function preflight(program: string): string {
 	}
 
 	const sourceReachable = reachableStatements(astById);
+	const missingReferences = [...sourceReachable].filter((id) => !ids.has(id));
+	if (missingReferences.length) throw new Error(`The presentation contains unresolved references: ${missingReferences.join(', ')}.`);
 	if ([...ids].some((id) => !sourceReachable.has(id))) throw new Error('The presentation contains unused statements.');
 	const evaluationBudget = { remaining: 20_000 };
 	const normalizedStatements = statementTokens.map(({ id, ast }) => `${id} = ${serializeStatic(ast, astById, evaluationBudget)}`);
@@ -174,15 +370,16 @@ function evaluateStaticExpression(node: ASTNode, declarations: Map<string, ASTNo
 		case 'UnaryOp': {
 			const operand = evaluateStaticExpression(node.operand, declarations, visiting, budget);
 			if (node.op === '!') return !operand;
-			if (node.op === '-' && typeof operand === 'number') return checkedArithmetic(-operand);
+			if (node.op === '-') return checkedArithmetic(-toNumber(operand));
 			break;
 		}
 		case 'BinOp': {
 			const left = evaluateStaticExpression(node.left, declarations, visiting, budget);
+			if (node.op === '&&') return left ? evaluateStaticExpression(node.right, declarations, visiting, budget) : left;
+			if (node.op === '||') return left ? left : evaluateStaticExpression(node.right, declarations, visiting, budget);
 			const right = evaluateStaticExpression(node.right, declarations, visiting, budget);
-			if (node.op === '&&') return left ? right : left;
-			if (node.op === '||') return left ? left : right;
-			if (node.op === '+' && (typeof left === 'string' || typeof right === 'string') && ['string', 'number', 'boolean'].includes(typeof left) && ['string', 'number', 'boolean'].includes(typeof right)) {
+			if (node.op === '+' && (typeof left === 'string' || typeof right === 'string')) {
+				// Match OpenUI's String(value ?? '') coercion for every static literal.
 				const leftText = String(left ?? '');
 				const rightText = String(right ?? '');
 				if (leftText.length + rightText.length > limits.programBytes) throw new Error('Presentation string expression exceeds its size budget.');
@@ -192,40 +389,28 @@ function evaluateStaticExpression(node: ASTNode, declarations: Map<string, ASTNo
 				const equal = openUiStaticEquality(left, right);
 				return node.op === '==' ? equal : !equal;
 			}
-			if (typeof left === 'number' && typeof right === 'number') {
-				switch (node.op) {
-					case '>': return left > right;
-					case '<': return left < right;
-					case '>=': return left >= right;
-					case '<=': return left <= right;
-				}
-			}
-			if (typeof left === 'string' && typeof right === 'string') {
-				switch (node.op) {
-					case '>': return left > right;
-					case '<': return left < right;
-					case '>=': return left >= right;
-					case '<=': return left <= right;
-				}
-			}
-			if (typeof left !== 'number' || typeof right !== 'number') break;
-			if ((node.op === '/' || node.op === '%') && right === 0) throw new Error('Presentation arithmetic cannot divide by zero.');
+			const leftNumber = toNumber(left);
+			const rightNumber = toNumber(right);
 			let result: number;
 			switch (node.op) {
-				case '+': result = left + right; break;
-				case '-': result = left - right; break;
-				case '*': result = left * right; break;
-				case '/': result = left / right; break;
-				case '%': result = left % right; break;
+				case '+': result = leftNumber + rightNumber; break;
+				case '-': result = leftNumber - rightNumber; break;
+				case '*': result = leftNumber * rightNumber; break;
+				case '/': result = rightNumber === 0 ? 0 : leftNumber / rightNumber; break;
+				case '%': result = rightNumber === 0 ? 0 : leftNumber % rightNumber; break;
+				case '>': return leftNumber > rightNumber;
+				case '<': return leftNumber < rightNumber;
+				case '>=': return leftNumber >= rightNumber;
+				case '<=': return leftNumber <= rightNumber;
 				default: throw new Error('Unsupported presentation arithmetic operator.');
 			}
 			return checkedArithmetic(result);
 		}
 		case 'Ternary': {
 			const condition = evaluateStaticExpression(node.cond, declarations, visiting, budget);
-			const thenValue = evaluateStaticExpression(node.then, declarations, visiting, budget);
-			const elseValue = evaluateStaticExpression(node.else, declarations, visiting, budget);
-			return condition ? thenValue : elseValue;
+			return condition
+				? evaluateStaticExpression(node.then, declarations, visiting, budget)
+				: evaluateStaticExpression(node.else, declarations, visiting, budget);
 		}
 		case 'Member': {
 			const object = evaluateStaticExpression(node.obj, declarations, visiting, budget);
@@ -258,13 +443,10 @@ function checkedArithmetic(value: number): number {
 }
 
 function openUiStaticEquality(left: unknown, right: unknown): boolean {
-	if (left === null || right === null) return left === right;
-	if (typeof left === typeof right) return left === right;
-	if (typeof left === 'boolean') return (left ? 1 : 0) === right;
-	if (typeof right === 'boolean') return left === (right ? 1 : 0);
-	if (typeof left === 'number' && typeof right === 'string') return Number.isFinite(Number(right)) && left === Number(right);
-	if (typeof right === 'number' && typeof left === 'string') return Number.isFinite(Number(left)) && Number(left) === right;
-	return false;
+	// OpenUI uses JavaScript's abstract equality (`==`) for its `==` operator.
+	// These values come only from the statically parsed literal subset above;
+	// no model-authored functions or executable objects can reach this point.
+	return left == right;
 }
 
 function materializeStaticValues(value: unknown): unknown {
