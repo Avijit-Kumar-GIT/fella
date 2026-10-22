@@ -267,6 +267,8 @@ plan is complete.
 
 ### Slice 4 — OpenUI as the automatic workspace answer (task set v1.3)
 
+Implementation commit: `072043e`.
+
 The v1.2 two-pass designer/composer is historical and is superseded by the
 same-turn `fella_openui_answer` contract. New workspace turns return a
 canonical answer plus an OpenUI program together; the transcript renders only
