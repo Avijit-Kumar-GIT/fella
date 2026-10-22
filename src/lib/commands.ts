@@ -13,7 +13,6 @@ import type {
 } from './types';
 import type { ResolvedArtifact } from './analytics-artifacts';
 import type { OutputTarget } from './analytical-output.svelte';
-import { prefs } from './prefs.svelte';
 
 const ensuredInvestigations = new Map<string, Promise<Investigation>>();
 
@@ -1013,6 +1012,7 @@ async function ask(
 		return;
 	}
 	const msg = conv.addAssistant('');
+	if (outputTarget) msg.artifact_target = outputTarget;
 	conv.startRun(question, questionRef?.questionId ?? null, msg.id);
 	conv.busy = true;
 	conv.activity = 'thinking…';
@@ -1100,9 +1100,6 @@ async function ask(
 		conv.activity = '';
 		conv.finishRun(failed);
 		if (questionRef) session.investigationsVersion += 1;
-	}
-	if (!failed && (prefs.richAnswers || outputTarget) && msg.answer?.workspace && msg.answer.turn_id && !msg.answer.clarification && session.settings?.capabilities?.visualizations !== false && msg.answer.evidence.some(item => !item.error && ['run_sql', 'run_python', 'forecast_analysis'].includes(item.tool) && (item.rows || item.result_table))) {
-		void import('./analytical-output.svelte').then(({ createAnalyticalOutput }) => createAnalyticalOutput(msg, msg.answer!.workspace!.path, conv.model || undefined, outputTarget));
 	}
 }
 
@@ -1232,9 +1229,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);
-	}
-	if (!failed && prefs.richAnswers && msg.answer?.workspace && msg.answer.turn_id && !msg.answer.clarification && session.settings?.capabilities?.visualizations !== false && msg.answer.evidence.some(item => !item.error && ['run_sql', 'run_python', 'forecast_analysis'].includes(item.tool) && (item.rows || item.result_table))) {
-		void import('./analytical-output.svelte').then(({ createAnalyticalOutput }) => createAnalyticalOutput(msg, msg.answer!.workspace!.path, conv.model || undefined));
 	}
 }
 

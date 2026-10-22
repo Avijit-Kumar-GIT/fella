@@ -23,4 +23,4 @@ export const analyticalLibrary = createLibrary({
 	}))
 });
 
-export { presentationSchema, presentationPrompt, presentationManifest, PRESENTATION_EXAMPLE, PRESENTATION_RULES } from './manifest';
+export { presentationSchema, presentationPrompt, presentationManifest, PRESENTATION_EXAMPLE, PRESENTATION_RULES, PRESENTATION_DESIGN_GUIDANCE } from './manifest';

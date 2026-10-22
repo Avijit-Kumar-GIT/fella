@@ -1,4 +1,4 @@
-// Contract v1, task set v1.2: data-aware design planning, real OpenUI parsing/registration, strict
+// Contract v1, task set v1.3: same-turn OpenUI answer contract, real OpenUI parsing/registration, strict
 // invalid-output and binding rejection, exact values, safe broad Vega-Lite
 // composition, deterministic export, and visible fallback. v1.1 corrects two
 // fixture calls from OpenUI's reserved Filter built-in to Fella's ResultFilter;
@@ -16,13 +16,15 @@ async function test(name, fn) {
 }
 try {
 	const { validatePresentation } = await server.ssrLoadModule('/src/lib/presentation/validate.ts');
-	const { presentationSchema, presentationPrompt, PRESENTATION_EXAMPLE, PRESENTATION_DESIGN_PROMPT, PRESENTATION_DESIGN_VERSION, presentationManifest } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
+	const { presentationSchema, presentationPrompt, PRESENTATION_EXAMPLE, PRESENTATION_DESIGN_GUIDANCE, presentationManifest } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
 	const { analyticalLibrary } = await server.ssrLoadModule('/src/lib/presentation/library.ts');
 	const { exportPresentation } = await server.ssrLoadModule('/src/lib/presentation/export.ts');
 	const { validateChartSpec, bindChartSpec } = await server.ssrLoadModule('/src/lib/presentation/chart.ts');
 	const { renderBoundChart } = await server.ssrLoadModule('/src/lib/presentation/vega-runtime.ts');
 	const { render } = await server.ssrLoadModule('svelte/server');
 	const { default: AnalyticalPresentation } = await server.ssrLoadModule('/src/lib/components/presentation/AnalyticalPresentation.svelte');
+	const { default: Message } = await server.ssrLoadModule('/src/lib/components/Message.svelte');
+	const { ensureAnalyticalOutput } = await server.ssrLoadModule('/src/lib/analytical-output.svelte.ts');
 	const result = { id: 'revenue', columns: ['quarter', 'revenue', 'region', 'low', 'high'], rows: [['Q3', 123.45, 'North', 100, 130], ['Q4', 200, 'South', 180, 220]], exact_rows: [['Q3', '123.450000', 'North', '100', '130'], ['Q4', '200.00', 'South', '180', '220']], row_count: 2, complete: true };
 	const results = [result];
 	const generated = JSON.parse(await readFile(new URL('../backend/resources/presentation-library.json', import.meta.url), 'utf8'));
@@ -40,14 +42,52 @@ try {
 		assert.match(presentationPrompt(results), /No expressions/);
 		assert.match(presentationPrompt(results), /"id":"revenue"/);
 	});
-	await test('generated prompt has no canonical visualization template and carries an open-ended design brief', () => {
-		assert.equal(generated.design_version, PRESENTATION_DESIGN_VERSION);
-		assert.match(generated.planner_prompt, /no closed list of acceptable visualization forms/i);
-		assert.match(generated.prompt, /design plan and result profiles/i);
+	await test('same-turn OpenUI generation is the primary answer contract, not a second design pass', () => {
+		assert.equal(generated.version, presentationManifest().version);
+		assert.match(generated.prompt, /primary answer surface in the same analysis turn/i);
+		assert.doesNotMatch(generated.prompt, /separate presentation design plan|design plan and result profiles/i);
+		assert.equal('design_version' in generated, false);
+		assert.equal('planner_prompt' in generated, false);
 		assert.doesNotMatch(generated.prompt, /Quarterly revenue|Metric\("revenue"/);
 		assert.doesNotMatch(presentationPrompt(results), /Quarterly revenue|Metric\("revenue"/);
-		assert.match(PRESENTATION_DESIGN_PROMPT, /single saved scalar often needs a metric and brief context, not a chart/i);
+		assert.match(PRESENTATION_DESIGN_GUIDANCE, /single saved scalar often needs a metric and brief context, not a chart/i);
+		assert.match(presentationManifest().designGuidance, /no closed list of acceptable visualization forms/i);
 		assert.equal('example' in presentationManifest(), false);
+	});
+	await test('workspace transcript waits for OpenUI instead of showing canonical prose first', () => {
+		const canonical = 'CANONICAL-ANSWER-MUST-NOT-LEAD';
+		const html = render(Message, { props: { message: {
+			id: 'workspace-openui-message', role: 'assistant', text: canonical, pending: false, ts: 1,
+			answer: { turn_id: 'workspace-openui-turn', text: canonical, presentation_program: PRESENTATION_EXAMPLE,
+				workspace: { path: '/workspace', revision: 'r1' }, evidence: [], verification: [] }
+		} } }).body;
+		assert.match(html, /Preparing the interactive answer/);
+		assert.doesNotMatch(html, new RegExp(canonical));
+	});
+	await test('completed OpenUI answer auto-creates a persistent artifact without another model call', async () => {
+		const program = 'root = Document([Metric("sales-result", "revenue", 0, "Q3 revenue", "USD")])';
+		const result = { id: 'sales-result', columns: ['revenue'], rows: [[12.5]], exact_rows: [['12.50']], row_count: 1, complete: true };
+		const artifact = { id: 'automatic-artifact', workspace: '/workspace', title: 'Quarter revenue', current_revision: 1, saved: false,
+			revisions: [{ revision: 1, run_id: 'workspace-openui-turn', program, library_version: 'fella-openui-v1', change_note: '', created_at_ms: 1 }], created_at_ms: 1, updated_at_ms: 1 };
+		const resolved = { artifact, revision: artifact.revisions[0], run: { question: 'What was Q3 revenue?', result: { text: 'Revenue was 12.50 USD.' } }, results: [result] };
+		const calls = [];
+		const bridge = {
+			presentationResults: async (workspace, turnId) => { calls.push(['presentationResults', workspace, turnId]); return { run: { question: 'What was Q3 revenue?' }, results: [result] }; },
+			artifactList: async (workspace) => { calls.push(['artifactList', workspace]); return []; },
+			artifactCreate: async (workspace, turnId, title, savedProgram) => { calls.push(['artifactCreate', workspace, turnId, title, savedProgram]); return artifact; },
+			artifactResolve: async (workspace, artifactId) => { calls.push(['artifactResolve', workspace, artifactId]); return resolved; },
+			artifactRevise: async () => { throw new Error('Unexpected revision'); }
+		};
+		const message = { id: 'auto-message', role: 'assistant', text: 'Revenue was 12.50 USD.', ts: 1,
+			answer: { turn_id: 'workspace-openui-turn', text: 'Revenue was 12.50 USD.', presentation_program: program, workspace: { path: '/workspace', revision: 'r1' }, evidence: [], verification: [] } };
+		let persisted = 0;
+		const output = await ensureAnalyticalOutput(message, '/workspace', bridge, () => persisted++);
+		assert.equal(output?.artifact.id, artifact.id);
+		assert.equal(message.artifact_id, artifact.id);
+		assert.equal(message.artifact_revision, 1);
+		assert.equal(persisted, 1);
+		assert.deepEqual(calls.map(([name]) => name), ['presentationResults', 'artifactList', 'artifactCreate', 'artifactResolve']);
+		assert.ok(calls.some(([name, , , , savedProgram]) => name === 'artifactCreate' && savedProgram === program));
 	});
 	await test('canonical fixture and resolved official OpenUI references validate', () => {
 		assert.equal(validatePresentation(PRESENTATION_EXAMPLE, results).valid, true);
@@ -143,6 +183,6 @@ try {
 			try { assert.match(await view.toSVG(), /<svg/); } finally { view.finalize(); }
 		}
 	});
-	console.log(`\nAnalytical presentation contract v1 (task set v1.2): ${passed} passed, ${failed} failed.`);
+	console.log(`\nAnalytical presentation contract v1 (task set v1.3): ${passed} passed, ${failed} failed.`);
 	if (failed) process.exitCode = 1;
 } finally { await server.close(); }

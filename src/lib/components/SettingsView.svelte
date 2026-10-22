@@ -29,8 +29,7 @@
 	}[] = [
 		{ key: 'table_analysis', label: 'Table analysis', detail: 'Inspect schemas and field profiles; query with read-only SQL, including joins and grouped totals.' },
 		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search supported text and text-based PDFs; no OCR.' },
-		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed calculations using read-only data results.' },
-		{ key: 'visualizations', label: 'Visualizations', detail: 'Compose data-bound analytical views and charts from saved results, with source lineage.' }
+		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed calculations using read-only data results.' }
 	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
@@ -72,7 +71,6 @@
 		const current = session.settings?.capabilities ?? defaultCapabilities;
 		const enabled = !current[key];
 		const next: AnalysisCapabilities = { ...current, [key]: enabled };
-		if (key === 'table_analysis' && !enabled) next.visualizations = false;
 		capabilityError = '';
 		try {
 			session.settings = await ipc.setSettings({ capabilities: next });
@@ -299,23 +297,18 @@
 							class="fella-ui-switch"
 							checked={capabilities[item.key]}
 							aria-label={`${item.label}: ${capabilities[item.key] ? 'on' : 'off'}`}
-							disabled={!capabilities.table_analysis && item.key === 'visualizations'}
 							onCheckedChange={() => void toggleCapability(item.key)}
 						>
 							<Switch.Thumb class="fella-ui-switch-thumb" />
 						</Switch.Root>
 					</div>
 				{/each}
-				<div class="capability-row">
-					<div class="capability-copy"><strong>Interactive answers</strong><small>Compose rich views after new analyses. Uses an additional model call; saved views reopen without one.</small></div>
-					<Switch.Root class="fella-ui-switch" checked={prefs.richAnswers} aria-label={`Interactive answers: ${prefs.richAnswers ? 'on' : 'off'}`} onCheckedChange={(enabled) => prefs.setRichAnswers(enabled)}><Switch.Thumb class="fella-ui-switch-thumb" /></Switch.Root>
-				</div>
 			</div>
 			<details class="capability-details">
-				<summary>Statistics, forecasting, and chart types</summary>
+				<summary>Statistics and forecasting</summary>
 				<p>Python helpers include median, standard deviation, quantiles, correlation, regression, and distribution checks. Correlation returns r only (no p-value); pandas, NumPy, and SciPy are not available. The sandbox has no filesystem or network access.</p>
 				<p>Forecast regular numeric series with naive, mean, drift, linear-trend, or seasonal-naive methods. Fella compares a forecast with a baseline and reports rolling-origin MAE/RMSE when the history supports it; error bands appear only when there are enough varied holdout errors. Forecasting needs Table analysis and runs in Ask.</p>
-				<p>Charts include bar, line, area, stacked area, pie, donut, scatter, histogram, box plot, heatmap, and forecast. Missing values are explicitly rejected, excluded, or shown as gaps—not silently changed to zero.</p>
+				<p>For workspace questions, the final answer is composed as an OpenUI presentation from saved analysis results. The presentation cannot run queries or change the verified analysis.</p>
 			</details>
 			<div class="capability-core">
 				<strong>Always included</strong>

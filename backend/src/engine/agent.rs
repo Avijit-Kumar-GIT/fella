@@ -14,7 +14,7 @@ use crate::engine::evidence::{
     PythonQueryReference, Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
 use crate::engine::investigation::{InvestigationContextSnapshot, InvestigationSourceSelection};
-use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
+use crate::engine::llm::{ChatMessage, LlmClient, ToolCall, ToolSchema};
 use crate::engine::runtime::{
     self, AnalysisContract, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
     ModelCallTrace, PlanStrategy, ResolvedClarification, TraceStep, TurnState,
@@ -78,6 +78,60 @@ fn max_steps() -> usize {
 /// This is soft guidance, not an analytical task limit; evaluate it against
 /// multi-step episodes as FQA-Bench coverage grows.
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
+const OPENUI_ANSWER_TOOL: &str = "fella_openui_answer";
+
+fn openui_answer_schema() -> ToolSchema {
+    let library: serde_json::Value =
+        serde_json::from_str(include_str!("../../resources/presentation-library.json"))
+            .expect("generated OpenUI library manifest must be valid JSON");
+    let instructions = library["prompt"].as_str().unwrap_or("");
+    ToolSchema {
+        name: OPENUI_ANSWER_TOOL.into(),
+        description: format!(
+            "Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_program` is the user-visible OpenUI Lang presentation of that same answer. Do not call this until analysis is complete. Do not call it in the same response as any other tool. Use only result IDs and fields previously returned in this turn; never invent values. When no result table is available, create a substantive text-first OpenUI presentation. The program must be complete and begin with root = Document([...]).\n\n{instructions}"
+        ),
+        parameters: serde_json::json!({
+            "type":"object",
+            "properties": {
+                "answer": {"type":"string", "minLength":1, "maxLength":16000},
+                "presentation_program": {"type":"string", "minLength":1, "maxLength":96000}
+            },
+            "required":["answer", "presentation_program"],
+            "additionalProperties":false
+        }),
+    }
+}
+
+#[derive(Debug)]
+struct OpenUiAnswer {
+    text: String,
+    program: String,
+}
+
+fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnswer> {
+    let text = arguments["answer"].as_str().unwrap_or_default().trim();
+    let program = arguments["presentation_program"]
+        .as_str()
+        .unwrap_or_default()
+        .trim();
+    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
+        return Err(EngineError::msg("OpenUI answer has invalid answer text"));
+    }
+    if program.is_empty() || program.len() > 96_000 || program.contains('\0') {
+        return Err(EngineError::msg(
+            "OpenUI answer has an invalid presentation program",
+        ));
+    }
+    if !program.starts_with("root = Document(") {
+        return Err(EngineError::msg(
+            "OpenUI presentation must begin with root = Document(...)",
+        ));
+    }
+    Ok(OpenUiAnswer {
+        text: text.to_owned(),
+        program: program.to_owned(),
+    })
+}
 
 struct RunIds {
     turn_id: String,
@@ -227,10 +281,7 @@ async fn cancelled(flag: &AtomicBool) {
 /// Tools that produce analytical results. They remain read-only and may be
 /// used to compare supported scenarios while a user choice is unresolved.
 fn is_computation_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "run_sql" | "run_python" | "forecast_analysis" | "make_chart"
-    )
+    matches!(name, "run_sql" | "run_python" | "forecast_analysis")
 }
 
 fn is_internal_tool(name: &str) -> bool {
@@ -251,20 +302,26 @@ fn is_observation_tool(name: &str) -> bool {
     )
 }
 
-/// Whether this successful result is a complete table that `make_chart` can
-/// reuse. Inspection samples deliberately do not qualify even though they
-/// carry columns and rows; advertising them as chart sources sends the model
-/// into a predictable rejected tool call.
-fn is_reusable_chart_source(item: &EvidenceItem) -> bool {
-    if item.error.is_some() {
+/// Whether this successful computation can be bound by the final OpenUI
+/// presentation. Incomplete results remain usable only with their explicit
+/// completeness warning; inspection samples are never analytical outputs.
+fn is_openui_result(item: &EvidenceItem) -> bool {
+    if !item.is_accepted()
+        || !matches!(
+            item.tool.as_str(),
+            "run_sql" | "run_python" | "forecast_analysis"
+        )
+    {
         return false;
     }
     match item.tool.as_str() {
-        "run_sql" => matches!(
-            (&item.columns, &item.rows, item.row_count),
-            (Some(_), Some(rows), Some(row_count)) if rows.len() == row_count
-        ),
-        "run_python" | "forecast_analysis" => item.result_table.is_some(),
+        "run_sql" => {
+            matches!((&item.columns, &item.rows), (Some(columns), Some(_)) if !columns.is_empty())
+        }
+        "run_python" | "forecast_analysis" => item
+            .result_table
+            .as_ref()
+            .is_some_and(|table| !table.columns.is_empty()),
         _ => false,
     }
 }
@@ -434,6 +491,9 @@ pretend workspace field.",
         sys.push_str(
             "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
+        sys.push_str(
+            "\n\nWorkspace answer format: Do not finish a workspace answer as ordinary prose. Once the analysis is complete, call `fella_openui_answer` exactly once, with both the verified canonical answer and a complete OpenUI Lang program for the user-visible answer. The program is the primary answer surface, not an optional second view. Do not call it in the same response as analysis tools. Use only result IDs and field names explicitly returned in this turn; bind values to those results rather than inventing them. The canonical answer text remains the verification/history record. When the answer is document-based or no tabular result exists, compose a substantive text-first OpenUI document. Keep conclusions, assumptions, and limitations visible.\n",
+        );
     }
     let mut messages = vec![
         ChatMessage::System(sys),
@@ -466,10 +526,17 @@ pretend workspace field.",
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
     let schemas = if catalog.workspace.is_some() {
-        registry.schemas_with_contract()
+        let mut schemas = registry.schemas_with_contract();
+        schemas.push(openui_answer_schema());
+        schemas
     } else {
         Vec::new()
     };
+    let finalizer_only: Vec<_> = schemas
+        .iter()
+        .filter(|schema| schema.name == OPENUI_ANSWER_TOOL)
+        .cloned()
+        .collect();
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
@@ -507,7 +574,7 @@ pretend workspace field.",
         // Race the model call against a stop request; dropping the future
         // closes the HTTP connection so the model stops generating.
         let available_tools = if force_final_answer {
-            &[]
+            finalizer_only.as_slice()
         } else {
             schemas.as_slice()
         };
@@ -552,7 +619,33 @@ pretend workspace field.",
         };
         usage = Usage::merge(usage, resp.usage);
 
-        if force_final_answer && !resp.tool_calls.is_empty() {
+        let openui_final = if resp.tool_calls.len() == 1
+            && resp.tool_calls[0].name == OPENUI_ANSWER_TOOL
+        {
+            match parse_openui_answer(&resp.tool_calls[0].arguments) {
+                Ok(answer) => Some(answer),
+                Err(error) => {
+                    let call = &resp.tool_calls[0];
+                    messages.push(ChatMessage::Assistant {
+                        content: resp.content.clone(),
+                        tool_calls: resp.tool_calls.clone(),
+                    });
+                    messages.push(ChatMessage::Tool {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content: format!(
+                            "The final OpenUI answer was rejected: {error}. Return a corrected complete answer using the required fields."
+                        ),
+                    });
+                    force_final_answer = true;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+
+        if force_final_answer && !resp.tool_calls.is_empty() && openui_final.is_none() {
             log::warn!("agent: model requested tools after the repeat guard disabled them");
             return Ok(finish(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
@@ -563,7 +656,24 @@ pretend workspace field.",
             ));
         }
 
-        if resp.tool_calls.is_empty() {
+        if resp.tool_calls.is_empty() && catalog.workspace.is_some() {
+            // Some compatible models may ignore the final-output function.
+            // Give one explicit format correction while exposing no analysis
+            // tools, rather than showing the prose response first.
+            if !force_final_answer {
+                messages.push(ChatMessage::Assistant {
+                    content: resp.content.clone(),
+                    tool_calls: Vec::new(),
+                });
+                messages.push(ChatMessage::User(
+                    "The workspace response is not finished until it is returned through `fella_openui_answer`. Use the required answer and presentation_program fields now. Do not add text outside the function call.".into(),
+                ));
+                force_final_answer = true;
+                continue;
+            }
+        }
+
+        if resp.tool_calls.is_empty() || openui_final.is_some() {
             emit(AskEvent::TurnState {
                 turn_id: ids.turn_id.clone(),
                 state: TurnState::Verifying,
@@ -576,7 +686,9 @@ pretend workspace field.",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let text = if resp.content.trim().is_empty() && evidence.is_empty() {
+            let text = if let Some(answer) = openui_final.as_ref() {
+                answer.text.clone()
+            } else if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
                     .to_string()
@@ -694,6 +806,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 evidence,
                 usage,
                 checks,
+                openui_final.map(|answer| answer.program),
             ));
         }
         // `resp.content` (any "let me check…" preamble before the tool calls)
@@ -714,6 +827,18 @@ the requested measure, filters, and scope. State just the number(s); don't round
         let mut in_batch_calls: HashMap<(String, String), usize> = HashMap::new();
         let mut in_batch_duplicates: Vec<(usize, usize)> = Vec::new();
         let mut compiled_contracts: Vec<(usize, planner::CompiledPlan)> = Vec::new();
+
+        // A final presentation is not an executable analysis tool. If a model
+        // batches it with data calls, return a protocol-safe explanation and
+        // let the analysis calls complete before finalization.
+        for (index, call) in resp.tool_calls.iter().enumerate() {
+            if call.name == OPENUI_ANSWER_TOOL {
+                internal_results.insert(
+                    index,
+                    "Finish the analysis calls first. Do not combine `fella_openui_answer` with any other tool; call it after reviewing their results.".into(),
+                );
+            }
+        }
 
         // Resolve model-proposed semantic hypotheses before their tool results
         // are returned to the model. This is an observation/planning phase.
@@ -1100,9 +1225,9 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
             had_tool_error |= item.error.is_some();
             workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
-            if is_reusable_chart_source(&item) {
+            if is_openui_result(&item) {
                 llm_text = format!(
-                    "Reusable result reference: {}. If a chart is needed, call `make_chart` with this `source_evidence_id`; do not rerun or rewrite the computation.\n\n{llm_text}",
+                    "Reusable OpenUI result binding: {}. Use this exact evidence ID and its returned field names in `fella_openui_answer` when the result belongs in the presentation. Do not invent values or rerun this computation only to make a visualization.\n\n{llm_text}",
                     item.id
                 );
             }
@@ -1175,19 +1300,17 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
         );
     }
 
-    // Out of steps: one last turn with no tools, telling the model plainly
-    // why so it writes a real (possibly hedged) answer instead of confused
-    // or empty output. The canned fallback below stays as the last-resort
-    // case (model call fails, or it still returns nothing).
+    // Out of steps: one final answer-format turn, with only the non-executing
+    // OpenUI answer function available in workspace mode.
     messages.push(ChatMessage::User(
         "You're out of tool-calling steps for this question. Don't call any more \
-tools give your best answer now, using only what you've already found. If \
+tools. Use only what you've already found, and finish through `fella_openui_answer`. If \
 you're not confident, say so plainly rather than guessing."
             .to_string(),
     ));
     let final_call_started = Instant::now();
     let resp = tokio::select! {
-        result = llm.chat(&messages, &[], &notify, &on_delta) => match result {
+        result = llm.chat(&messages, finalizer_only.as_slice(), &notify, &on_delta) => match result {
             Ok(response) => {
                 record_model_call(&mut ids, final_call_started, true, response.usage);
                 response
@@ -1208,23 +1331,44 @@ you're not confident, say so plainly rather than guessing."
         }
     };
     usage = Usage::merge(usage, resp.usage);
-    let text = if resp.content.trim().is_empty() {
-        "I ran out of analysis steps before reaching a confident answer.".to_string()
-    } else {
-        resp.content
-    };
+    let final_output = resp
+        .tool_calls
+        .iter()
+        .find(|call| call.name == OPENUI_ANSWER_TOOL)
+        .and_then(|call| parse_openui_answer(&call.arguments).ok());
+    let text = final_output
+        .as_ref()
+        .map(|answer| answer.text.clone())
+        .unwrap_or_else(|| {
+            if resp.content.trim().is_empty() {
+                "I ran out of analysis steps before reaching a confident answer.".to_string()
+            } else {
+                resp.content
+            }
+        });
     log::info!(
         "agent run: {:?}, {} model call(s), {tool_calls_total} tool call(s), {} evidence (hit step cap)",
         run_start.elapsed(),
         ids.model_calls.len(),
         evidence.len()
     );
-    Ok(finish(
-        finish_context(engine, workspace.as_ref(), &ids, emit),
+    let context = finish_context(engine, workspace.as_ref(), &ids, emit);
+    let checks = verify::run_for_answer(
+        engine,
+        question,
+        &text,
+        &evidence,
+        ids.contract.as_ref(),
+        ids.grounding.as_ref(),
+    );
+    Ok(finish_with(
+        context,
         question,
         text,
         evidence,
         usage,
+        checks,
+        final_output.map(|answer| answer.program),
     ))
 }
 
@@ -1281,7 +1425,7 @@ fn finish(
         context.ids.contract.as_ref(),
         context.ids.grounding.as_ref(),
     );
-    finish_with(context, question, text, evidence, usage, checks)
+    finish_with(context, question, text, evidence, usage, checks, None)
 }
 
 fn finish_with(
@@ -1291,6 +1435,7 @@ fn finish_with(
     mut evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     mut verification: Vec<VerificationCheck>,
+    presentation_program: Option<String>,
 ) -> Answer {
     let finding_snapshot = chart_finding_snapshot(&text);
     stamp_chart_provenance(
@@ -1393,6 +1538,7 @@ fn finish_with(
         contract: context.ids.contract.clone(),
         grounding: context.ids.grounding.clone(),
         text,
+        presentation_program,
         provenance: AnswerProvenance {
             evidence_ids: evidence
                 .iter()
@@ -1965,7 +2111,7 @@ pub struct PromptProfile {
     pub python_rule: bool,
     pub depth_rule: bool,
     pub aside_rule: bool,
-    pub chart_rule: bool,
+    pub openui_rule: bool,
     pub docs_rule: bool,
     pub forecast_rule: bool,
     pub background_rule: bool,
@@ -2004,7 +2150,7 @@ impl PromptProfile {
                 "python_rule" => p.python_rule = false,
                 "depth_rule" => p.depth_rule = false,
                 "aside_rule" => p.aside_rule = false,
-                "chart_rule" => p.chart_rule = false,
+                "openui_rule" => p.openui_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "forecast_rule" => p.forecast_rule = false,
                 "background_rule" => p.background_rule = false,
@@ -2033,7 +2179,7 @@ impl PromptProfile {
             python_rule: true,
             depth_rule: true,
             aside_rule: true,
-            chart_rule: true,
+            openui_rule: true,
             docs_rule: true,
             forecast_rule: true,
             background_rule: true,
@@ -2099,7 +2245,7 @@ claims. The schema and sample rows are clues for investigation, not a substitute
         );
         rules.push(
             "The model drives interpretation and tool choice. Use inspection, document search, \
-SQL, Python, charts, or a combination as the question requires; revise the approach when \
+SQL, Python, or a combination as the question requires; revise the approach when \
 results do not answer the intended question. Do not require a fixed tool, query language, or \
 sequence. Ground workspace-specific claims in returned evidence, and make useful derived \
 calculations explicit rather than doing consequential arithmetic only in prose."
@@ -2202,34 +2348,12 @@ sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
-    if has_workspace && profile.chart_rule {
+    if has_workspace && profile.openui_rule {
         rules.push(
-            "Use make_chart when the user asks for a visualization or a chart materially helps explain \
-the analysis. When a chart is explicitly requested, preserve it as the primary deliverable and avoid \
-incidental aggregates that do not answer the request. Reuse `source_evidence_id` only when the prior \
-complete result already has the exact requested grain, grouping, filters, and measures; otherwise use \
-`make_chart` with direct read-only SQL for the needed result shape. Do not use a total-by-category result \
-in place of a requested time series, or vice versa. Choose a chart family that fits the data: \
-bar for categorical comparisons, line/area for ordered time series, scatter for paired numeric measures, \
-histogram for one-variable distributions, box_plot for grouped distributions, heatmap for two categorical \
-dimensions, and forecast for explicitly separated observed/projected values. Pie/donut are only for a small, \
-non-negative part-to-whole result with a stated common denominator. For pie/donut, set `x_field` to the \
-category result column, `value_field` to its numeric measure, `part_to_whole` to true, and `denominator` to \
-the exact shared population. If a field name is rejected, use the available field names returned by the tool. \
-For long-form data with one row per period/category/measure observation, use `x_field`, `group_field`, and \
-`value_field` so the chart creates a series per group; do not try to plot every fact row as a separate \
-category. `make_chart` can materialize up to 10,000 source rows for grouped-series, histogram, and box-plot \
-queries, then pivots selected dimensions while keeping the requested time grain. If group-period pairs \
-repeat, aggregate them explicitly in SQL; if pairs are absent, \
-preserve gaps unless evidence establishes zero. The final time axis supports up to 1,000 points. If a chart \
-query exceeds its source-row limit, preserve the user's requested dates and grain while reshaping or \
-aggregating; never narrow the range just to fit a limit without asking. \
-An explicitly requested visualization is a required deliverable: if its source result is revised or \
-superseded, recreate the chart from the revised accepted evidence before finalizing rather than dropping \
-it. Select exact result fields, preserve the requested scope and units, and explicitly handle missing values; \
-never turn missing into zero. Make the title, \
-axes, grouping, period grain, aggregation, filters, and denominator agree with the analysis. If the result \
-doesn't support the requested chart or is too large to read, say so rather than altering its meaning."
+            "Choose an answer-specific presentation based on the question and the actual result shape. \
+Fella's OpenUI output is the answer surface: compose it creatively from saved evidence-bound components, \
+avoid repetitive templates, and do not add charts, metrics, tables, or controls unless they help explain \
+the result. Presentation choices never change analysis, source scope, or verification."
                 .into(),
         );
     }
@@ -2395,6 +2519,41 @@ web-research tool; do not claim to have checked current sources.\n",
 mod tests {
     use super::*;
     use crate::engine::llm::ToolCall;
+
+    #[test]
+    fn openui_answer_is_a_single_non_executing_finalizer_with_a_complete_program() {
+        let schema = openui_answer_schema();
+        assert_eq!(schema.name, OPENUI_ANSWER_TOOL);
+        assert_eq!(
+            schema.parameters["required"],
+            serde_json::json!(["answer", "presentation_program"])
+        );
+        assert_eq!(schema.parameters["additionalProperties"], false);
+        assert!(
+            schema.description.contains("primary answer surface")
+                || schema.description.contains("user-visible answer")
+        );
+        assert!(schema.description.contains("OpenUI Lang"));
+
+        let answer = parse_openui_answer(&serde_json::json!({
+            "answer": "Revenue increased from Q3 to Q4.",
+            "presentation_program": "root = Document([Text(\"Revenue increased from Q3 to Q4.\")])"
+        }))
+        .unwrap();
+        assert_eq!(answer.text, "Revenue increased from Q3 to Q4.");
+        assert!(answer.program.starts_with("root = Document("));
+    }
+
+    #[test]
+    fn openui_answer_rejects_incomplete_or_unrooted_programs() {
+        for arguments in [
+            serde_json::json!({"answer":"An answer", "presentation_program":""}),
+            serde_json::json!({"answer":"An answer", "presentation_program":"Text(\"not rooted\")"}),
+            serde_json::json!({"answer":"", "presentation_program":"root = Document([Text(\"x\")])"}),
+        ] {
+            assert!(parse_openui_answer(&arguments).is_err());
+        }
+    }
 
     #[test]
     fn failed_tool_results_keep_a_typed_recovery_category() {
@@ -2765,32 +2924,35 @@ mod tests {
     }
 
     #[test]
-    fn only_complete_analytical_tables_are_advertised_as_chart_sources() {
+    fn analytical_results_are_advertised_as_openui_bindings() {
         let mut inspection = evidence_item("inspect_table");
         inspection.columns = Some(vec!["category".into(), "amount".into()]);
         inspection.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         inspection.row_count = Some(1);
-        assert!(!is_reusable_chart_source(&inspection));
+        assert!(!is_openui_result(&inspection));
 
         let mut complete_query = evidence_item("run_sql");
         complete_query.columns = Some(vec!["category".into(), "amount".into()]);
         complete_query.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         complete_query.row_count = Some(1);
-        assert!(is_reusable_chart_source(&complete_query));
+        assert!(is_openui_result(&complete_query));
 
         complete_query.row_count = Some(2);
-        assert!(!is_reusable_chart_source(&complete_query));
+        assert!(
+            is_openui_result(&complete_query),
+            "incomplete saved results remain bindable with a scope warning"
+        );
         complete_query.row_count = Some(1);
         complete_query.error = Some("query failed".into());
-        assert!(!is_reusable_chart_source(&complete_query));
+        assert!(!is_openui_result(&complete_query));
 
         let mut published_python = evidence_item("run_python");
         published_python.result_table = Some(crate::engine::analytics::chart::TabularResult {
             columns: vec!["category".into(), "amount".into()],
             rows: vec![vec!["Rent".into(), 1200.into()]],
         });
-        assert!(is_reusable_chart_source(&published_python));
-        assert!(!is_reusable_chart_source(&evidence_item("read_file")));
+        assert!(is_openui_result(&published_python));
+        assert!(!is_openui_result(&evidence_item("read_file")));
     }
 
     #[test]
@@ -3041,7 +3203,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_prompt_preserves_requested_shape_and_uses_direct_sql_when_needed() {
+    fn presentation_prompt_requires_answer_specific_openui() {
         let prompt = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -3052,12 +3214,9 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("exact requested grain, grouping, filters, and measures"));
-        assert!(prompt.contains("otherwise use `make_chart` with direct read-only SQL"));
-        assert!(prompt
-            .contains("Do not use a total-by-category result in place of a requested time series"));
-        assert!(prompt.contains("one row per period/category/measure observation"));
-        assert!(prompt.contains("preserve gaps unless evidence establishes zero"));
+        assert!(prompt.contains("Fella's OpenUI output is the answer surface"));
+        assert!(prompt.contains("saved evidence-bound components"));
+        assert!(!prompt.contains("make_chart"));
     }
 
     #[test]
@@ -3068,9 +3227,9 @@ mod tests {
     }
 
     #[test]
-    fn chart_and_structure_rules_are_droppable() {
-        let p = PromptProfile::from_drop(Some("chart_rule, structure_rule"));
-        assert!(!p.chart_rule && !p.structure_rule);
+    fn openui_and_structure_rules_are_droppable() {
+        let p = PromptProfile::from_drop(Some("openui_rule, structure_rule"));
+        assert!(!p.openui_rule && !p.structure_rule);
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
 
@@ -3106,7 +3265,7 @@ mod tests {
         assert!(!got.contains("contract's typed `clarification` field"));
         assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
-        assert!(got.contains("An explicitly requested visualization is a required deliverable"));
+        assert!(got.contains("Fella's OpenUI output is the answer surface"));
         assert!(got
             .contains("Distinguish association from causation and observed values from estimates"));
         assert!(got.contains("Forecasts and scenarios are valid analysis requests"));

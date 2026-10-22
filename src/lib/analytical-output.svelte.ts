@@ -1,67 +1,98 @@
 import { ipc } from './ipc';
 import { session } from './session.svelte';
-import type { ArtifactRecord, PresentationDesignPlan, ResolvedArtifact } from './analytics-artifacts';
+import type { ArtifactRecord, ResolvedArtifact } from './analytics-artifacts';
 import type { Message } from './types';
 
-/** Ephemeral work state: an app restart never regenerates a saved answer. */
-export const outputJobs = $state<Record<string, { busy: boolean; error: string; operationId: string }>>({});
+/** Ephemeral artifact-link state. The presentation itself is part of the saved answer. */
+export const outputJobs = $state<Record<string, { busy: boolean; error: string; attempted: boolean }>>({});
+const pending = new Map<string, Promise<ResolvedArtifact | null>>();
+type OutputBridge = Pick<
+	typeof ipc,
+	'presentationResults' | 'artifactList' | 'artifactCreate' | 'artifactResolve' | 'artifactRevise'
+>;
 
-export interface OutputTarget { artifactId: string; baseRevision: number; instruction: string }
-
-export async function createAnalyticalOutput(message: Message, workspace: string, model?: string, target?: OutputTarget): Promise<ArtifactRecord | null> {
-	const turnId = message.answer?.turn_id;
-	if (!turnId || message.pending || message.answer?.clarification || outputJobs[turnId]?.busy) return null;
-	const operationId = crypto.randomUUID();
-	outputJobs[turnId] = { busy: true, error: '', operationId };
-	const current = () => outputJobs[turnId]?.operationId === operationId && outputJobs[turnId]?.busy;
-	try {
-		const { run, results } = await ipc.presentationResults(workspace, turnId);
-		if (!current()) return null;
-		if (!results.length) throw new Error('No reusable table result was recorded. The original answer is unchanged.');
-		const { validatePresentation } = await import('./presentation/validate');
-		let program = '';
-		let designPlan: PresentationDesignPlan | undefined;
-		let repair = target?.instruction ?? '';
-		for (let attempt = 0; attempt < 2; attempt++) {
-			const response = await ipc.presentationPropose(workspace, turnId, model, repair, operationId, designPlan);
-			if (!current()) return null;
-			designPlan = response.design_plan;
-			program = response.program.trim().replace(/^```(?:openui|openui-lang)?\s*\n/i, '').replace(/\n```\s*$/, '');
-			const checked = validatePresentation(program, results);
-			if (checked.valid) break;
-			const errors = checked.issues.map(item => item.message).join('; ').slice(0, 2400);
-			if (attempt === 1) throw new Error(`The interactive view could not be validated. ${errors}`);
-			repair = `${target?.instruction ?? ''}\nThe previous presentation was invalid: ${errors}. Return a corrected complete program using only supplied result IDs and fields.`;
-		}
-		if (!current()) return null;
-		let artifact: ArtifactRecord;
-		if (target) {
-			const revised = await ipc.artifactRevise(workspace, target.artifactId, target.baseRevision, { run_id: turnId, program, change_note: target.instruction });
-			artifact = revised.artifact;
-			message.artifact_revision = revised.revision.revision;
-		} else {
-			const title = run.question.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Analysis';
-			artifact = await ipc.artifactCreate(workspace, turnId, title, program);
-			message.artifact_revision = artifact.current_revision;
-		}
-		if (!current()) return artifact;
-		message.artifact_id = artifact.id;
-		session.persist();
-		return artifact;
-	} catch (error) {
-		if (current()) outputJobs[turnId].error = error instanceof Error ? error.message : String(error);
-		return null;
-	} finally {
-		if (outputJobs[turnId]?.operationId === operationId) outputJobs[turnId].busy = false;
-	}
+export interface OutputTarget {
+	artifactId: string;
+	baseRevision: number;
+	instruction: string;
 }
 
-export function cancelAnalyticalOutput(turnId: string, workspace: string): void {
-	const job = outputJobs[turnId];
-	if (!job?.busy) return;
-	job.busy = false;
-	job.error = 'Interactive view cancelled. The analytical answer is unchanged.';
-	void ipc.cancel(`presentation:${job.operationId}`, workspace).catch(() => {});
+/** Validate and persist the OpenUI program already returned with the analysis. */
+export async function ensureAnalyticalOutput(
+	message: Message,
+	workspace: string,
+	bridge: OutputBridge = ipc,
+	persist: () => void = () => session.persist()
+): Promise<ResolvedArtifact | null> {
+	const turnId = message.answer?.turn_id;
+	if (!turnId || message.pending || message.answer?.clarification) return null;
+	const active = pending.get(turnId);
+	if (active) return active;
+	if (outputJobs[turnId]?.attempted && !message.artifact_id) return null;
+	outputJobs[turnId] = { busy: true, error: '', attempted: true };
+	const work = (async (): Promise<ResolvedArtifact | null> => {
+		try {
+			if (message.artifact_id) {
+				const saved = await bridge.artifactResolve(workspace, message.artifact_id, message.artifact_revision);
+				const { validatePresentation } = await import('./presentation/validate');
+				const checked = validatePresentation(saved.revision.program, saved.results);
+				if (!checked.valid) {
+					throw new Error(`The saved OpenUI answer could not be validated. ${checked.issues.map(item => item.message).join('; ').slice(0, 1600)}`);
+				}
+			return saved;
+			}
+			const program = message.answer?.presentation_program?.trim();
+			if (!program) {
+				throw new Error('Fella could not compose the interactive answer. The verified answer is shown below.');
+			}
+			const { run, results } = await bridge.presentationResults(workspace, turnId);
+			const { validatePresentation } = await import('./presentation/validate');
+			const checked = validatePresentation(program, results);
+			if (!checked.valid) {
+				throw new Error(`The OpenUI answer could not be validated. ${checked.issues.map(item => item.message).join('; ').slice(0, 2400)}`);
+			}
+			const target = message.artifact_target;
+			let resolved: ResolvedArtifact;
+			if (target) {
+				const existing = await bridge.artifactResolve(workspace, target.artifactId);
+				const prior = existing.artifact.revisions.find(revision => revision.run_id === turnId);
+				if (prior) {
+					resolved = await bridge.artifactResolve(workspace, target.artifactId, prior.revision);
+				} else {
+					resolved = await bridge.artifactRevise(workspace, target.artifactId, target.baseRevision, {
+						run_id: turnId,
+						program,
+						change_note: target.instruction
+					});
+				}
+			} else {
+				const artifacts = await bridge.artifactList(workspace);
+				const existing = artifacts.find(artifact => artifact.revisions.some(revision => revision.run_id === turnId));
+				let artifact: ArtifactRecord;
+				if (existing) artifact = existing;
+				else {
+					const title = run.question.replace(/\s+/g, ' ').trim().slice(0, 120) || 'Analysis';
+					artifact = await bridge.artifactCreate(workspace, turnId, title, program);
+				}
+				resolved = await bridge.artifactResolve(workspace, artifact.id);
+			}
+			message.artifact_id = resolved.artifact.id;
+			message.artifact_revision = resolved.revision.revision;
+			persist();
+			return resolved;
+		} catch (error) {
+			outputJobs[turnId].error = error instanceof Error ? error.message : String(error);
+			return null;
+		} finally {
+			outputJobs[turnId].busy = false;
+		}
+	})();
+	pending.set(turnId, work);
+	try {
+		return await work;
+	} finally {
+		if (pending.get(turnId) === work) pending.delete(turnId);
+	}
 }
 
 export async function saveOutputToStudio(resolved: ResolvedArtifact): Promise<void> {

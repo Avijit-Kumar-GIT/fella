@@ -5,7 +5,8 @@ Defined 2026-10-21 before candidate implementation. Baseline: `eb60f75` on
 [the implementation plan](../OPENUI-ANALYTICAL-WORKSPACE-PLAN.md).
 
 The frozen persistence/export/desktop contract below remains v1. Its executable
-task set is now v1.2; the v1.1 results below remain historical and unchanged.
+task set is now v1.3; the v1.1 and v1.2 results below remain historical and
+unchanged.
 
 ## Frozen expected behavior
 
@@ -72,6 +73,40 @@ follows the plan or produces different appropriate views. That claim requires
 an opt-in provider evaluation with a frozen, varied task set, blinded human
 appropriateness grading, first-attempt validity, exact-value binding, latency,
 and token-cost reporting. No quality score is inferred from unit tests.
+
+## Primary-answer contract — task set v1.3
+
+Defined 2026-10-21 before validating the candidate that makes OpenUI the
+default workspace answer. This supersedes the two-pass design-plan/composition
+architecture described in v1.2; those v1.2 test results remain historical.
+
+14. A completed workspace answer is returned in the analysis turn as one
+    `fella_openui_answer` containing both the canonical verified text and the
+    OpenUI Lang program. The program is the primary visible answer, not a
+    later model pass, optional preference, or user-triggered enhancement.
+15. The transcript does not show the canonical prose answer or legacy
+    `make_chart` output before the OpenUI presentation. The canonical answer is
+    retained in the run for verification, history, and a secondary details
+    disclosure. If OpenUI is missing, rejected, or unavailable, show that
+    canonical answer as an explicit fallback.
+16. On answer completion, validate the supplied program against the saved
+    evidence, create or revise the persistent artifact automatically, and
+    reopen it without a model call. There is no “Create interactive view”
+    action and no separate `presentation_propose` model call.
+17. A workspace answer with no reusable table still receives a substantive
+    text-first OpenUI document; presentation output is not conditional on a
+    chartable result. General, non-workspace chat remains ordinary conversation.
+18. Presentation validation and rendering cannot execute analysis or invent
+    values. Existing canonical analysis, verification, provenance, and legacy
+    records remain readable; legacy chart records are not the active answer
+    surface for new workspace turns.
+
+The v1.3 deterministic checks can establish the same-turn output contract,
+automatic renderer routing, validation, persistence semantics, and removal of
+the second-pass IPC surface. They do **not** establish live-provider adherence,
+answer-specific visual quality, or that views differ appropriately across
+questions. Those require a separately frozen provider evaluation and blinded
+grading; no such quality claim is inferred from these tests.
 
 ## Test layers and independent grading
 
@@ -229,3 +264,51 @@ compatibility. Startup time, answer latency, memory, macOS/Windows packaging,
 visual accessibility review, and production-scale result storage remain
 unmeasured. The code and tests intentionally do not claim the entire product
 plan is complete.
+
+### Slice 4 — OpenUI as the automatic workspace answer (task set v1.3)
+
+The v1.2 two-pass designer/composer is historical and is superseded by the
+same-turn `fella_openui_answer` contract. New workspace turns return a
+canonical answer plus an OpenUI program together; the transcript renders only
+the OpenUI answer as its primary surface and automatically persists it as an
+artifact. The prose answer remains for verification and a secondary details
+disclosure, with an explicit fallback if OpenUI cannot be validated or shown.
+The standalone “Create interactive view” action, rich-answer preference,
+separate presentation IPC/model pass, and active chat `make_chart` presentation
+path are removed. Old chart evidence and records remain readable for
+compatibility; this is not a deletion of analytical history.
+
+Validation completed on 2026-10-21:
+
+- `pnpm test:analytical-presentation`: 49 passed, 0 failed. This includes the
+  same-turn primary-answer contract, transcript suppression of canonical prose,
+  automatic artifact creation, OpenUI parsing/binding/safety, exact-value
+  rendering/export, and fallback disclosure.
+- `pnpm test:studio-report`: 3 groups passed; deterministic saved-value export,
+  mismatch disclosure, and no recomputation.
+- `cargo test --manifest-path backend/Cargo.toml --lib --locked`: 419 passed,
+  0 failed.
+- `pnpm check`: 0 errors, 0 warnings.
+- `pnpm electron:build`: passed. Vite retains the existing large-chunk warning;
+  the largest app chunk is 815.02 kB raw / 215.64 kB gzip. No startup or memory
+  improvement is claimed.
+- `pnpm test:e2e:generative`: 8 passed, 0 failed against the freshly rebuilt
+  Electron/Rust app. The new local mock-provider journey inspects the workspace,
+  returns `fella_openui_answer` in the same analysis turn, verifies OpenUI is
+  the only primary transcript surface, and checks automatic artifact persistence
+  with exactly one `ask` and no `presentation_propose` call. It also asserts the
+  active system prompt no longer directs the model to `make_chart`.
+- The first mock-provider E2E run used a stale local Rust sidecar built before
+  the finalizer code. The captured tool exchange showed that binary treating
+  `fella_openui_answer` as an unknown tool. After rebuilding with
+  `pnpm electron:build`, the targeted journey and full suite passed. This was a
+  stale build-artifact issue; no test expectation was changed.
+- The first E2E launch inside the restricted runner failed because Electron's
+  Linux sandbox host was denied (`Operation not permitted`). The suite was run
+  outside that restriction; no test was excluded and no assertion was altered.
+
+No live provider was used. These checks prove the integration and persistence
+path against a deterministic mock, not provider compliance, view diversity,
+answer-specific design quality, or model latency/token cost. Legacy chart data
+and renderers remain available for previously saved analytical history; new
+workspace answers do not expose that chart-generation path.

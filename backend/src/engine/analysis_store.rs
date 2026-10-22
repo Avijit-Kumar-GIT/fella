@@ -350,6 +350,7 @@ mod tests {
             }),
             result: AnalysisResult {
                 text: "100".into(),
+                presentation_program: None,
                 status: VerificationStatus::Verified,
                 usage: None,
                 verification: Vec::new(),

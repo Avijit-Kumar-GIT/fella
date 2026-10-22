@@ -230,9 +230,6 @@ impl Registry {
                 tools.push(Box::new(ForecastAnalysis));
             }
         }
-        if capabilities.charts_enabled() {
-            tools.push(Box::new(MakeChart));
-        }
         Self {
             tools,
             capabilities,
@@ -2606,6 +2603,11 @@ mod tests {
             .collect();
 
         assert_eq!(names, vec!["list_files"]);
+
+        assert!(
+            !Registry::standard().has_tool("make_chart"),
+            "new workspace answers compose OpenUI from saved results; legacy chart evidence is read-only"
+        );
 
         let python_disabled = AnalysisCapabilities {
             python_analysis: false,

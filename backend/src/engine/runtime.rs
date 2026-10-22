@@ -855,6 +855,10 @@ pub struct VerificationReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisResult {
     pub text: String,
+    /// Optional OpenUI output emitted by the final analysis response. Older
+    /// runs remain readable and simply have no generated presentation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presentation_program: Option<String>,
     pub status: VerificationStatus,
     /// Provider-reported token use summed across this model-driven turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]

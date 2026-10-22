@@ -1,14 +1,16 @@
 import { test as base, expect, _electron as electron } from '@playwright/test';
+import { createServer } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Generative workspace contract v1; executable task set v1.2 (2026-10-21).
+ * Generative workspace contract v1; executable task set v1.3 (2026-10-21).
  * Expected semantics are fixed before candidate execution and come from
  * docs/testing/GENERATIVE-WORKSPACE-v1.md, not observed rendering output.
- * v1.2 adds the design-plan/profile prompt contract; this deterministic
- * desktop suite makes no live-model response-diversity or quality claim.
+ * v1.3 makes OpenUI the same-turn primary answer contract and removes the
+ * separate presentation-propose request. This deterministic desktop suite
+ * makes no live-model response-diversity or quality claim.
  *
  * 1. Recorded analysis -> persisted artifact -> Studio; narrative/order survive
  *    restart with exact saved values and no model call or source query.
@@ -288,6 +290,93 @@ const test = base.extend({
 			}
 			await desktop.app?.close();
 		}
+	}
+});
+
+test('generative v1.3: one workspace turn returns and automatically renders its OpenUI answer', async ({ desktop }) => {
+	test.setTimeout(90_000);
+	const { page, workspace, profile } = desktop;
+	const modelRequests = [];
+	const canonical = 'The workspace contains sales.csv with quarterly revenue data.';
+	const program = 'root = Document([Section("Workspace files", [Text("OPENUI_PRIMARY_SURFACE: sales.csv contains quarterly revenue data.")])])';
+	const server = createServer(async (request, response) => {
+		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+			response.writeHead(404).end();
+			return;
+		}
+		let body = '';
+		for await (const chunk of request) body += chunk;
+		const payload = JSON.parse(body);
+		modelRequests.push(payload);
+		const inspected = payload.messages?.some((message) => message.role === 'assistant' &&
+			message.tool_calls?.some((tool) => tool.function?.name === 'list_files'));
+		const call = !inspected
+			? { id: 'call_inventory', function: { name: 'list_files', arguments: JSON.stringify({ kind: 'all', offset: 0, limit: 40 }) } }
+			: { id: 'call_openui_answer', function: { name: 'fella_openui_answer', arguments: JSON.stringify({ answer: canonical, presentation_program: program }) } };
+		response.writeHead(200, { 'content-type': 'application/json' }).end(`${JSON.stringify({
+			choices: [{ index: 0, message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', ...call }] }, finish_reason: 'tool_calls' }],
+			usage: { prompt_tokens: 12, completion_tokens: 8 }
+		})}\n`);
+	});
+	await new Promise((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	const address = server.address();
+	expect(address && typeof address === 'object').toBeTruthy();
+
+	try {
+		// This journey intentionally performs a real ask, so remove only the
+		// fixture's no-model-call guard. The independent request observer stays on.
+		await rm(join(profile, 'enforce-engine-budget'), { force: true });
+		await invoke(page, 'set_api_key', { provider: 'custom', key: 'generative-e2e-local-key' });
+		await invoke(page, 'set_settings', {
+			settings: { provider: 'custom', base_url: `http://127.0.0.1:${address.port}/v1`, model: 'fella-openui-e2e' }
+		});
+
+		const composer = page.getByRole('combobox', { name: 'Ask about commerce', exact: true });
+		await composer.fill('Summarize the files in this workspace.');
+		await composer.press('Enter');
+		const assistant = page.locator('.msg.assistant').last();
+		const primary = assistant.locator('.analytical-answer');
+		await expect(primary).toContainText('OPENUI_PRIMARY_SURFACE', { timeout: 30_000 });
+		await expect(primary.getByRole('button', { name: /Create interactive view/i })).toHaveCount(0);
+		await expect(primary.locator('details.original')).not.toHaveAttribute('open');
+		await expect(primary.getByText(canonical, { exact: true })).toBeHidden();
+		await expect(primary).toContainText('Analysis · revision 1');
+
+		const methods = (await engineRequests(profile)).map(({ method }) => method);
+		expect(methods.filter((method) => method === 'ask')).toHaveLength(1);
+		expect(methods.filter((method) => method === 'artifact_create')).toHaveLength(1);
+		expect(methods).not.toContain('presentation_propose');
+		expect(modelRequests).toHaveLength(2);
+		const requestedTools = modelRequests.map((payload) => payload.tools?.map((tool) => tool.function.name) ?? []);
+		expect(requestedTools[0]).toContain('list_files');
+		expect(requestedTools[1]).toContain('fella_openui_answer');
+		for (const names of requestedTools) expect(names).not.toContain('make_chart');
+		const systemPrompt = modelRequests[0].messages.find(({ role }) => role === 'system')?.content ?? '';
+		expect(systemPrompt).toContain('Workspace answer format');
+		expect(systemPrompt).not.toContain('make_chart');
+
+		const turnId = await assistant.getAttribute('data-analysis-turn-id');
+		expect(turnId).toBeTruthy();
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		expect(turn.result).toMatchObject({ text: canonical, presentation_program: program });
+		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
+		expect(artifacts).toHaveLength(1);
+		const saved = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifacts[0].id });
+		expect(saved.revision.program).toBe(program);
+		expect(saved.run.result.text).toBe(canonical);
+	} finally {
+		await test.info().attach('mock-provider-requests', {
+			body: JSON.stringify(modelRequests.map(({ tools, messages }) => ({
+				tools: tools?.map((tool) => tool.function.name) ?? [],
+				messages: messages?.map(({ role, content, tool_calls, name }) => ({ role, content, tool_calls, name })) ?? []
+			})), null, 2),
+			contentType: 'application/json'
+		});
+		await writeFile(join(profile, 'mock-provider-requests.json'), JSON.stringify(modelRequests, null, 2));
+		await new Promise((resolve) => server.close(resolve));
 	}
 });
 

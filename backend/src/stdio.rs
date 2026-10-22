@@ -300,7 +300,6 @@ async fn dispatch(
                 | "save_context"
                 | "analysis_turn_replay_status"
                 | "analysis_turn_rerun"
-                | "presentation_propose"
                 | "artifact_compare"
                 | "studio_export_package"
                 | "ask"
@@ -476,26 +475,6 @@ async fn dispatch(
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let turn_id: String = required(&request.params, "turnId")?;
                 engine.presentation_results(&workspace, &turn_id)
-            }
-            "presentation_propose" => {
-                let workspace: String = required(&request.params, "workspaceId")?;
-                let turn_id: String = required(&request.params, "turnId")?;
-                let design_plan = request
-                    .params
-                    .get("designPlan")
-                    .cloned()
-                    .map(crate::engine::presentation_intelligence::validate_design_plan_value)
-                    .transpose()?;
-                workspace_engine
-                    .presentation_propose(
-                        &workspace,
-                        &turn_id,
-                        request.params.get("model").and_then(Value::as_str),
-                        request.params.get("instruction").and_then(Value::as_str),
-                        request.params.get("operationId").and_then(Value::as_str),
-                        design_plan,
-                    )
-                    .await
             }
             "artifact_list" => {
                 let workspace: String = required(&request.params, "workspaceId")?;

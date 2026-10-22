@@ -13,6 +13,6 @@ export default defineConfig({
 	timeout: 45_000,
 	expect: { timeout: 7_000 },
 	reporter: 'list',
-	outputDir: join(tmpdir(), 'fella-generative-workspace-v1.2-results'),
+	outputDir: join(tmpdir(), 'fella-generative-workspace-v1.3-results'),
 	use: { trace: 'retain-on-failure', screenshot: 'only-on-failure' }
 });

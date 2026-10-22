@@ -253,13 +253,6 @@
 							message={m}
 							expanded={!!expanded[m.id]}
 							ontoggle={() => toggle(m.id)}
-							openChartIndex={
-								session.activeChat.companionPane?.kind === 'chart' &&
-								session.activeChat.companionPane.messageId === m.id
-									? session.activeChat.companionPane.evidenceIndex
-									: null
-							}
-							onopenchart={(messageId, evidenceIndex) => session.openChartPane(messageId, evidenceIndex)}
 							onopeninvestigationrun={session.activeChat.workspaceScope === session.catalog.workspace
 								? (turnId) => session.openInvestigationRun(turnId)
 								: undefined}

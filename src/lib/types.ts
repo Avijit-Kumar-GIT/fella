@@ -198,6 +198,8 @@ export interface Answer {
 	/** Typed links to evidence, included context, and clarification lineage. */
 	provenance?: AnswerProvenance;
 	text: string;
+	/** OpenUI Lang is the primary presentation for workspace answers. */
+	presentation_program?: string;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
 	/** One user-facing semantic choice that must be answered before computing. */
@@ -438,6 +440,7 @@ export interface AnalysisTurn {
 	verification?: { status: VerificationStatus; checks: VerificationCheck[] };
 	result: {
 		text: string;
+		presentation_program?: string;
 		status: VerificationStatus;
 		usage?: { prompt_tokens: number; completion_tokens: number };
 		verification: VerificationCheck[];
@@ -694,6 +697,8 @@ export interface Message {
 	/** Projection link only; Rust artifact/run stores own the analytical output. */
 	artifact_id?: string;
 	artifact_revision?: number;
+	/** Existing artifact revision this answer should revise, if requested in chat. */
+	artifact_target?: { artifactId: string; baseRevision: number; instruction: string };
 	/** True while the assistant message is still streaming. */
 	pending?: boolean;
 	ts: number;
