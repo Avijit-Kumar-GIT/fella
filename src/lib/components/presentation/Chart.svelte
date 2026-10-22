@@ -44,9 +44,9 @@
 		return () => { disposed = true; clearTimeout(timer); observer.disconnect(); view?.finalize(); };
 	});
 </script>
-<figure>
+<figure class="presentation-chart">
 	{#if props.title}<figcaption>{props.title}</figcaption>{/if}
-	<div class="chart-scroll" aria-label={props.title ?? 'Visualization of saved results'} role="img"><div class="chart-target" bind:this={container}></div></div>
+	<div class="chart-scroll" aria-label={props.title ?? 'Visualization of saved results'} role="img"><div class="chart-target presentation-chart-target" bind:this={container}></div></div>
 	{#if status}<p class="status" role="status">{status}</p>{/if}
 	{#if !result.complete}<p class="scope">This visualization uses {result.rows.length} saved rows, not the full dataset ({result.row_count} rows).</p>{/if}
 	{#if isDerived}
@@ -58,8 +58,11 @@
 	{/if}
 </figure>
 <style>
-	figure { margin: 0; min-width: 0; } figcaption { font-size: .85rem; font-weight: 550; margin-bottom: .65rem; }
-	.chart-scroll { overflow: auto; max-height: 48rem; } .chart-target { min-width: 200px; width: 100%; }
-	.chart-target :global(canvas) { display: block; } .status, .scope { color: var(--text-faint); font-size: .75rem; line-height: 1.5; margin: .4rem 0; }
-	details { margin-top: .5rem; } summary { cursor: pointer; width: fit-content; color: var(--text-dim); font-size: .75rem; padding: .3rem 0; }
+	figure { margin: 0; }
+	figcaption { margin-bottom: var(--space-2); font-size: var(--fs-lg); font-weight: 600; }
+	.chart-scroll { width: 100%; max-width: 100%; max-height: 48rem; overflow-x: hidden; overflow-y: auto; }
+	.chart-target { width: 100%; max-width: 100%; min-width: 0; }
+	.status, .scope { margin: var(--space-2) 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.5; }
+	details { margin-top: var(--space-2); }
+	summary { width: fit-content; max-width: 100%; padding: 5px 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; cursor: pointer; }
 </style>

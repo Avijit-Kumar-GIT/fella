@@ -68,15 +68,18 @@ try {
 		assert.match(presentationManifest().designGuidance, /do not prescribe a chart family/i);
 		assert.equal('example' in presentationManifest(), false);
 	});
-	await test('workspace transcript waits for OpenUI instead of showing canonical prose first', () => {
+	// Reliability contract v1: user explicitly replaced the loading-first behavior
+	// with immediate persisted OpenUI on reopening; see OPENUI-RELIABILITY-v1.md.
+	await test('workspace transcript renders saved OpenUI immediately without a preparing screen', () => {
 		const canonical = 'CANONICAL-ANSWER-MUST-NOT-LEAD';
 		const html = render(Message, { props: { message: {
 			id: 'workspace-openui-message', role: 'assistant', text: canonical, pending: false, ts: 1,
-			answer: { turn_id: 'workspace-openui-turn', text: canonical, presentation_program: PRESENTATION_EXAMPLE,
+			answer: { turn_id: 'workspace-openui-turn', text: canonical, presentation_program: 'root = Document([Title("Saved interactive answer"), Text("Available immediately")])',
 				workspace: { path: '/workspace', revision: 'r1' }, evidence: [], verification: [] }
 		} } }).body;
-		assert.match(html, /Preparing the interactive answer/);
-		assert.doesNotMatch(html, new RegExp(canonical));
+		assert.match(html, /Saved interactive answer/);
+		assert.match(html, /Available immediately/);
+		assert.doesNotMatch(html, /Preparing the interactive answer/);
 	});
 	await test('completed OpenUI answer auto-creates a persistent artifact without another model call', async () => {
 		const program = 'root = Document([Metric(resultId: "sales-result", field: "revenue", row: 0, title: "Q3 revenue", unit: "USD")])';

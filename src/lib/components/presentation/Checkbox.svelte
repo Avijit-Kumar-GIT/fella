@@ -8,7 +8,9 @@
 	let checked = $derived(Boolean(binding ? context.variables[binding.target] : props.checked));
 	function change(value: boolean) { if (binding) context.updateVariable(binding.target, value); }
 </script>
-<label><input type="checkbox" checked={checked} onchange={(event) => change(event.currentTarget.checked)} /><span>{props.label}</span></label>
+<label class="presentation-checkbox"><input type="checkbox" checked={checked} onchange={(event) => change(event.currentTarget.checked)} /><span>{props.label}</span></label>
 <style>
-	label { display: inline-flex; align-items: center; gap: .5rem; width: fit-content; max-width: 100%; color: var(--text-dim); font-size: .82rem; cursor: pointer; } input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--accent); } span { overflow-wrap: anywhere; }
+	label { display: inline-flex; min-width: 0; align-items: flex-start; gap: var(--space-2); width: fit-content; max-width: 100%; color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; }
+	input { width: 16px; height: 16px; flex: none; margin: 2px 0 0; accent-color: var(--brand); }
+	span { overflow-wrap: anywhere; }
 </style>

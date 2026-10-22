@@ -2,6 +2,7 @@ import { ipc } from './ipc';
 import { session } from './session.svelte';
 import type { ArtifactRecord, ResolvedArtifact } from './analytics-artifacts';
 import type { Message } from './types';
+import { cachePresentation } from './presentation/snapshot';
 
 /** Ephemeral artifact-link state. The presentation itself is part of the saved answer. */
 export const outputJobs = $state<Record<string, { busy: boolean; error: string; attempted: boolean }>>({});
@@ -9,7 +10,7 @@ const pending = new Map<string, Promise<ResolvedArtifact | null>>();
 type OutputBridge = Pick<
 	typeof ipc,
 	'presentationResults' | 'artifactList' | 'artifactCreate' | 'artifactResolve' | 'artifactRevise'
->;
+> & Partial<Pick<typeof ipc, 'presentationRepair'>>;
 
 export interface OutputTarget {
 	artifactId: string;
@@ -28,7 +29,6 @@ export async function ensureAnalyticalOutput(
 	if (!turnId || message.pending || message.answer?.clarification) return null;
 	const active = pending.get(turnId);
 	if (active) return active;
-	if (outputJobs[turnId]?.attempted && !message.artifact_id) return null;
 	outputJobs[turnId] = { busy: true, error: '', attempted: true };
 	const work = (async (): Promise<ResolvedArtifact | null> => {
 		try {
@@ -39,15 +39,21 @@ export async function ensureAnalyticalOutput(
 				if (!checked.valid) {
 					throw new Error(`The saved OpenUI answer could not be validated. ${checked.issues.map(item => item.message).join('; ').slice(0, 1600)}`);
 				}
+			cachePresentation(message, checked.normalizedProgram, saved.results);
+			persist();
 			return saved;
 			}
-			const program = message.answer?.presentation_program?.trim();
-			if (!program) {
-				throw new Error('Fella could not compose the interactive answer. The verified answer is shown below.');
-			}
+			let program = message.answer?.presentation_program?.trim() ?? '';
 			const { run, results } = await bridge.presentationResults(workspace, turnId);
 			const { validatePresentation } = await import('./presentation/validate');
-			const checked = validatePresentation(program, results);
+			let checked = validatePresentation(program, results);
+			// Repair only the presentation, using saved evidence and the actual
+			// parser errors. This never reruns analytical tools or edits the run.
+			for (let attempt = 0; !checked.valid && bridge.presentationRepair && attempt < 2; attempt++) {
+				const repaired = await bridge.presentationRepair(workspace, turnId, program, checked.issues.map(issue => issue.message), session.model || undefined);
+				program = repaired.program;
+				checked = validatePresentation(program, results);
+			}
 			if (!checked.valid) {
 				throw new Error(`The OpenUI answer could not be validated. ${checked.issues.map(item => item.message).join('; ').slice(0, 2400)}`);
 			}
@@ -79,6 +85,7 @@ export async function ensureAnalyticalOutput(
 			}
 			message.artifact_id = resolved.artifact.id;
 			message.artifact_revision = resolved.revision.revision;
+			cachePresentation(message, resolved.revision.program, resolved.results);
 			persist();
 			return resolved;
 		} catch (error) {

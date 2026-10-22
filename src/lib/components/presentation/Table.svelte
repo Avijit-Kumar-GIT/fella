@@ -10,10 +10,12 @@
 	let result = $derived(requireResult(context.results, props.resultId));
 	let indices = $derived(filteredRows(result, context.state));
 </script>
-{#if props.title}<h3>{props.title}</h3>{/if}
+{#if props.title}<h3 class="presentation-table-title">{props.title}</h3>{/if}
 {#if props.rows !== undefined}
 	<DerivedTable source={result} rows={props.rows} fields={props.fields} columnFormats={props.columnFormats} />
 {:else}
 	<ResultTable {result} fields={props.fields ?? result.columns} {indices} columnFormats={props.columnFormats} />
 {/if}
-<style>h3 { margin: 0 0 .5rem; font-size: .88rem; font-weight: 550; }</style>
+<style>
+	h3 { margin: 0 0 var(--space-2); color: var(--text); font-size: var(--fs-lg); font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+</style>

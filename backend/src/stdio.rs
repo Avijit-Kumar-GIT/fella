@@ -476,6 +476,19 @@ async fn dispatch(
                 let turn_id: String = required(&request.params, "turnId")?;
                 engine.presentation_results(&workspace, &turn_id)
             }
+            "presentation_repair" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let turn_id: String = required(&request.params, "turnId")?;
+                let program: String = required(&request.params, "program")?;
+                let issues: Vec<String> = required(&request.params, "issues")?;
+                let model = request.params.get("model").and_then(Value::as_str);
+                // This intentionally uses the app runtime: saved answers can
+                // reopen with their workspace unmounted, and every repair must
+                // share the same per-turn retry budget. No source tools exist.
+                engine
+                    .repair_presentation(&workspace, &turn_id, &program, &issues, model)
+                    .await
+            }
             "artifact_list" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 value_result(crate::engine::artifacts::list(

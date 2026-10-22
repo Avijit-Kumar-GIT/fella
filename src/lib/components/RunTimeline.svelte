@@ -128,9 +128,10 @@
 		const runKey = turn?.id ?? message?.id ?? '';
 		if (runKey !== previousRunKey) {
 			previousRunKey = runKey;
-			expanded = Boolean(turn);
+			expanded = false;
 		}
-		if (running) expanded = true;
+		// Running/completion updates must never open or undo the user's choice.
+		// The compact header still shows live progress while steps stay closed.
 	});
 
 	function sourceLabel(source: EvidenceSource): string {

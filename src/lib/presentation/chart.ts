@@ -6,11 +6,11 @@ const object = (value: unknown): value is Obj => !!value && typeof value === 'ob
 const marks = new Set(['arc', 'area', 'bar', 'boxplot', 'circle', 'errorband', 'errorbar', 'line', 'point', 'rect', 'rule', 'square', 'text', 'tick', 'trail']);
 const channels = new Set('x y x2 y2 xOffset yOffset theta theta2 radius radius2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth size shape angle text tooltip detail order row column facet longitude latitude longitude2 latitude2'.split(' '));
 const styleChannels = new Set('color fill stroke opacity fillOpacity strokeOpacity strokeWidth size shape angle'.split(' '));
-const forbidden = /^(?:__proto__|prototype|constructor|data|datasets|url|href|image|images|signals?|expr|expression|calculate|filter|transform|params?|bind|on|usermeta|formatType|labelExpr|encode|handler|event|selection|lookup|config)$/i;
+const forbidden = /^(?:__proto__|prototype|constructor|data|datasets|url|href|image|images|signals?|expr|expression|calculate|filter|transform|params?|bind|on|usermeta|labelExpr|encode|handler|event|selection|lookup|config)$/i;
 const markKeys = new Set('type color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size shape angle orient interpolate tension point line clip filled cornerRadius cornerRadiusTopLeft cornerRadiusTopRight cornerRadiusBottomLeft cornerRadiusBottomRight thickness binSpacing continuousBandSize discreteBandSize strokeCap strokeJoin font fontSize fontStyle fontWeight align baseline dx dy limit ellipsis'.split(' '));
-const encodingKeys = new Set('field type title aggregate bin timeUnit sort scale axis legend stack impute bandPosition spacing header value'.split(' '));
+const encodingKeys = new Set('field type title aggregate bin timeUnit sort scale axis legend stack impute bandPosition spacing header value format formatType'.split(' '));
 const auxiliaryKeys = new Set(('type title domain domainMin domainMax domainMid zero nice reverse clamp padding paddingInner paddingOuter range scheme base exponent constant round ' +
-	'orient format tickCount values labelAngle labelLimit labelPadding labelOverlap labelColor labelFontSize titleColor titleFontSize grid gridColor domainColor tickColor tickSize offset ' +
+	'orient format formatType tickCount values labelAngle labelLimit labelPadding labelOverlap labelColor labelFontSize titleColor titleFontSize grid gridColor domainColor tickColor tickSize offset ' +
 	'columns direction gradientLength symbolType symbolSize symbolStrokeWidth symbolOpacity labelAlign titleAnchor titlePadding labelFontWeight titleFontWeight ' +
 	'maxbins step extent anchor divide steps binned ' +
 	'field op order header labels labelOrient titleOrient labelExpr ' +
@@ -47,13 +47,28 @@ export function validateChartSpec(spec: unknown, result: BoundResult): void {
 	function field(value: unknown): void {
 		if (typeof value !== 'string' || !fields.has(value)) throw new Error(`Chart field “${String(value)}” is not present in saved result ${result.id}.`);
 	}
+	function formatting(value: Obj): void {
+		if (value.formatType !== undefined && value.formatType !== 'number' && value.formatType !== 'time') throw new Error('Chart formatType must be the built-in "number" or "time"; custom format functions are disabled.');
+		if (value.format === undefined) return;
+		const validPattern = (pattern: unknown) => typeof pattern === 'string' && pattern.length <= 256;
+		if (typeof value.format === 'string') {
+			if (!validPattern(value.format)) throw new Error('Chart format must be a bounded number/time pattern.');
+			// Prevent a numeric field width/precision from allocating an enormous label.
+			if (value.formatType !== 'time' && value.type !== 'temporal' && /\d{5,}/.test(value.format)) throw new Error('Chart numeric format exceeds the label budget.');
+			return;
+		}
+		const units = new Set(['year', 'quarter', 'month', 'date', 'week', 'day', 'hours', 'minutes', 'seconds', 'milliseconds']);
+		if (!object(value.format) || value.formatType === 'number' || !Object.keys(value.format).length || Object.entries(value.format).some(([unit, pattern]) => !units.has(unit) || !validPattern(pattern))) throw new Error('Chart format must be a number/time string or a standard dynamic time-format object.');
+	}
 	function auxiliary(value: unknown, depth = 0): void {
 		if (depth > 12) throw new Error('Chart style nesting is too deep.');
 		if (Array.isArray(value)) { value.forEach((v) => auxiliary(v, depth + 1)); return; }
 		if (!object(value)) return;
 		known(value, auxiliaryKeys, 'style');
+		formatting(value);
 		for (const [key, item] of Object.entries(value)) {
 			if (key === 'field') field(item);
+			if (key === 'format' || key === 'formatType') continue;
 			auxiliary(item, depth + 1);
 		}
 	}
@@ -65,6 +80,7 @@ export function validateChartSpec(spec: unknown, result: BoundResult): void {
 			for (const definition of Array.isArray(settings) ? settings : [settings]) {
 				if (!object(definition)) throw new Error(`Chart channel ${channel} needs a field definition.`);
 				known(definition, encodingKeys, 'encoding');
+				formatting(definition);
 				if ('value' in definition && !styleChannels.has(channel)) throw new Error('Analytical chart values must reference saved fields, not model-authored constants.');
 				if ('field' in definition) {
 					if (object(definition.field) && ['row', 'column', 'repeat', 'layer'].includes(String(definition.field.repeat)) && Object.keys(definition.field).length === 1) { /* resolves from validated repeat fields */ }

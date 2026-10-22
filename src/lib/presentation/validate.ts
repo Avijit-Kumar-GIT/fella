@@ -1,5 +1,5 @@
 import { BUILTIN_NAMES, createParser, parseExpression, split, tokenize, toNumber, type ASTNode, type ElementNode, type Token } from '@openuidev/lang-core';
-import { componentDefinitions, type ComponentName } from './schemas';
+import { componentDefinitions, normalizeCardTone, type ComponentName } from './schemas';
 import { presentationSchema } from './manifest';
 import { derivedRowsResult, requireResult, validateResults } from './results';
 import { validateChartSpec } from './chart';
@@ -160,7 +160,7 @@ function namedComponentArgument(argument: string): { name: string; value: string
 		if (Object.hasOwn(closers, char)) stack.push(closers[char]);
 		else if (')]}'.includes(char)) {
 			if (stack.pop() !== char) return null;
-		} else if (char === ':' && !stack.length) {
+		} else if ((char === ':' || char === '=' && argument[index + 1] !== '=' && !'=!<>'.includes(argument[index - 1] ?? ' ')) && !stack.length) {
 			const name = argument.slice(0, index).trim();
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
 			const value = argument.slice(index + 1).trim();
@@ -355,6 +355,7 @@ function assertCompleteOpenUiExpression(tokens: Token[]): void {
 			if (operator === 19) {
 				if (![14, 15, 16, 17, 18].includes(current()?.t ?? -1)) throw new Error('The presentation contains malformed member access.');
 				take();
+				if (current()?.t === 1) throw new Error('OpenUI does not support JavaScript method calls such as .slice(...). Use @Top(@Rows("result-id"), "field", count, "desc") to select saved rows, or a supported OpenUI function.');
 			} else if (operator === 3) {
 				parseExpression(0);
 				expect(4);
@@ -823,8 +824,14 @@ function inspectSourceTree(value: unknown, results: BoundResult[], resultIds: Se
 		for (const [name, prop] of Object.entries(props)) {
 			if (name !== 'children' && containsComponentValue(prop, componentValues)) throw new Error('Component references may only be used as presentation children, not as computed prop values.');
 		}
-		const resultId = typeof props.resultId === 'string' ? props.resultId : null;
-		if (['Metric', 'Table', 'Chart', 'ResultFilter'].includes(node.typeName) && !resultId && !(node.typeName === 'Metric' && containsRows(props.value))) throw new Error(`${node.typeName} must be bound to a supplied saved result.`);
+		// Each/component templates retain literal props as official AST Str nodes until
+		// evaluation. Recognize those exact IDs; never invent or infer a missing binding.
+		const resultId = typeof props.resultId === 'string' ? props.resultId : isAstNode(props.resultId) && props.resultId.k === 'Str' ? props.resultId.v : null;
+		if (['Metric', 'Table', 'Chart', 'ResultFilter'].includes(node.typeName) && !resultId && !(node.typeName === 'Metric' && containsRows(props.value))) {
+			throw new Error(node.typeName === 'Metric'
+				? 'Metric must be bound to a supplied saved result. Use resultId, field and a zero-based row for an exact value, or derive value from @Rows("result-id"). Do not copy analytical numbers into literal value props.'
+				: `${node.typeName} must be bound to a supplied saved result.`);
+		}
 		if (resultId) { requireResult(results, resultId); resultIds.add(resultId); }
 		if ((node.typeName === 'Table' || node.typeName === 'Chart') && props.rows !== undefined) {
 			if (!onlyRowsDerived(props.rows)) throw new Error(`${node.typeName} rows must derive from @Rows("result-id").`);
@@ -943,6 +950,10 @@ export function validatePresentation(program: string, results: BoundResult[], pe
 			const check = definition.props.safeParse(props);
 			if (!check.success) throw new Error(`${path}: ${check.error.issues.map((item) => item.message).join('; ')}`);
 			const safeProps = check.data as Record<string, unknown>;
+			if (node.typeName === 'Card') {
+				safeProps.tone = normalizeCardTone(safeProps.tone);
+				node.props.tone = safeProps.tone;
+			}
 			if (node.typeName === 'Document' && depth > 0) throw new Error('Document may only be the root.');
 			if (node.typeName === 'Metric') {
 				if (safeProps.value === undefined) {

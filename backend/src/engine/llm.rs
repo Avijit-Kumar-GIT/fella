@@ -67,7 +67,14 @@ fn model_num_ctx() -> u32 {
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
     let len = |v: &Json| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
     let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
-    ((approx_tok * 5 / 4) + max_output_tokens())
+    let presentation = tools_json.and_then(Json::as_array).is_some_and(|tools| {
+        tools.iter().any(|tool| {
+            tool["function"]["name"]
+                .as_str()
+                .is_some_and(is_presentation_output_tool)
+        })
+    });
+    ((approx_tok * 5 / 4) + output_token_budget(presentation))
         .next_multiple_of(2048)
         .clamp(model_num_ctx(), 32768)
 }
@@ -82,6 +89,31 @@ fn max_output_tokens() -> u32 {
         .and_then(|v| v.parse().ok())
         .filter(|&n: &u32| n >= 64)
         .unwrap_or(1024)
+}
+
+/// OpenUI is a complete program rather than a short analytical tool argument.
+/// Keep the ordinary-call setting intact, but do not truncate a finalizer or
+/// presentation-only repair at the legacy 1,024-token default. An explicit
+/// larger output setting still applies; smaller settings cannot starve OpenUI.
+fn is_presentation_output_tool(name: &str) -> bool {
+    matches!(name, "fella_openui_answer" | "fella_openui_repair")
+}
+
+fn output_token_budget(presentation: bool) -> u32 {
+    let configured = max_output_tokens();
+    if presentation {
+        configured.max(8192)
+    } else {
+        configured
+    }
+}
+
+fn request_output_tokens(tools: &[ToolSchema]) -> u32 {
+    output_token_budget(
+        tools
+            .iter()
+            .any(|tool| is_presentation_output_tool(&tool.name)),
+    )
 }
 
 /// Whether to let a reasoning model (gpt-oss, deepseek-r1, qwen3, …) emit its
@@ -450,7 +482,7 @@ impl LlmClient {
             "options": {
                 "temperature": 0.2,
                 "num_ctx": num_ctx,
-                "num_predict": max_output_tokens(),
+                "num_predict": request_output_tokens(tools),
             },
         });
         if let Some(t) = tools_json {
@@ -491,7 +523,7 @@ impl LlmClient {
             // reasoning tokens count against this budget, so the usual 1024
             // cap would starve the visible answer; floor it at 8192 so the
             // runaway guard stays without clipping normal replies.
-            body["max_completion_tokens"] = json!(max_output_tokens().max(8192));
+            body["max_completion_tokens"] = json!(request_output_tokens(tools).max(8192));
             if openai_gpt5_family(&self.model) {
                 // Its default `reasoning_effort` is rejected alongside function
                 // tools here; `"none"` is the fast, trace-free path Fella wants.
@@ -499,7 +531,7 @@ impl LlmClient {
             }
         } else {
             body["temperature"] = json!(0.2);
-            body["max_tokens"] = json!(max_output_tokens());
+            body["max_tokens"] = json!(request_output_tokens(tools));
         }
         if !tools.is_empty() {
             body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
@@ -1133,6 +1165,42 @@ mod tests {
         assert!(got > 8192, "should grow past the floor, got {got}");
         assert_eq!(got % 2048, 0, "should land on a 2048 boundary, got {got}");
         assert!(got <= 32768, "should be clamped at 32k, got {got}");
+    }
+
+    #[test]
+    fn openui_output_budget_is_scoped_to_actual_finalizer_tools() {
+        let schema = |name: &str| ToolSchema {
+            name: name.into(),
+            description: String::new(),
+            parameters: json!({"type": "object"}),
+        };
+        let ordinary = max_output_tokens();
+        assert_eq!(request_output_tokens(&[]), ordinary);
+        assert_eq!(request_output_tokens(&[schema("run_sql")]), ordinary);
+        assert_eq!(
+            request_output_tokens(&[schema("my_fella_openui_answer")]),
+            ordinary
+        );
+        for name in ["fella_openui_answer", "fella_openui_repair"] {
+            assert_eq!(request_output_tokens(&[schema(name)]), ordinary.max(8192));
+        }
+    }
+
+    #[test]
+    fn openui_context_fit_reserves_the_larger_output_budget() {
+        let messages = json!([{"role": "user", "content": "saved results".repeat(1000)}]);
+        let tool = ToolSchema {
+            name: "fella_openui_repair".into(),
+            description: String::new(),
+            parameters: json!({"type": "object"}),
+        };
+        let tools = json!([tool_schema_json(&tool)]);
+        let approx = ((messages.to_string().len() + tools.to_string().len()) / 4) as u32;
+        let expected = ((approx * 5 / 4) + request_output_tokens(&[tool]))
+            .next_multiple_of(2048)
+            .clamp(model_num_ctx(), 32768);
+        assert_eq!(fit_num_ctx(&messages, Some(&tools)), expected);
+        assert!(fit_num_ctx(&messages, Some(&tools)) >= fit_num_ctx(&messages, None));
     }
 
     #[test]

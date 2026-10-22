@@ -1,3 +1,33 @@
+<script module lang="ts">
+	import type { Answer } from '$lib/types';
+
+	/** Explicit unresolved meaning is actionable; missing independent grounding
+	 * alone is a verification limit, not proof that a check raised a concern. */
+	export function answerSemanticGaps(answer: Answer): string[] {
+		const gaps = [...(answer.contract?.unresolved ?? []), ...(answer.grounding?.unresolved ?? [])]
+			.filter((gap) => gap.trim().length > 0);
+		if (answer.contract?.interpretation === 'ambiguous' && !gaps.length) {
+			gaps.push('The recorded interpretation is ambiguous. Clarify the intended meaning before relying on this answer.');
+		} else if (answer.contract?.interpretation === 'unsupported' && !gaps.length) {
+			gaps.push('The recorded interpretation is unsupported by the available evidence.');
+		}
+		return [...new Set(gaps)];
+	}
+
+	/** UI attention only. Never changes the engine's status or upgrades a run. */
+	export function answerNeedsReview(answer: Answer): boolean {
+		if (answer.clarification) return false; // The existing clarification UI owns this decision.
+		if (answerSemanticGaps(answer).length) return true;
+		if (answer.verification.some((check) => {
+			if (check.outcome === 'not_run') return false;
+			if (check.finding?.effect === 'informational' && check.finding.code !== 'advisory') return false;
+			return check.outcome === 'flagged' || !check.ok;
+		})) return true;
+		return answer.status === 'needs_review' && answer.evidence.length > 0
+			&& answer.evidence.every((item) => !!item.error || item.verifier_disposition?.state === 'excluded');
+	}
+</script>
+
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';

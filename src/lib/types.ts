@@ -699,6 +699,8 @@ export interface Message {
 	artifact_revision?: number;
 	/** Local OpenUI control choices, independent of analytical source or result state. */
 	presentation_state?: Record<string, unknown>;
+	/** Small validated display cache; permits immediate rendering after restart. */
+	presentation_snapshot?: import('./presentation/snapshot').PresentationSnapshot;
 	/** Existing artifact revision this answer should revise, if requested in chat. */
 	artifact_target?: { artifactId: string; baseRevision: number; instruction: string };
 	/** True while the assistant message is still streaming. */

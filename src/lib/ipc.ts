@@ -149,6 +149,8 @@ export const ipc = {
 		invoke<ArtifactComparison>('artifact_compare', { workspaceId, artifactId, beforeRevision, afterRevision }),
 	presentationResults: (workspaceId: string, turnId: string) =>
 		invoke<{ run: AnalysisTurn; results: BoundResult[] }>('presentation_results', { workspaceId, turnId }),
+	presentationRepair: (workspaceId: string, turnId: string, program: string, issues: string[], model?: string) =>
+		invoke<{ program: string }>('presentation_repair', { workspaceId, turnId, program, issues, model }),
 	studioList: (workspaceId: string) => invoke<StudioDocument[]>('studio_list', { workspaceId }),
 	studioCreate: (workspaceId: string, title: string) => invoke<StudioDocument>('studio_create', { workspaceId, title }),
 	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),

@@ -9,6 +9,20 @@ const children = z.array(z.unknown()).min(1).max(limits.components);
 const selectOptions = z.array(z.object({ value: z.string().max(240), label: z.string().max(240) }).strict()).min(1).max(200);
 const columnFormat = z.object({ label: label.optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), unit: z.string().max(40).optional(), decimals: z.number().int().min(0).max(8).optional() }).strict();
 
+export type CardTone = 'plain' | 'quiet' | 'accent';
+/** Cosmetic compatibility only: no model string becomes a class, color or executable style. */
+export const CARD_TONE_ALIASES: Readonly<Record<string, CardTone>> = Object.freeze({
+	plain: 'plain', default: 'plain', normal: 'plain', neutral: 'plain', outline: 'plain', outlined: 'plain', ghost: 'plain', transparent: 'plain',
+	quiet: 'quiet', soft: 'quiet', subtle: 'quiet', muted: 'quiet', secondary: 'quiet', positive: 'quiet', negative: 'quiet', success: 'quiet', warning: 'quiet', caution: 'quiet', danger: 'quiet',
+	accent: 'accent', primary: 'accent', highlight: 'accent', highlighted: 'accent', emphasis: 'accent', info: 'accent'
+});
+
+export function normalizeCardTone(value: unknown): CardTone {
+	if (typeof value !== 'string') return 'plain';
+	const key = value.trim().toLowerCase();
+	return Object.hasOwn(CARD_TONE_ALIASES, key) ? CARD_TONE_ALIASES[key] : 'plain';
+}
+
 /** One definition source drives the actual Svelte registry, prompt and strict validation. */
 export const componentDefinitions = {
 	Document: {
@@ -16,8 +30,8 @@ export const componentDefinitions = {
 		props: z.object({ children }).strict()
 	},
 	Card: {
-		description: 'A restrained surface that groups related content. Use sparingly; do not wrap every component in a card.',
-		props: z.object({ children, title: label.nullable().optional(), detail: z.string().max(1000).nullable().optional(), tone: z.enum(['plain', 'quiet', 'accent']).nullable().optional() }).strict()
+		description: 'A restrained surface that groups related content. Preferred tones: plain, quiet, accent. Soft/subtle/muted and semantic positive/negative map to quiet; outline maps to plain; highlight/primary map to accent. Unknown or omitted cosmetic tones default to plain, never arbitrary colors. Use sparingly; do not wrap every component in a card.',
+		props: z.object({ children, title: label.nullable().optional(), detail: z.string().max(1000).nullable().optional(), tone: z.string().max(80).nullable().optional() }).strict()
 	},
 	Section: {
 		description: 'A titled, left-aligned section of analytical content.',

@@ -6,6 +6,7 @@
 	import PythonCalculationDetails from './PythonCalculationDetails.svelte';
 	import ReplayStatus from './ReplayStatus.svelte';
 	import VerificationChecks from './VerificationChecks.svelte';
+	import { answerNeedsReview, answerSemanticGaps } from './EvidenceSummary.svelte';
 
 	let {
 		answer,
@@ -33,6 +34,8 @@
 	let providedContext = $derived(
 		(answer.provenance?.context_sections ?? []).map((section) => CONTEXT_LABEL[section])
 	);
+	let semanticGaps = $derived(answerSemanticGaps(answer));
+	let unscopedReview = $derived(answer.status === 'needs_review' && !answerNeedsReview(answer));
 
 	// Which steps have their raw detail (SQL, table, output) revealed.
 	let openDetail = $state<Record<number, boolean>>({});
@@ -206,6 +209,9 @@
 				{#if providedContext.length}
 					<div class="basis-copy">Context supplied to the model: {providedContext.join(', ')}.</div>
 				{/if}
+				{#if unscopedReview}
+					<p class="basis-copy" data-recorded-verification-status="needs_review">Recorded verification status: Needs review. No actionable check was recorded; the checks do not independently certify the interpretation or assumptions.</p>
+				{/if}
 				{#if answer.provenance?.clarification_of}
 					<div class="basis-copy">This analysis continues from your clarification.</div>
 				{/if}
@@ -246,10 +252,16 @@
 				{/if}
 			</div>
 			<VerificationChecks
-				status={suppressReviewStatus && answer.status === 'needs_review' ? undefined : answer.status}
+				status={(suppressReviewStatus || unscopedReview) && answer.status === 'needs_review' ? undefined : answer.status}
 				checks={runWideChecks}
 				heading={runWideChecks.length ? 'Run-wide checks' : undefined}
 			/>
+			{#if semanticGaps.length}
+				<section class="basis" aria-label="Unresolved interpretation">
+					<div class="checks-heading">Unresolved interpretation</div>
+					<ul>{#each semanticGaps as gap}<li class="basis-copy">{gap}</li>{/each}</ul>
+				</section>
+			{/if}
 			{#if answer.evidence.length}
 			<ol class="steps">
 				{#each answer.evidence as e, i (e.id ?? `evidence-${i}`)}

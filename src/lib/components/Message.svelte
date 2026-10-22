@@ -2,7 +2,7 @@
 	import type { Message } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import EvidenceBlock from './EvidenceBlock.svelte';
-	import EvidenceSummary from './EvidenceSummary.svelte';
+	import EvidenceSummary, { answerNeedsReview } from './EvidenceSummary.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
@@ -23,6 +23,8 @@
 		onopeninvestigationrun?: (turnId: string) => void;
 	} = $props();
 	let openUiPrimary = $derived(!!message.answer?.workspace && !message.answer?.clarification);
+	let needsAttention = $derived(!!message.answer && answerNeedsReview(message.answer)
+		&& message.answer.status !== 'failed' && message.answer.status !== 'insufficient_data');
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
 	// its own line. Peel any leading such lines off so they render muted, apart
@@ -79,7 +81,7 @@
 			<div class="assistant-identity">
 				<Logo size={18} active={message.pending} />
 				<strong>Fella</strong>
-				{#if message.answer?.status === 'needs_review'}
+				{#if needsAttention}
 					<span
 						class="review-status"
 						role="status"
@@ -136,7 +138,7 @@
 			answer={message.answer}
 			bodyId={`evidence-${message.id}`}
 			{expanded}
-			suppressReviewStatus={message.answer.status === 'needs_review'}
+			suppressReviewStatus={needsAttention}
 			onrerun={message.answer.turn_id ? onrerun : undefined}
 		/>
 		{#if message.answer.turn_id && onopeninvestigationrun}

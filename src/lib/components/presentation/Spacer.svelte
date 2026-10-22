@@ -4,5 +4,7 @@
 </script>
 <div class="spacer" data-size={props.size ?? 'md'} aria-hidden="true"></div>
 <style>
-	.spacer[data-size='sm'] { height: .35rem; } .spacer[data-size='md'] { height: .8rem; } .spacer[data-size='lg'] { height: 1.4rem; }
+	.spacer[data-size='sm'] { height: var(--space-1); }
+	.spacer[data-size='md'] { height: var(--space-2); }
+	.spacer[data-size='lg'] { height: var(--space-3); }
 </style>

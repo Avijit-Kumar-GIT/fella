@@ -118,7 +118,7 @@ struct OpenUiAnswer {
 /// the model. The renderer still performs authoritative OpenUI parsing and
 /// schema validation; this early check lets the existing finalizer retry repair
 /// common bracket mistakes without rerunning analysis.
-fn validate_openui_delimiters(program: &str) -> EngineResult<()> {
+pub(crate) fn validate_openui_delimiters(program: &str) -> EngineResult<()> {
     let chars: Vec<char> = program.chars().collect();
     let mut brackets = Vec::new();
     let mut quote = None;
