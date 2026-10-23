@@ -57,6 +57,7 @@ declare global {
 			setWindowAppearance(dark: boolean): Promise<void>;
 			pathForFile(file: File): string;
 			windowAction(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
+			onAppCommand(callback: (command: string) => void): void;
 		};
 	}
 

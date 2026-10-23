@@ -4857,6 +4857,37 @@ test('Composer model search filters the available models', async ({ page }) => {
 	await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible();
 });
 
+test('Composer model selection applies to the open conversation and survives its next archive', async ({ page }) => {
+	await installDesktopMock(page, {
+		projectConversationArchives: [{
+			id: 'model-choice-conversation',
+			workspace: null,
+			saved_at_ms: 2,
+			messages: [
+				{ id: 'model-user', role: 'user', text: 'Keep this conversation unchanged.', ts: 1 },
+				{ id: 'model-answer', role: 'assistant', text: 'The saved answer remains here.', ts: 2 }
+			]
+		}],
+		providerHealth: { reachable: true, rejected: false, models: ['gpt-4.1-mini', 'gpt-5.1'] }
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Open conversation: Keep this conversation unchanged.' }).click();
+	const transcript = page.getByRole('log', { name: 'conversation' });
+	await expect(transcript).toContainText('The saved answer remains here.');
+	const before = await transcript.innerText();
+	const modelTrigger = page.locator('.model-trigger');
+	await expect(modelTrigger).toContainText('gpt-4.1-mini');
+	await modelTrigger.click();
+	await page.getByRole('option', { name: 'gpt-5.1', exact: true }).click();
+	await expect(modelTrigger).toContainText('gpt-5.1');
+	await expect.poll(async () => page.evaluate(async () => {
+		const raw = await window.fella.invoke('conversation_load', { id: 'model-choice-conversation' });
+		return JSON.parse(raw).model;
+	})).toBe('gpt-5.1');
+	await expect(transcript).toHaveText(before);
+	await expect.poll(async () => page.evaluate(async () => (await window.fella.invoke('get_settings')).model)).toBe('gpt-5.1');
+});
+
 
 test('Composer command completion uses shared buttons and keeps keyboard selection', async ({ page }) => {
 	await installDesktopMock(page);

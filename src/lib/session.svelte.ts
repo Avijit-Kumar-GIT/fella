@@ -589,6 +589,7 @@ export class Conversation {
 				JSON.stringify({
 					id: this.id,
 					workspace,
+					model: this.model,
 					messages: this.messages.slice(-200),
 					companionPane: this.companionPane
 				})
@@ -1637,11 +1638,13 @@ class Session {
 		messages: Message[],
 		title: string | null = null,
 		workspace: string | null = null,
-		companionPane: unknown = null
+		companionPane: unknown = null,
+		model: string | null = null
 	): void {
 		const existing = this.conversations.findIndex((conversation) => conversation.id === id);
 		if (existing >= 0) {
 			const conversation = this.conversations[existing];
+			if (typeof model === 'string') conversation.model = model;
 			if (conversation.workspaceScope === undefined) conversation.workspaceScope = workspace;
 			conversation.companionPane = parseCompanionPane(companionPane) ?? conversation.companionPane;
 			const context = this.#ensureWorkspaceContext(workspace ?? null);
@@ -1655,7 +1658,7 @@ class Session {
 			return;
 		}
 		const conversation = new Conversation(id);
-		conversation.model = this.model;
+		conversation.model = typeof model === 'string' ? model : this.model;
 		conversation.title = title;
 		conversation.workspaceScope = workspace;
 		conversation.companionPane = parseCompanionPane(companionPane);
@@ -1842,6 +1845,7 @@ class Session {
 			id: conversation.id,
 			saved_at_ms: Date.now(),
 			workspace: conversation.workspaceScope ?? null,
+			model: conversation.model,
 			messages: conversation.messages,
 			title: conversation.title ?? undefined,
 			companionPane: conversation.companionPane
@@ -1870,7 +1874,7 @@ class Session {
 	 *  keeping); false only when the archive IPC threw. */
 	async #archiveRaw(raw: string | null): Promise<boolean> {
 		if (!raw) return true;
-		let saved: { id?: string; workspace?: string | null; messages?: unknown; companionPane?: unknown };
+		let saved: { id?: string; workspace?: string | null; model?: unknown; messages?: unknown; companionPane?: unknown };
 		try {
 			saved = JSON.parse(raw);
 		} catch {
@@ -1885,6 +1889,7 @@ class Session {
 			id: saved.id ?? '',
 			saved_at_ms: last?.ts ?? Date.now(),
 			workspace: archivedWorkspace(saved.messages, saved.workspace),
+			...(typeof saved.model === 'string' ? { model: saved.model } : {}),
 			messages: saved.messages,
 			companionPane: parseCompanionPane(saved.companionPane)
 		});

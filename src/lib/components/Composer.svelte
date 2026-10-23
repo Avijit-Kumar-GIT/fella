@@ -11,6 +11,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import { ipc } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import { enterUp } from '$lib/motion';
 	import type { ContextReference, SourceInfo } from '$lib/types';
@@ -22,6 +23,7 @@
 	let value = $state('');
 	let ta = $state<HTMLTextAreaElement>();
 	let contextInput = $state<HTMLInputElement>();
+	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history belongs to the active conversation.
 	let history = $derived(session.activeChat?.history ?? []);
@@ -56,7 +58,20 @@
 	let menuOff = $state(false); // dismissed with Esc until the text changes
 	let contextOpen = $state(false);
 	let contextQuery = $state('');
+	let modelPickerOpen = $state(false);
+	let modelSearch = $state('');
+	let modelBusy = $state(false);
+	let modelError = $state('');
 	let contextRefs = $derived(session.activeChat?.contextRefs ?? []);
+	let modelChoices = $derived.by(() => {
+		const choices = [...(session.health?.models ?? [])];
+		if (session.model && !choices.includes(session.model)) choices.unshift(session.model);
+		return [...new Set(choices)];
+	});
+	let filteredModels = $derived.by(() => {
+		const query = modelSearch.trim().toLowerCase();
+		return modelChoices.filter((model) => !query || model.toLowerCase().includes(query));
+	});
 	let pendingClarification = $derived.by(() => {
 		const latest = session.activeChat?.messages.at(-1);
 		if (latest?.role !== 'assistant' || latest.pending) return null;
@@ -83,7 +98,32 @@
 	});
 	$effect(() => {
 		if (contextOpen) queueMicrotask(() => contextInput?.focus());
+		if (modelPickerOpen) queueMicrotask(() => modelInput?.focus());
 	});
+
+	async function chooseModel(model: string): Promise<void> {
+		if (modelBusy || session.busy || !model) return;
+		if (model === session.model) {
+			modelPickerOpen = false;
+			modelSearch = '';
+			return;
+		}
+		modelBusy = true;
+		modelError = '';
+		try {
+			// Match /model: pin this conversation and set the default inherited by
+			// new conversations. The transcript itself remains untouched.
+			session.settings = await ipc.setSettings({ model });
+			session.activeChat.model = model;
+			session.persist();
+			modelPickerOpen = false;
+			modelSearch = '';
+		} catch (error) {
+			modelError = error instanceof Error ? error.message : String(error);
+		} finally {
+			modelBusy = false;
+		}
+	}
 
 	let pendingInput = $derived(!!session.pendingKey);
 	// Mount progress is separate from conversation activity. Only ask()'s
@@ -300,6 +340,7 @@
 	function onWindowClick(e: MouseEvent): void {
 		if (!wrapEl?.contains(e.target as Node)) {
 			contextOpen = false;
+			modelPickerOpen = false;
 		}
 	}
 </script>
@@ -503,6 +544,22 @@
 					<Icon name="plus" size={16} />
 				</Button>
 			{/if}
+			{#if !pendingInput && !unavailableWorkspacePath}
+				<Button
+					variant="ghost"
+					size="sm"
+					class="model-trigger"
+					aria-label={`Model: ${session.model || 'Choose a model'}`}
+					aria-haspopup="dialog"
+					aria-expanded={modelPickerOpen}
+					disabled={session.busy || modelBusy}
+					title="Choose a model"
+					onclick={() => { modelPickerOpen = !modelPickerOpen; modelError = ''; }}
+				>
+					<span class="model-trigger-label">{session.model || 'Choose model'}</span>
+					<Icon name="chevron-right" size={12} />
+				</Button>
+			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/') && !session.mountProgress}
 				<Button
 					variant="default"
@@ -528,6 +585,36 @@
 				</Button>
 			{/if}
 		</div>
+		{#if modelPickerOpen}
+			<div class="model-picker" role="dialog" aria-label="Choose a model" transition:enterUp>
+				<div class="model-picker-search">
+					<Icon name="search" size={16} />
+					<Input class="model-search" bind:ref={modelInput} bind:value={modelSearch} aria-label="Find a model" placeholder="Find a model…" spellcheck="false" />
+				</div>
+				<div class="model-options" role="listbox" aria-label="Available models" aria-busy={modelBusy}>
+					{#each filteredModels as model (model)}
+						<Button
+							variant="ghost"
+							class="model-option"
+							role="option"
+							aria-selected={model === session.model}
+							disabled={modelBusy || session.busy}
+							onclick={() => void chooseModel(model)}
+						>
+							<span>{model}</span>
+							{#if model === session.model}<Icon name="check" size={14} />{/if}
+						</Button>
+					{:else}
+						<p class="model-empty">{modelSearch.trim() ? `No models available from ${session.settings?.provider ?? 'the current provider'}.` : 'No models available from the current provider.'}</p>
+					{/each}
+				</div>
+				{#if modelError}<p class="model-error" role="alert">{modelError}</p>{/if}
+				<div class="model-picker-footer">
+					<span>{session.settings?.provider ?? 'Provider'}</span>
+					<Button variant="ghost" size="sm" aria-label="Provider settings" onclick={() => { modelPickerOpen = false; session.setWorkspaceView('settings'); }}>Provider settings</Button>
+				</div>
+			</div>
+		{/if}
 	</div>
 	{/if}
 </div>
@@ -947,6 +1034,85 @@
 		gap: var(--space-2);
 		min-height: 28px;
 	}
+	.model-picker {
+		position: absolute;
+		z-index: 24;
+		right: var(--pad);
+		bottom: calc(100% + 8px);
+		width: min(340px, calc(100vw - 24px));
+		max-height: min(60vh, 460px);
+		display: flex;
+		flex-direction: column;
+		gap: 6px;
+		padding: 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+	}
+	.model-picker-search {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		padding: 0 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		color: var(--text-faint);
+	}
+	.model-picker-search :global(.model-search) {
+		width: 100%;
+		min-width: 0;
+		min-height: 34px;
+		padding: 0;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		box-shadow: none;
+		font-size: var(--fs-sm);
+	}
+	.model-picker-search :global(.model-search:focus-visible) { outline: 0; box-shadow: none; }
+	.model-options { min-height: 30px; overflow-y: auto; overscroll-behavior: contain; }
+	:global(.model-option) {
+		display: flex;
+		justify-content: space-between;
+		gap: 10px;
+		min-height: 34px;
+		width: 100%;
+		padding: 6px 8px;
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		text-align: left;
+	}
+	:global(.model-option[aria-selected='true']) { color: var(--text); background: var(--bg-inset); }
+	:global(.model-option > span:first-child) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.model-empty, .model-error { margin: 4px 7px; color: var(--text-faint); font-size: var(--fs-xs); }
+	.model-error { color: var(--err); overflow-wrap: anywhere; }
+	.model-picker-footer {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 8px;
+		padding-top: 5px;
+		border-top: 1px solid var(--border);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	:global(.model-trigger) {
+		min-width: 0;
+		max-width: min(210px, 45vw);
+		min-height: 28px;
+		gap: 5px;
+		margin-left: auto;
+		padding: 4px 7px;
+		border-radius: var(--radius-chip);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+	}
+	:global(.model-trigger:hover:not(:disabled)),
+	:global(.model-trigger[aria-expanded='true']) { background: var(--bg-inset); color: var(--text); }
+	.model-trigger-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	:global(.model-trigger > svg) { flex: none; transform: rotate(90deg); }
 	.field :global(.composer-main-textarea) {
 		width: 100%;
 		min-height: 0;

@@ -339,10 +339,10 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 			if (!session.workspaceAt(workspaceId)) return false;
 		}
 		const raw = await ipc.conversationLoad(summary.id);
-		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown } =
+		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown; model?: string | null } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane);
+		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane, saved.model);
 		const focused = workspaceId
 			? session.focusWorkspace(workspaceId, summary.id)
 			: session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));

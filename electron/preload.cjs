@@ -4,6 +4,7 @@ const listeners = new Map();
 const terminalListeners = new Map();
 let nextAskId = 1;
 let nextTerminalId = 1;
+let appCommandCallback;
 
 ipcRenderer.on('fella:ask-event', (_event, message) => {
 	listeners.get(message.requestId)?.(message.event);
@@ -18,6 +19,9 @@ ipcRenderer.on('fella:terminal-exit', (_event, message) => {
 	const callbacks = terminalListeners.get(message.terminalId);
 	terminalListeners.delete(message.terminalId);
 	callbacks?.onExit({ exitCode: message.exitCode, signal: message.signal });
+});
+ipcRenderer.on('fella:app-command', (_event, command) => {
+	appCommandCallback?.(command);
 });
 
 contextBridge.exposeInMainWorld('fella', {
@@ -97,5 +101,9 @@ contextBridge.exposeInMainWorld('fella', {
 
 	windowAction(action) {
 		return ipcRenderer.invoke('fella:window-action', action);
+	},
+
+	onAppCommand(callback) {
+		appCommandCallback = callback;
 	}
 });

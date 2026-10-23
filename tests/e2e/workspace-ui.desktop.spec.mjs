@@ -406,3 +406,41 @@ test('follow-up UI: guide reading, explicit editing, and autosave retain workspa
 	await expect(context.locator('.guide-reading strong')).toHaveText('Currency:');
 	await screenshot('context-reading');
 });
+
+test('desktop shell: native application menu routes Chat and Notebook commands', async () => {
+	const labels = await app.evaluate(({ Menu }) => Menu.getApplicationMenu().items.map((item) => item.label));
+	expect(labels).toEqual(expect.arrayContaining(['File', 'Edit', 'View', 'Help']));
+	await chooseWorkspace('northstar');
+	await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('fella-open-notebook').click());
+	await expect(page.locator('.workspace-tools-pane')).toBeVisible();
+	await app.evaluate(({ Menu }) => Menu.getApplicationMenu().getMenuItemById('fella-show-chat').click());
+	await expect(page.locator('.workspace-tools-pane')).toBeHidden();
+});
+
+test('desktop shell: remembers a valid window size across relaunch', async () => {
+	const target = await app.evaluate(({ BrowserWindow, screen }) => {
+		const window = BrowserWindow.getAllWindows()[0];
+		const workArea = screen.getPrimaryDisplay().workArea;
+		const width = Math.max(560, Math.min(900, workArea.width - 40));
+		const height = Math.max(640, Math.min(680, workArea.height - 40));
+		window.setBounds({ x: workArea.x + 20, y: workArea.y + 20, width, height });
+		return window.getNormalBounds();
+	});
+	await page.waitForTimeout(350);
+	await app.close();
+	app = await electron.launch({
+		args: [join(root, 'electron/main.mjs'), `--user-data-dir=${join(dataDir, 'chromium')}`],
+		cwd: root,
+		env: {
+			...process.env,
+			FELLA_DATA_DIR: dataDir,
+			FELLA_ENGINE_PATH: join(root, 'electron/engine', `fella-engine-${process.arch}${process.platform === 'win32' ? '.exe' : ''}`),
+			FELLA_ELECTRON_URL: ''
+		}
+	});
+	page = await app.firstWindow();
+	await page.locator('.composer-main-textarea').waitFor();
+	const restored = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].getNormalBounds());
+	expect(restored.width).toBe(target.width);
+	expect(restored.height).toBe(target.height);
+});

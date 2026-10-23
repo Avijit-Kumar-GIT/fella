@@ -92,6 +92,20 @@
 	onMount(() => {
 		void session.rollOver();
 		composer?.focus();
+		window.fella?.onAppCommand?.((command) => {
+			switch (command) {
+				case 'new-conversation': startConversation(); break;
+				case 'open-folder': void openFolder(); break;
+				case 'settings': session.setWorkspaceView('settings'); break;
+				case 'search': paletteOpen = true; break;
+				case 'toggle-sidebar': session.toggleSidebar(); break;
+				case 'show-chat': session.setContentLayout('chat'); session.setWorkspaceView('ask'); break;
+				case 'open-notebook':
+					session.setWorkspaceView('ask');
+					session.setContentLayout('notebook');
+					break;
+			}
+		});
 		if (!isDesktop()) return;
 
 		void ipc
@@ -150,6 +164,13 @@
 		if (e.defaultPrevented) return;
 		const commandKey = e.ctrlKey || e.metaKey;
 		const key = e.key.toLowerCase();
+		// Electron's native application menu owns these accelerators. Keep this
+		// handler for the browser preview, but don't perform an action twice in
+		// the desktop app when the native menu dispatches its command.
+		if (isDesktop() && commandKey && !e.shiftKey && ['n', 'o', ',', 'k', 'b'].includes(key)) {
+			e.preventDefault();
+			return;
+		}
 		if (key === 'escape' && narrowNavigation && !session.sidebarCollapsed && !paletteOpen) { session.sidebarCollapsed = true; return; }
 		if (commandKey && key === 'k') {
 			e.preventDefault();
