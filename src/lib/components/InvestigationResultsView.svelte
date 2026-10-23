@@ -452,7 +452,7 @@
 	{/if}
 	<section class="results-section" aria-labelledby="results-findings-title">
 		<header class="results-section-heading">
-			<div><h3 id="results-findings-title">Key Findings</h3><p>Analyst-reviewed conclusions, linked to their Question and evidence.</p></div>
+			<div><h3 id="results-findings-title">Findings</h3></div>
 			<span>{investigation.findings?.length ?? 0}</span>
 		</header>
 		{#if investigation.findings?.length}
@@ -464,7 +464,7 @@
 					{@const fromEarlierRun = Boolean(question && question.latest_analysis_turn_id !== finding.analysis_turn_id)}
 					<article class="results-finding" id="finding-{finding.id}" aria-label="Finding {index + 1}" data-artifact-kind="reviewed-finding">
 						<div class="results-finding-heading">
-							<span>Analyst-reviewed Finding · Revision {finding.revision}</span>
+							<span>Revision {finding.revision}</span>
 							<Button type="button" variant="ghost" size="sm" aria-label="Copy Finding claim" onclick={() => void copyFindingClaim(finding)}>{findingCopyStatus[finding.id] === 'Finding claim copied.' ? 'Copied' : 'Copy claim'}</Button>
 						</div>
 						{#if findingCopyStatus[finding.id]}<span class="results-artifact-status" role="status">{findingCopyStatus[finding.id]}</span>{/if}
@@ -475,7 +475,7 @@
 						{#if fromEarlierRun}<p class="results-freshness-warning" role="status">Based on an earlier run than this Question’s latest answer. Review its source revision before treating this Finding as current.</p>{/if}
 						{#if question}
 							<div class="results-finding-question-row">
-								<p class="results-finding-question">Answers: {question.text}</p>
+								<p class="results-finding-question">Question: {question.text}</p>
 								<Button type="button" variant="ghost" size="sm" onclick={() => onreviewquestion(question.id, freshness[finding.analysis_turn_id])}>Open Question</Button>
 							</div>
 						{/if}
@@ -565,7 +565,7 @@
 	</section>
 
 	<section class="results-section" aria-labelledby="results-visualizations-title">
-		<header class="results-section-heading"><div><h3 id="results-visualizations-title">Visualizations</h3><p>Charts from the latest saved Question runs and the runs supporting current Findings.</p></div><span>{chartCards.length}</span></header>
+		<header class="results-section-heading"><div><h3 id="results-visualizations-title">Visualizations</h3></div><span>{chartCards.length}</span></header>
 		{#if chartCards.length}
 			<div class="results-charts">
 				{#each chartCards as card (card.key)}

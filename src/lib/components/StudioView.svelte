@@ -226,7 +226,7 @@
 			if (disposed || workspace !== root) return;
 			if (current) void saveDraft(current);
 			++navigation; loading = false; loadError = '';
-			current = makeDraft(document); notesEditing = false;
+			current = makeDraft(document); notesEditing = true;
 			requestedKey = JSON.stringify([root, document.id]);
 			remember(document); createOpen = false; newTitle = '';
 			onopen?.(document.id);
@@ -454,7 +454,10 @@
 		</div>
 		<div class="toolbar-actions">
 			{#if current}
-				<Button class="studio-action" variant="ghost" size="sm" disabled={current.locked} onclick={() => (notesEditing = true)}><Icon name="pencil" size={12} />Edit</Button>
+				<Button class="studio-action" variant="ghost" size="sm" disabled={current.locked} onclick={() => {
+					if (notesEditing) { notesEditing = false; if (current) void saveDraft(current); }
+					else notesEditing = true;
+				}}>{#if notesEditing}<Icon name="check" size={14} />Done{:else}<Icon name="pencil" size={12} />Edit{/if}</Button>
 				<span class="save-status" role="status" aria-live="polite">{status}</span>
 				<Button class="studio-action" variant="ghost" size="sm" disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={12} />{exportBusy ? 'Exporting…' : 'Export'}</Button>
 			{/if}
@@ -475,18 +478,27 @@
 		{:else}
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>
-				<div class="document-heading"><input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" /><p class="document-caption">Report · Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(target.document.updated_at_ms))}</p></div>
+				<div class="document-heading">
+					{#if notesEditing}
+						<input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" />
+					{:else}
+						<h1 class="document-title">{target.title.trim() || 'Untitled report'}</h1>
+					{/if}
+					<p class="document-caption">Report · Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(target.document.updated_at_ms))}</p>
+				</div>
 				{#if target.error}<div class="save-error"><p role="alert">{target.error}</p><div><Button size="sm" variant="outline" disabled={target.locked || target.saving} onclick={() => void saveDraft(target)}>Retry save</Button><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => void saveCopy()}>Save a copy</Button></div></div>{:else if target.notice}<p class="document-notice" role="status">{target.notice}</p>{/if}
-				<section class="document-notes" aria-label="Document notes">
-					{#if notesEditing}<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label><div class="notes-actions"><Button variant="ghost" size="sm" disabled={target.locked} onclick={() => { notesEditing = false; void saveDraft(target); }}>Done</Button></div>
-					{:else if target.body.trim()}<MarkdownContent text={target.body} /><Button variant="ghost" size="sm" onclick={() => notesEditing = true}><Icon name="pencil" size={14} />Edit notes</Button>
-					{:else}<button class="add-notes" onclick={() => notesEditing = true}><Icon name="pencil" size={14} />Add notes</button>{/if}
+				<section class="document-notes" class:document-notes-empty={!notesEditing && !target.body.trim()} aria-label="Document notes">
+					{#if notesEditing}
+						<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label>
+					{:else if target.body.trim()}
+						<MarkdownContent text={target.body} />
+					{/if}
 				</section>
 				<ol class="placements" aria-label="Report results">
 					{#each target.placements as placement, index (placement.id)}
 						{@const key = resultKey(target.document.workspace, placement)}
 						<li class="placement" data-placement-id={placement.id}>
-							<div class="placement-controls"><span class="position-label">{index + 1}</span><div class="placement-buttons"><button class="studio-icon-button" aria-label={`Move output ${index + 1} up`} title="Move up" disabled={index === 0 || target.locked} onclick={() => move(target, placement.id, -1)}><Icon name="chevron-up" size={14} /></button><button class="studio-icon-button" aria-label={`Move output ${index + 1} down`} title="Move down" disabled={index === target.placements.length - 1 || target.locked} onclick={() => move(target, placement.id, 1)}><Icon name="chevron-down" size={14} /></button><button class="studio-icon-button" aria-label={`Remove output ${index + 1} from document`} title="Remove from document, keep saved output" disabled={target.locked} onclick={() => remove(target, placement.id)}><Icon name="x" size={14} /></button></div></div>
+							{#if notesEditing}<div class="placement-controls"><span class="position-label">Output {index + 1}</span><div class="placement-buttons"><button class="studio-icon-button" aria-label={`Move output ${index + 1} up`} title="Move up" disabled={index === 0 || target.locked} onclick={() => move(target, placement.id, -1)}><Icon name="chevron-up" size={14} /></button><button class="studio-icon-button" aria-label={`Move output ${index + 1} down`} title="Move down" disabled={index === target.placements.length - 1 || target.locked} onclick={() => move(target, placement.id, 1)}><Icon name="chevron-down" size={14} /></button><button class="studio-icon-button" aria-label={`Remove output ${index + 1} from document`} title="Remove from document, keep saved output" disabled={target.locked} onclick={() => remove(target, placement.id)}><Icon name="x" size={14} /></button></div></div>{/if}
 							{#if resolved[key]}
 								{#key `${placement.id}:${placement.revision}`}<ArtifactView resolved={resolved[key]} viewState={placement.view_state} onstatechange={state => selectState(target, placement.id, state)} onrevisionchange={revision => pin(target, placement.id, revision)} {onrequestchange} />{/key}
 							{:else if resolveErrors[key]}<div class="output-unavailable"><h2>Saved output unavailable</h2><p role="alert">{resolveErrors[key]}</p><p class="document-caption">{placement.artifact_id} · revision {placement.revision}. The placement is retained.</p><Button size="sm" variant="outline" onclick={() => void resolvePlacement(target.document.workspace, placement, true)}>Retry output</Button></div>
@@ -494,8 +506,8 @@
 						</li>
 					{/each}
 				</ol>
-				{#if !target.placements.length}<p class="document-caption output-empty">No outputs yet. Add saved analysis to start this document.</p>{/if}
-				<div class="add-output-row"><Button size="sm" variant="outline" disabled={target.locked} onclick={() => { pickerSearch = ''; listError = ''; pickerOpen = true; void refreshOutputs(target.document.workspace); }}><Icon name="plus" size={14} />Add saved output</Button></div>
+				{#if !target.placements.length}<p class="document-caption output-empty">No saved analysis in this report yet.</p>{/if}
+				{#if notesEditing}<div class="add-output-row"><Button size="sm" variant="outline" disabled={target.locked} onclick={() => { pickerSearch = ''; listError = ''; pickerOpen = true; void refreshOutputs(target.document.workspace); }}><Icon name="plus" size={14} />Add saved output</Button></div>{/if}
 				{#if target.document.checkpoints.length}<details class="history"><summary>History · {target.document.checkpoints.length} {target.document.checkpoints.length === 1 ? 'checkpoint' : 'checkpoints'}</summary><ul>{#each [...target.document.checkpoints].reverse() as checkpoint (checkpoint.id)}<li><div><strong>{checkpoint.title}</strong><span>{new Date(checkpoint.created_at_ms).toLocaleString()}</span></div><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => restoreTarget = checkpoint}>Restore</Button></li>{/each}</ul></details>{/if}
 			</div>
 		{/if}
@@ -542,22 +554,20 @@
 	:global(.studio-action:hover:not(:disabled)) { background:var(--bg-raised-2); }
 	.save-status { color: var(--text-faint); font-size: 11px; white-space: nowrap; padding-inline: var(--space-1); }
 	:global(.studio-icon-button) { display: inline-flex; flex: none; align-items: center; justify-content: center; min-height: 28px; min-width: 28px; padding: 5px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
-	:global(.studio-icon-button:hover:not(:disabled)), .add-notes:hover { background: var(--bg-inset); color: var(--text); }
+	:global(.studio-icon-button:hover:not(:disabled)) { background: var(--bg-inset); color: var(--text); }
 	:global(.studio-icon-button:disabled) { opacity: .35; cursor: default; }
-	:global(.studio-icon-button:focus-visible), :global(.studio-document-trigger:focus-visible), .add-notes:focus-visible, .document-title:focus-visible, .notes-input:focus-visible, .history summary:focus-visible, .output-picker-list button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+	:global(.studio-icon-button:focus-visible), :global(.studio-document-trigger:focus-visible), .document-title:focus-visible, .notes-input:focus-visible, .history summary:focus-visible, .output-picker-list button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 	.studio-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
 	.studio-document { box-sizing: border-box; width: 100%; max-width: 600px; margin: 0 auto; padding: 48px clamp(18px, 4cqi, 30px) 60px; }
 	.document-heading { margin-bottom: 30px; }
-	.document-title { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 5px; border: 0; background: transparent; color: var(--text); font: 550 clamp(25px, 4cqi, 32px)/1.28 var(--sans); letter-spacing: -.025em; text-overflow: ellipsis; }
+	.document-title { display:block; box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 5px; border: 0; background: transparent; color: var(--text); font: 550 clamp(25px, 4cqi, 32px)/1.28 var(--sans); letter-spacing: -.025em; text-overflow: ellipsis; }
 	p { margin: 0; }
 	.document-caption, .document-notice { color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
 	.document-notice { margin: 0 0 var(--space-4); }
 	.document-notes { min-width: 0; margin-bottom: 34px; font-size: var(--fs); line-height: 1.68; }
-	.document-notes > :global(button) { margin-top: var(--space-2); }
-	.add-notes { display: flex; align-items: center; gap: var(--space-2); padding: 8px 10px; margin-left: -10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-faint); cursor: pointer; font: inherit; font-size: var(--fs-xs); }
+	.document-notes-empty { margin-bottom: 0; }
 	.notes-label { display: grid; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.notes-input { box-sizing: border-box; width: 100%; resize: vertical; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset); color: var(--text); font: var(--fs-sm)/1.65 var(--sans); }
-	.notes-actions { display: flex; justify-content: end; margin-top: var(--space-2); }
 	.placements { list-style: none; margin: 0; padding: 0; }
 	.placement { min-width: 0; position: relative; margin-bottom: 32px; padding-top: 5px; }
 	.placement-controls { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }

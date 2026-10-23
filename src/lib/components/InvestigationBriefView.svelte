@@ -5,6 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Dialog } from '$lib/components/ui/dialog';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Select } from '$lib/components/ui/select';
 	import { analyzeInvestigationQuestion } from '$lib/commands';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -1867,22 +1868,27 @@
 						hidden={investigationSection !== 'brief'}
 					>
 					<section class="brief-summary" aria-labelledby="brief-summary-title">
-						<header>
-							<div>
-								<h3 id="brief-summary-title">Brief</h3>
+						<header class="brief-summary-header">
+							<div class="brief-objective">
+								<h3 id="brief-summary-title">Objective</h3>
+								<p>{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</p>
 							</div>
 							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
-								<Icon name="pencil" size={16} />Edit brief
+								<Icon name="pencil" size={14} />Edit
 							</Button>
 						</header>
-						<dl>
-							<div><dt>Goal</dt><dd>{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</dd></div>
-							{#if audience.trim()}<div><dt>Audience</dt><dd>{audience}</dd></div>{/if}
-							{#if desiredOutput.trim()}<div><dt>Deliverable</dt><dd>{desiredOutput}</dd></div>{/if}
-							{#if constraintsText.trim()}<div><dt>Constraints</dt><dd>{constraintsText.split('\n').map((line) => line.trim()).filter(Boolean).join(' · ')}</dd></div>{/if}
-						</dl>
+						{#if audience.trim() || desiredOutput.trim() || constraintsText.trim()}
+							<section class="brief-scope" aria-label="Investigation scope">
+								<h4>Scope</h4>
+								<dl>
+									{#if audience.trim()}<div><dt>Audience</dt><dd>{audience}</dd></div>{/if}
+									{#if desiredOutput.trim()}<div><dt>Deliverable</dt><dd>{desiredOutput}</dd></div>{/if}
+									{#if constraintsText.trim()}<div><dt>Constraints</dt><dd>{constraintsText.split('\n').map((line) => line.trim()).filter(Boolean).join(' · ')}</dd></div>{/if}
+								</dl>
+							</section>
+						{/if}
 						{#if selected.brief_source_message_id}
-							<p class="brief-source-note">The original request is preserved in the conversation. Editing this brief does not change it.</p>
+							<details class="brief-source-note"><summary>Original request</summary><p>Kept in the conversation. Editing this brief does not change it.</p></details>
 						{/if}
 					</section>
 					{#if pendingProposal}
@@ -1941,9 +1947,7 @@
 						hidden={investigationSection !== 'data'}
 					>
 					<section class="investigation-document-section investigation-data-section" aria-labelledby="investigation-data-heading">
-						<header class="investigation-document-heading">
-							<div><h3 id="investigation-data-heading">Investigation sources</h3><p>Choose which workspace files this Investigation can use.</p></div>
-						</header>
+						<h3 id="investigation-data-heading" class="sr-only">Investigation sources</h3>
 						<InvestigationSourceReadiness
 							{workspacePath}
 							investigation={selected}
@@ -1960,19 +1964,22 @@
 						hidden={investigationSection !== 'questions'}
 					>
 					<section class="analyst-work-plan" aria-labelledby="question-plan-title">
-					<section class="question-editor" aria-label="Question plan">
+					<section class="question-editor" aria-label="Investigation questions">
 						<header class="question-heading question-plan-heading">
 							<div>
-								<h3 id="question-plan-title">Question plan</h3>
+								<h3 id="question-plan-title">Questions</h3>
 							</div>
 							<div class="question-save">
 								<span role={error || autosaveError ? 'alert' : 'status'} title={error || autosaveError || undefined}>
-									{error || autosaveError || ((saving || autosaving) && (dirty || questionsDirty || definitionsDirty) ? 'Saving…' : hasBlankQuestion || hasBlankDefinition ? 'Complete blank fields to save' : dirty || questionsDirty || definitionsDirty ? 'Changes save automatically' : 'Saved')}
+									{error || autosaveError || ((saving || autosaving) && (dirty || questionsDirty || definitionsDirty) ? 'Saving…' : hasBlankQuestion || hasBlankDefinition ? 'Complete blank fields' : dirty || questionsDirty || definitionsDirty ? 'Unsaved changes' : 'Saved')}
 								</span>
 							</div>
 						</header>
 						<div class="question-plan-actions">
-
+							{#if rootQuestion}
+								<Button type="button" variant="outline" size="sm" disabled={saving || proposingQuestions} onclick={addQuestion}>
+									<Icon name="plus" size={14} />Add subquestion
+								</Button>
 							<Button
 								type="button"
 								variant="outline"
@@ -1983,6 +1990,7 @@
 							>
 								{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
 							</Button>
+							{/if}
 							{#if autosaveError && (dirty || questionsDirty || definitionsDirty)}
 								<Button type="button" variant="ghost" disabled={autosaving} onclick={retryEditableAutosave}>Retry save</Button>
 							{/if}
@@ -2157,9 +2165,14 @@
 													>
 														Analyze
 													</Button>
-													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} up" disabled={saving || proposingQuestions || index === 0} onclick={() => moveQuestion(index, -1)}>↑</Button>
-													<Button type="button" variant="ghost" aria-label="Move Subquestion {index + 1} down" disabled={saving || proposingQuestions || index === subquestions.length - 1} onclick={() => moveQuestion(index, 1)}>↓</Button>
-													<Button type="button" variant="ghost" aria-label="Remove Subquestion {index + 1}" disabled={saving || proposingQuestions} onclick={() => removeQuestion(question.id)}>Remove</Button>
+										<DropdownMenu.Root>
+											<DropdownMenu.Trigger type="button" class="question-more" aria-label="More actions for Subquestion {index + 1}" title="More actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
+											<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end" sideOffset={4}>
+												<DropdownMenu.Item class="fella-ui-menu-item" disabled={saving || proposingQuestions || index === 0} onSelect={() => moveQuestion(index, -1)}>Move up</DropdownMenu.Item>
+												<DropdownMenu.Item class="fella-ui-menu-item" disabled={saving || proposingQuestions || index === subquestions.length - 1} onSelect={() => moveQuestion(index, 1)}>Move down</DropdownMenu.Item>
+												<DropdownMenu.Item class="fella-ui-menu-item" disabled={saving || proposingQuestions} onSelect={() => removeQuestion(question.id)}>Remove question</DropdownMenu.Item>
+											</DropdownMenu.Content></DropdownMenu.Portal>
+										</DropdownMenu.Root>
 												</div>
 											</div>
 											{#if questionAnswerReason(question.id)}
@@ -2308,17 +2321,9 @@
 								</div>
 							</section>
 						{/if}
-						{#if rootQuestion}
-							<Button type="button" variant="outline" disabled={saving || proposingQuestions} onclick={addQuestion}>
-								<Icon name="plus" size={16} />Add subquestion
-							</Button>
-						{/if}
 					</section>
 						<div class="optional-context-heading">
-							<p>Context (optional)</p>
-							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
-								<Icon name="plus" size={14} />Add definition or assumption
-							</Button>
+							<p>Context</p>
 						</div>
 						<details class="definition-disclosure" bind:open={definitionsOpen}>
 							<summary>
@@ -2328,8 +2333,11 @@
 					<section class="definition-editor" aria-labelledby="definition-context-title">
 						<header class="question-heading">
 							<div>
-								<p>Fella records the version used by each run.</p>
+								<p>Each run keeps the context version it used.</p>
 							</div>
+							<Button type="button" variant="ghost" size="sm" disabled={saving} onclick={startDefinition}>
+								<Icon name="plus" size={14} />Add context
+							</Button>
 						</header>
 						{#if definitions.length}
 							<ol class="definition-list">
@@ -2382,16 +2390,11 @@
 							hidden={investigationSection !== 'analysis'}
 						>
 					<section class="investigation-document-section investigation-analysis-section" aria-labelledby="investigation-analysis-heading">
-						<header class="investigation-document-heading">
-							<div>
-								<h3 id="investigation-analysis-heading">Analysis</h3>
-								<p>Runs, recorded steps, and Findings.</p>
-							</div>
-						</header>
+						<h3 id="investigation-analysis-heading" class="sr-only">Analysis runs</h3>
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-								<span>Recorded analysis</span>
-							<small>{analysisRunIds(selected).length} saved run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} Finding{selected.findings?.length === 1 ? '' : 's'}</small>
+								<span>Runs and findings</span>
+							<small>{analysisRunIds(selected).length} run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} finding{selected.findings?.length === 1 ? '' : 's'}</small>
 						</summary>
 						<div class="investigation-history-content">
 					<section class="findings" aria-labelledby="findings-title">
@@ -2856,9 +2859,7 @@
 							hidden={investigationSection !== 'results'}
 						>
 					<section class="investigation-document-section investigation-results-section" aria-labelledby="investigation-results-heading">
-						<header class="investigation-document-heading">
-							<div><h3 id="investigation-results-heading">Results</h3><p>Answers, charts, and questions that still need work.</p></div>
-						</header>
+						<h3 id="investigation-results-heading" class="sr-only">Investigation results</h3>
 						<InvestigationResultsView
 							investigation={selected}
 							conversationMessages={investigationConversationMessages}
@@ -3196,14 +3197,20 @@
 	.investigation-results-section :global(.results-view) { padding: 0; }
 	.investigation-share-section { margin-bottom: var(--space-6); }
 	.investigation-share-section .report-export-status { max-width: none; }
-	.brief-summary { display: grid; gap: var(--space-4); padding: 12px 0; margin-top: var(--space-2); border: 0; background: transparent; }
-	.brief-summary > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-	.brief-summary h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.brief-summary dl { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); margin: 0; }
-	.brief-summary dl > div { display: grid; min-width: 0; gap: 2px; }
-	.brief-summary dt { color: var(--text-faint); font-size: var(--fs-xs); }
-	.brief-summary dd { min-width: 0; margin: 0; color: var(--text); font-size: var(--fs-sm); line-height: 1.45; overflow-wrap: anywhere; }
-	.brief-source-note { padding-top: var(--space-2); border-top: 1px solid var(--border); color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-summary { display: grid; gap: 20px; padding: 12px 0 20px; margin-top: var(--space-2); border: 0; background: transparent; }
+	.brief-summary-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+	.brief-objective { display: grid; min-width: 0; flex: 1; gap: 9px; }
+	.brief-summary h3, .brief-scope h4 { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.brief-objective p { min-width: 0; padding: 14px 16px; border-radius: var(--radius-window); background: var(--bg-raised); color: var(--text); font-size: var(--fs-sm); line-height: 1.6; overflow-wrap: anywhere; }
+	.brief-scope { display: grid; gap: 5px; }
+	.brief-scope dl { display: grid; margin: 0; }
+	.brief-scope dl > div { display: grid; grid-template-columns: minmax(76px, .42fr) minmax(0, 1fr); gap: var(--space-3); padding: 10px 4px; border-bottom: 1px solid var(--border-subtle, var(--border)); }
+	.brief-scope dl > div:last-child { border-bottom: 0; }
+	.brief-scope dt { color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-scope dd { min-width: 0; margin: 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+	.brief-source-note { color: var(--text-faint); font-size: var(--fs-xs); }
+	.brief-source-note summary { width: fit-content; cursor: pointer; }
+	.brief-source-note p { margin-top: var(--space-2); line-height: 1.5; }
 	.brief-edit-panel { display: grid; gap: var(--space-1); padding: var(--space-4); margin-top: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-inset); }
 	.brief-edit-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); padding-top: var(--space-3); margin-top: var(--space-2); border-top: 1px solid var(--border); }
 	.brief-edit-actions > span { flex: 1; color: var(--text-faint); font-size: var(--fs-xs); }
@@ -3221,7 +3228,7 @@
 	.brief-editor :global(.brief-field) { width: 100%; min-height: 74px; resize: vertical; }
 	.brief-editor :global(.goal-field) { min-height: 112px; }
 	.brief-editor :global(.constraints-field) { min-height: 96px; }
-	.analyst-work-plan { display: grid; gap: var(--space-4); padding: var(--space-6) 0; }
+	.analyst-work-plan { display: grid; gap: var(--space-4); padding: 12px 0 20px; }
 	.optional-context-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
 	.optional-context-heading > p { font-weight: 600; }
 	.definition-disclosure, .investigation-history { min-width: 0; border: 1px solid color-mix(in srgb, var(--border) 72%, transparent); border-radius: var(--radius-window); background: var(--bg-raised); }
@@ -3242,15 +3249,15 @@
 	.definition-item :global(.fella-ui-select-trigger) { width: max-content; min-width: 140px; }
 	.brief-editor :global(.definition-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.definition-empty { margin: 0; }
-	.question-editor { display: grid; gap: 12px; padding: 0; margin-top: 0; }
+	.question-editor { display: grid; gap: 8px; padding: 0; margin-top: 0; }
 	.question-heading, .question-save, .question-item-heading, .question-item-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 	.question-heading { align-items: center; gap: var(--space-4); }
 	.question-heading > div:first-child { min-width: 0; flex: 1; }
 	.question-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.question-heading p { margin-top: var(--space-1); color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
-	.question-save { width: 12rem; min-width: 12rem; max-width: 22rem; min-height: 20px; flex: 0 1 22rem; justify-content: flex-end; }
+	.question-save { width: auto; min-width: 0; max-width: 50%; min-height: 20px; flex: 0 1 auto; justify-content: flex-end; }
 	.question-save > span { display: block; min-width: 0; min-height: 18px; overflow: hidden; color: var(--text-faint); font-size: var(--fs-xs); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-	.question-plan-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
+	.question-plan-actions { display: flex; align-items: center; justify-content: flex-start; flex-wrap: wrap; gap: var(--space-2); }
 	.question-coverage { display: grid; gap: var(--space-3); padding: 0; margin-top: var(--space-1); border: 0; border-radius: 0; background: transparent; }
 	.question-coverage > header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
 	.question-coverage h4 { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
@@ -3271,18 +3278,21 @@
 	.question-coverage-review strong { min-width: 0; font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
 	.question-coverage-review small { color: var(--text-faint); font-size: 11px; overflow-wrap: anywhere; }
 	.subquestion-title { margin: 0; font-size: var(--fs-sm); font-weight: 650; }
-	.question-list { display: grid; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
-	.question-item { min-width: 0; padding: 12px 0; border: 0; background: transparent; }
-	.question-item-heading { margin-bottom: var(--space-2); }
-	.question-item-heading label { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
+	.question-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+	.question-item { min-width: 0; padding: 12px 4px; border: 0; border-bottom: 1px solid var(--border-subtle, var(--border)); background: transparent; }
+	.question-item:last-child { border-bottom: 0; }
+	.question-item-heading { flex-wrap: wrap; justify-content: flex-start; margin-bottom: var(--space-2); }
+	.question-item-heading label { min-width: 0; flex: 1 1 100px; margin: 0; font-size: var(--fs-xs); font-weight: 600; color: var(--text-faint); }
 	.question-status-reason { margin: 0 0 var(--space-2); color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.question-status-reason[data-question-status='blocked'] { color: var(--err); }
 	.question-stale-review { display: grid; gap: var(--space-2); margin: var(--space-2) 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.question-stale-review p { margin: 0; }
 	.question-stale-review summary { width: fit-content; color: var(--text); cursor: pointer; }
 	.question-stale-review ul { display: grid; gap: 2px; margin: var(--space-1) 0 0; padding-left: var(--space-5); }
-	.question-item-actions { gap: 0; }
-	.question-item-actions :global(button) { min-width: 34px; min-height: 32px; padding: 4px 8px; }
+	.question-item-actions { gap: 4px; margin-left: auto; }
+	.question-item-actions :global(button) { min-width: 30px; min-height: 30px; padding: 4px 8px; }
+	:global(.question-more) { display: inline-flex; width: 30px; min-width: 30px !important; align-items: center; justify-content: center; border: 0; border-radius: 999px; background: transparent; color: var(--text-faint); cursor: pointer; }
+	:global(.question-more:hover) { background: var(--bg-inset); color: var(--text); }
 	.brief-editor :global(.question-field) { width: 100%; min-height: 68px; resize: vertical; }
 	.question-empty-state { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-4); border: 1px dashed var(--border-strong, var(--border)); border-radius: var(--radius-md); background: var(--bg-inset); }
 	.question-empty-state > div { min-width: 0; }
@@ -3442,8 +3452,9 @@
 	.coverage-disclosure > summary { padding: 6px 0; cursor: pointer; }
 	.investigation-completion-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding-top: 20px; }
 	.investigation-completion-actions p { flex: 1; min-width: 180px; color: var(--text-dim); font-size: var(--fs-xs); }
-	.question-text { display: block; width: 100%; padding: 8px 0; border: 0; background: transparent; color: var(--text); font: inherit; line-height: 1.55; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
-	.question-text span { display: block; margin-top: 5px; color: var(--text-faint); font-size: var(--fs-xs); }
+	.question-text { display: block; width: 100%; padding: 4px 0; border: 0; background: transparent; color: var(--text); font: inherit; line-height: 1.55; text-align: left; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; }
+	.question-text span { display: inline-block; margin-left: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); opacity: 0; }
+	.question-text:hover span, .question-text:focus-visible span { opacity: 1; }
 	.investigation-history-content { display: flex; flex-direction: column; gap: var(--space-4); padding: 8px 0; }
 	.analysis-runs { order: -1; }
 	.empty-state { max-width: 48ch; margin: 12vh auto 0; display: grid; justify-items: center; gap: var(--space-3); text-align: center; }

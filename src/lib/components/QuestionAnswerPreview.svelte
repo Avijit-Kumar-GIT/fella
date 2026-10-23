@@ -43,13 +43,13 @@
 		return {
 			not_started: 'View answer',
 			running: 'View answer',
-			answered: 'View complete answer',
-			incomplete: 'View partial answer',
-			unsupported: 'View run response',
-			insufficient_data: 'View run response',
-			needs_review: 'View saved answer',
+			answered: 'View answer',
+			incomplete: 'View answer',
+			unsupported: 'View answer',
+			insufficient_data: 'View answer',
+			needs_review: 'View answer',
 			waiting_for_input: 'View clarification',
-			blocked: 'View run response',
+			blocked: 'View answer',
 			outdated: 'View previous answer'
 		}[status];
 	}
@@ -93,7 +93,6 @@
 		<header>
 			<div>
 				<strong>{answerLabel}</strong>
-				<span>From the latest saved run for this Question</span>
 			</div>
 			<Button
 				type="button"
@@ -131,7 +130,7 @@
 	.question-answer > header, .question-answer > footer { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 	.question-answer > header > div { display: grid; min-width: 0; gap: 2px; }
 	.question-answer strong { font-size: var(--fs-xs); font-weight: 650; }
-	.question-answer header span, .question-answer footer > span { color: var(--text-faint); font-size: var(--fs-xs); overflow-wrap: anywhere; }
+	.question-answer footer > span { color: var(--text-faint); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.question-answer-output { max-height: 280px; overflow: auto; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); font-size: var(--fs-sm); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 	.question-answer footer { justify-content: flex-end; flex-wrap: wrap; }
 	.question-answer footer > span { margin-right: auto; }

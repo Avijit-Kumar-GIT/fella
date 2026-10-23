@@ -225,13 +225,6 @@
 		return sources.find((item) => relativePath(item.path) === path) === source;
 	}
 
-	function selectedFileCount(): number {
-		const included = new Set(
-			sources.filter(isSourceIncluded).map((source) => relativePath(source.path))
-		);
-		return included.size;
-	}
-
 	async function saveSourceSelection(sourceSelection: InvestigationSourceSelection): Promise<void> {
 		if (!investigation || selectionSaving) return;
 		selectionSaving = true;
@@ -281,23 +274,15 @@
 	data-testid="investigation-data-readiness"
 >
 	<header class="readiness-heading">
-		<div>
-			<h3 id="source-readiness-title">Data available</h3>
-			{#if catalog}
-				<p>
-					{readyTables} queryable table{readyTables === 1 ? '' : 's'}
-					<span aria-hidden="true">·</span>
-					{readyDocuments} readable document{readyDocuments === 1 ? '' : 's'}
-					{#if skipped.length}
-						<span aria-hidden="true">·</span> {skipped.length} need attention
-					{/if}
-				</p>
-			{:else}
-				<p>Loading this workspace’s catalog…</p>
-			{/if}
-		</div>
-		{#if catalog}
-			<details class="catalog-details"><summary>Catalog details</summary><div class="catalog-meta" aria-label="Current source catalog metadata">
+		<h3 id="source-readiness-title">Data available</h3>
+	</header>
+	{#if catalog}
+		<section class="availability-card" aria-label="Available data summary">
+			<div class="availability-metrics">
+				<div><strong>{readyTables}</strong><span>queryable table{readyTables === 1 ? '' : 's'}</span></div>
+				<div><strong>{readyDocuments}</strong><span>readable document{readyDocuments === 1 ? '' : 's'}</span></div>
+			</div>
+			<details class="catalog-details"><summary><Icon name="chevron-right" size={12} />Catalog details</summary><div class="catalog-meta" aria-label="Current source catalog metadata">
 				<span class="catalog-revision" data-testid="current-catalog-revision">
 					Catalog revision
 					{#if catalog.revision}<code title={catalog.revision}>{catalog.revision}</code>{:else}<span>not recorded</span>{/if}
@@ -305,36 +290,39 @@
 				{#if catalog.indexed_at_ms}
 					<span class="indexed-at">Indexed {new Date(catalog.indexed_at_ms).toLocaleDateString()}</span>
 				{/if}
-			</div><p class="readiness-caveat">Loaded files and profiled rows are not proof that a source answers this Investigation.</p></details>
-		{/if}
-	</header>
+			</div><p class="readiness-caveat">Loaded files and profiled rows do not guarantee a source can answer this Investigation.</p></details>
+		</section>
+	{:else}
+		<p class="catalog-loading" role="status">Loading this workspace’s catalog…</p>
+	{/if}
 	{#if catalog && investigation}
 		<fieldset class="scope-controls" disabled={selectionSaving}>
 			<legend>Sources for future runs</legend>
-			<label>
+			<div class="scope-segment">
+			<label class:active={investigation.source_selection.mode === 'all_sources'}>
 				<input
 					type="radio"
 					name={`source-scope-${investigation.id}`}
 					checked={investigation.source_selection.mode === 'all_sources'}
 					onchange={chooseAllSources}
 				/>
-				All sources
+				<span>All sources</span>
 			</label>
-			<label>
+			<label class:active={investigation.source_selection.mode === 'selected_sources'}>
 				<input
 					type="radio"
 					name={`source-scope-${investigation.id}`}
 					checked={investigation.source_selection.mode === 'selected_sources'}
 					onchange={chooseSpecificSources}
 				/>
-				Choose files
+				<span>Choose files</span>
 			</label>
-			<span class="scope-count">
+			</div>
+			<span class="sr-only" role="status">
 				{investigation.source_selection.mode === 'all_sources'
-					? `${uniqueSourcePaths().length} cataloged`
-					: `${selectedFileCount()} of ${uniqueSourcePaths().length} selected`}
+					? `All ${uniqueSourcePaths().length} cataloged files are selected for future runs.`
+					: `${investigation.source_selection.included_paths.length} of ${uniqueSourcePaths().length} cataloged files selected for future runs.`}
 			</span>
-			<small>Saved runs keep their original source scope.</small>
 		</fieldset>
 		{#if selectionError}
 			<p class="scope-error" role="alert">{selectionError}</p>
@@ -388,8 +376,7 @@
 							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 							<span class="source-main">
 								<strong>{source.name}</strong>
-								<small class="source-relative-path" title={source.path}>{relativePath(source.path)}</small>
-								<small>{kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
+								<small class="source-relative-path" title={source.path}>{relativePath(source.path)} · {kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
 							</span>
 							<span class="source-readiness-label" data-state={isReady(source) ? 'ready' : 'disabled'}>{readinessLabel(source)}</span>
 						</button>
@@ -536,48 +523,63 @@
 </section>
 
 <style>
-	.catalog-details { font-size: var(--fs-xs); color: var(--text-dim); }
-	.catalog-details > summary { cursor: pointer; }
+	.catalog-details { color: var(--text-dim); font-size: var(--fs-xs); }
+	.catalog-details > summary { display:flex; width:fit-content; align-items:center; gap:5px; cursor:pointer; list-style:none; }
+	.catalog-details > summary::-webkit-details-marker { display:none; }
+	.catalog-details > summary :global(svg) { flex:none; transition:transform 120ms ease; }
+	.catalog-details[open] > summary :global(svg) { transform:rotate(90deg); }
 	.catalog-details .catalog-meta { margin-top: 8px; }
 	.source-relative-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.source-readiness { padding: var(--space-4) 0; border-bottom: 1px solid var(--border); }
-	.readiness-heading, .detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
-	.readiness-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
-	.readiness-heading p, .detail-heading p { margin: 3px 0 0; color: var(--text-dim); font-size: var(--fs-xs); }
+	.source-readiness { padding: 0; border: 0; }
+	.readiness-heading { margin: 0 4px 7px; }
+	.readiness-heading h3 { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.catalog-loading { margin: 0; padding: 14px; border-radius: var(--radius-window); background: var(--bg-raised); color: var(--text-faint); font-size: var(--fs-xs); }
+	.availability-card { display:grid; gap:var(--space-2); padding:13px 14px 11px; border-radius:var(--radius-window); background:var(--bg-raised); }
+	.availability-metrics { display:flex; align-items:baseline; flex-wrap:wrap; gap:5px 16px; }
+	.availability-metrics > div { display:flex; min-width:0; align-items:baseline; gap:5px; }
+	.availability-metrics strong { color:var(--text); font-size:20px; font-weight:550; font-variant-numeric:tabular-nums; }
+	.availability-metrics span { color:var(--text-dim); font-size:var(--fs-xs); }
 	.readiness-caveat, .profile-caveat { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.45; }
-	.scope-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2) var(--space-4); margin: var(--space-3) 0 0; padding: 0; border: 0; color: var(--text-dim); font-size: var(--fs-xs); }
-	.scope-controls legend { width: 100%; margin-bottom: var(--space-1); color: var(--text); font-size: var(--fs-xs); font-weight: 600; }
-	.scope-controls label, .source-scope-toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-	.scope-controls input, .source-scope-toggle input { margin: 0; accent-color: var(--brand); }
-	.scope-controls small { color: var(--text-faint); }
-	.scope-count { color: var(--text-faint); }
+	.scope-controls { display:block; min-width:0; margin:18px 0 0; padding:0; border:0; color:var(--text-dim); font-size:var(--fs-xs); }
+	.scope-controls legend { width:100%; padding:0; margin:0 4px 7px; color:var(--text-faint); font-size:var(--fs-xs); font-weight:600; }
+	.scope-segment { display:flex; min-width:0; padding:4px; border-radius:999px; background:var(--bg-raised); }
+	.scope-controls label { position:relative; display:flex; min-width:0; min-height:32px; flex:1; align-items:center; justify-content:center; padding:4px 8px; border-radius:999px; color:var(--text-dim); text-align:center; cursor:pointer; }
+	.scope-controls label.active { background:var(--bg-raised-2); color:var(--text); }
+	.scope-controls input { position:absolute; width:1px; height:1px; opacity:0; }
+	.scope-controls label:focus-within { outline:2px solid var(--brand); outline-offset:2px; }
+	.source-scope-toggle { display: inline-flex; align-items: center; justify-content:center; flex:none; padding:8px 2px; cursor:pointer; }
+	.source-scope-toggle input { display:grid; width:16px; height:16px; place-content:center; margin:0; appearance:none; border:1px solid var(--border-strong, var(--border)); border-radius:5px; background:transparent; cursor:pointer; }
+	.source-scope-toggle input:checked { border-color:var(--brand); background:var(--brand); }
+	.source-scope-toggle input:checked::after { width:7px; height:4px; content:''; transform:rotate(-45deg) translateY(-1px); border-bottom:2px solid white; border-left:2px solid white; }
+	.source-scope-toggle input:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
+	.source-scope-toggle input:disabled { opacity:.55; cursor:default; }
 	.scope-error { margin: var(--space-2) 0 0; color: var(--warning, #9b6500); font-size: var(--fs-xs); }
 	.catalog-meta { display: flex; flex: none; flex-wrap: wrap; justify-content: flex-end; gap: 4px var(--space-3); color: var(--text-faint); font-size: var(--fs-xs); }
 	.catalog-revision { display: inline-flex; align-items: baseline; gap: 4px; }
 	.catalog-revision code { max-width: min(42vw, 360px); color: var(--text-dim); overflow-wrap: anywhere; }
 	.indexed-at { flex: none; }
-	.source-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-3); }
+	.source-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin: 18px 4px 7px; }
 	.source-list-heading h4 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
 	.source-list-heading span { color: var(--text-faint); font-size: 11px; }
-	.source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: var(--space-2); margin: var(--space-3) 0 0; padding: 0; list-style: none; }
-	.source-search { display: flex; align-items: center; gap: var(--space-2); max-width: 520px; margin-top: var(--space-3); color: var(--text-faint); }
+	.source-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0; padding:5px 8px; border-radius:var(--radius-window); background:var(--bg-raised); list-style: none; }
+	.source-list li + li { border-top:1px solid var(--border-subtle, var(--border)); }
+	.source-search { display: flex; min-width:0; align-items: center; gap: var(--space-2); margin-top: 11px; padding:0 11px; border:1px solid var(--border); border-radius:999px; background:var(--bg-inset); color:var(--text-faint); }
 	.source-search :global(input) { min-width: 0; }
 	.source-search-count { flex: none; font-size: var(--fs-xs); }
-	.source-row { display: flex; min-width: 0; align-items: center; gap: var(--space-2); }
-	.source-scope-toggle { flex: none; padding: 8px 2px; }
-	.source-option { display: flex; flex: 1; width: 100%; min-width: 0; align-items: center; gap: var(--space-2); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
-	.source-option:hover, .source-option.selected { background: var(--bg-inset); }
-	.source-option.selected { border-color: var(--brand); }
+	.source-row { display: flex; min-width: 0; align-items: center; gap: 7px; }
+	.source-scope-toggle-spacer { width:20px; flex:none; }
+	.source-option { display: flex; flex: 1; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 8px 2px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+	.source-option:hover, .source-option.selected { background: var(--bg-raised-2); }
 	.source-option.disabled { opacity: .72; }
 	.source-mark { display: inline-flex; flex: none; color: var(--text-dim); }
-	.source-main { display: grid; min-width: 0; flex: 1; gap: 2px; }
-	.source-main strong { font-size: var(--fs-xs); font-weight: 600; overflow-wrap: anywhere; }
-	.source-main small { color: var(--text-faint); font-size: 11px; }
+	.source-main { display: grid; min-width: 0; flex: 1; gap: 2px; overflow:hidden; }
+	.source-main strong { overflow:hidden; font-size: var(--fs-xs); font-weight: 550; text-overflow:ellipsis; white-space:nowrap; }
+	.source-main small { overflow:hidden; color: var(--text-faint); font-size: 11px; text-overflow:ellipsis; white-space:nowrap; }
 	.source-readiness-label, .skipped-status { flex: none; color: var(--text-dim); font-size: 11px; }
-	.source-readiness-label[data-state='ready'] { color: var(--success, #27845a); }
+	.source-readiness-label[data-state='ready'] { color: var(--brand-icon, var(--brand)); }
 	.source-readiness-label[data-state='disabled'], .skipped-status { color: var(--warning, #9b6500); }
 	:global(.show-more) { margin-top: var(--space-2); }
-	.source-detail { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--bg-inset); }
+	.source-detail { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-window); background: var(--bg-inset); }
 	.detail-heading { align-items: center; }
 	.detail-actions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
 	.detail-heading h4 { margin: 0; overflow-wrap: anywhere; font-size: var(--fs-sm); font-weight: 650; }
@@ -606,17 +608,9 @@
 	.skipped-sources li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px var(--space-3); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 	.skipped-name { min-width: 0; color: var(--text); overflow-wrap: anywhere; }
 	.skipped-sources li small { grid-column: 1 / -1; color: var(--text-faint); overflow-wrap: anywhere; }
-	@media (max-width: 620px) {
-		.readiness-heading { flex-direction: column; }
-		.catalog-meta { justify-content: flex-start; }
-		.scope-controls { align-items: flex-start; flex-direction: column; }
-		.source-option { align-items: flex-start; flex-wrap: wrap; }
-		.source-readiness-label { margin-left: 23px; }
-	}
 	@container investigation-pane (max-width: 900px) {
-		.readiness-heading { align-items: flex-start; flex-direction: column; }
 		.catalog-meta { justify-content: flex-start; }
-		.scope-controls { align-items: flex-start; flex-direction: column; }
-		.scope-controls small { max-width: 100%; }
+		.scope-segment { width:100%; }
+		.source-readiness-label { font-size:11px; }
 	}
 </style>
