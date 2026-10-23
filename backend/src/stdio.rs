@@ -800,7 +800,17 @@ async fn dispatch(
                 let investigation_id: String = required(&request.params, "investigationId")?;
                 value_result(engine.investigation_load(&investigation_id))
             }
-            "investigations_list" => value_result(engine.investigations_list()),
+            "investigations_list" => {
+                let active_conversation_ids = request
+                    .params
+                    .get("activeConversationIds")
+                    .map(|value| {
+                        serde_json::from_value::<Vec<String>>(value.clone())
+                            .map_err(EngineError::from)
+                    })
+                    .transpose()?;
+                value_result(engine.investigations_list(active_conversation_ids.as_deref()))
+            }
             "analysis_turn_replay_status" => {
                 let turn_id: String = required(&request.params, "turnId")?;
                 value_result(workspace_engine.analysis_turn_replay_status(&turn_id))

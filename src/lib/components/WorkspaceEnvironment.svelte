@@ -131,7 +131,7 @@
 
 	async function freshnessCounts(path: string): Promise<FreshnessSummary> {
 		try {
-			const records = (await ipc.investigationsList()).filter((item) => item.workspace_id === path);
+			const records = (await ipc.investigationsList(session.conversations.map((conversation) => conversation.id))).filter((item) => item.workspace_id === path);
 			const questionRuns = new Set<string>();
 			const findingRuns = new Set<string>();
 			for (const item of records) {

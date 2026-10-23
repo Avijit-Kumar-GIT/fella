@@ -397,7 +397,7 @@
 		openAnalysisTurnId = null;
 		questionLinksDraft = [];
 		try {
-			const all = await ipc.investigationsList();
+			const all = await ipc.investigationsList(session.conversations.map((conversation) => conversation.id));
 			if (serial !== requestSerial) return;
 			investigations = all.filter((item) => item.workspace_id === path);
 			const activeConversation = session.activeChat;
@@ -459,7 +459,7 @@
 		const conversationId = session.activeChat.id;
 		const previousSelectedId = selectedId;
 		try {
-			const records = await ipc.investigationsList();
+			const records = await ipc.investigationsList(session.conversations.map((conversation) => conversation.id));
 			if (serial !== requestSerial || path !== session.catalog.workspace || conversationId !== session.activeChat.id) return;
 			const refreshed = records.filter((item) => item.workspace_id === path);
 			const activeConversation = session.activeChat;

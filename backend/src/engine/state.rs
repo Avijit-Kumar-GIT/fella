@@ -774,6 +774,57 @@ mod investigation_ensure_tests {
     }
 
     #[test]
+    fn deleting_a_chat_cascades_its_investigation_but_keeps_blank_work() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-delete-chat-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "conversation-delete-cascade";
+        let transcript = serde_json::json!({
+            "id": conversation_id,
+            "workspace": "/work/sales",
+            "messages": [{
+                "id": "source-message",
+                "role": "user",
+                "text": "What were quarterly sales?"
+            }]
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+        let linked = engine
+            .investigation_create(
+                "/work/sales",
+                "Quarterly sales",
+                Some("What were quarterly sales?"),
+                Some("source-message"),
+                Some(conversation_id),
+            )
+            .unwrap();
+        let blank = engine
+            .investigation_create(
+                "/work/sales",
+                "Blank investigation",
+                None,
+                None,
+                Some("conversation-blank"),
+            )
+            .unwrap();
+
+        engine.delete_conversation(conversation_id).unwrap();
+        let remaining = engine.investigations_list(Some(&[])).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, blank.id);
+        assert!(remaining.iter().all(|item| item.id != linked.id));
+        assert!(engine.conversation_load(conversation_id).is_err());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn concurrent_first_turns_resolve_to_one_investigation() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -806,7 +857,9 @@ mod investigation_ensure_tests {
             .map(|worker| worker.join().unwrap())
             .collect();
         assert!(ids.iter().all(|id| id == &ids[0]));
-        let investigations = engine.investigations_list().unwrap();
+        let investigations = engine
+            .investigations_list(Some(&["conversation-first".to_owned()]))
+            .unwrap();
         assert_eq!(investigations.len(), 1);
         assert!(investigations[0].analysis_turn_ids.is_empty());
 
@@ -2519,6 +2572,10 @@ impl EngineState {
     /// Remove one archived conversation's file, by the same slug-suffix
     /// lookup `conversation_load` uses. Used by the sidebar's per-row delete.
     pub fn delete_conversation(&self, id: &str) -> EngineResult<()> {
+        let _investigation_guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let dir = self.data_dir.join("conversations");
         let slug: String = id
             .chars()
@@ -2551,6 +2608,10 @@ impl EngineState {
         self.cancel_run(id);
         self.forget_conversation(id);
         if let Err(error) = analysis_store::delete_conversation(&self.data_dir, id) {
+            self.allow_conversation_persistence(id);
+            return Err(error);
+        }
+        if let Err(error) = investigation::delete_for_conversation(&self.data_dir, id) {
             self.allow_conversation_persistence(id);
             return Err(error);
         }
@@ -2611,8 +2672,8 @@ impl EngineState {
         investigation::reopen(&self.data_dir, id)
     }
 
-    /// Resolve or create the Investigation seeded by the conversation's
-    /// original message. Repeated calls for a reopened conversation are safe.
+    /// Legacy resolver for conversation-seeded records and archived-run
+    /// migration. New chats do not create Investigations through this path.
     pub fn investigation_ensure(
         &self,
         workspace_id: &str,
@@ -2877,11 +2938,58 @@ impl EngineState {
     }
 
     /// List durable Investigation records, newest activity first.
-    pub fn investigations_list(&self) -> EngineResult<Vec<Investigation>> {
+    pub fn investigations_list(
+        &self,
+        active_conversation_ids: Option<&[String]>,
+    ) -> EngineResult<Vec<Investigation>> {
+        let _guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active_conversation_ids) = active_conversation_ids {
+            if let Some(mut preserved_ids) = self.archived_conversation_ids() {
+                preserved_ids.extend(active_conversation_ids.iter().cloned());
+                investigation::delete_orphaned_source_investigations(
+                    &self.data_dir,
+                    &preserved_ids,
+                )?;
+            }
+        }
         investigation::list(&self.data_dir)?
             .into_iter()
             .map(|item| self.recover_interrupted_question_runs(&item.id))
             .collect()
+    }
+
+    /// Return `None` if the archive directory cannot be inspected completely;
+    /// callers then skip orphan cleanup so a transient I/O or parse failure
+    /// cannot be mistaken for user deletion.
+    fn archived_conversation_ids(&self) -> Option<HashSet<String>> {
+        let directory = self.data_dir.join("conversations");
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Some(HashSet::new());
+            }
+            Err(_) => return None,
+        };
+
+        let mut ids = HashSet::new();
+        for entry in entries {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).ok()?;
+            let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+            if !has_actual_question(&value) {
+                continue;
+            }
+            let id = value.get("id")?.as_str()?;
+            ids.insert(id.to_owned());
+        }
+        Some(ids)
     }
 
     fn recover_interrupted_question_runs(&self, id: &str) -> EngineResult<Investigation> {

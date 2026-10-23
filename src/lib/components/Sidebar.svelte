@@ -344,7 +344,7 @@
 		<Dialog.Content class="fella-ui-dialog-content conversation-delete-dialog">
 			<Dialog.Title class="workspace-delete-title" level={2}>Delete conversation?</Dialog.Title>
 			<Dialog.Description class="workspace-delete-description">
-				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}” and its transcript will be deleted. Saved results, reports, their supporting analysis records, and revisions will remain available in this workspace.
+				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}”, its transcript, and any linked Investigation will be deleted. Saved results, reports, their supporting analysis records, and revisions will remain available in this workspace.
 			</Dialog.Description>
 			{#if conversationDeleteError}<p class="workspace-delete-error" role="alert">{conversationDeleteError}</p>{/if}
 			<div class="workspace-delete-actions">

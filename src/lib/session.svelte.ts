@@ -673,7 +673,7 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Bumped when the ask path automatically creates/resolves an Investigation. */
+	/** Bumped when the workspace's Investigation records or links change. */
 	investigationsVersion = $state<number>(0);
 	reportsVersion = $state(0);
 	/** Presentation labels, hydrated from durable Investigations; never transcript edits. */
@@ -1692,35 +1692,76 @@ class Session {
 	}
 
 
-	/** Remove a conversation from the live cache WITHOUT archiving it -- for
-	 *  when its history entry was just deleted from the sidebar. Deleting only
-	 *  the archived file would let a later settle re-create it from the live
-	 *  transcript. No-op if the conversation isn't currently live. */
+	/** Remove a deleted conversation from live state and remove its
+	 *  conversation-owned Investigation/preview tabs. */
 	removeConversationWithoutArchiving(id: string): void {
+		delete this.investigationNames[id];
 		const i = this.conversations.findIndex((conversation) => conversation.id === id);
-		if (i < 0) return;
-		const conversation = this.conversations[i];
-		const ownerId = conversation.workspaceScope ?? null;
-		const wasActive = i === this.activeConversationIndex;
-		conversation.dropSnapshot();
-		if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
-		this.conversations.splice(i, 1);
-		const owner = ownerId ? this.workspaceAt(ownerId) : null;
+		const conversation = i >= 0 ? this.conversations[i] : null;
+		const ownerId = conversation?.workspaceScope ??
+			this.workspaceContexts.find((context) => context.conversationId === id)?.workspaceId ?? null;
+		const wasActive = i >= 0 && i === this.activeConversationIndex;
+		if (conversation) {
+			conversation.dropSnapshot();
+			if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
+			this.conversations.splice(i, 1);
+		}
+
+		let removedToolState = false;
 		for (const context of this.workspaceContexts) {
-			if (context.conversationId !== id) continue;
-			const replacementIndex = this.conversations.findLastIndex((item) => item.workspaceScope === context.workspaceId);
-			if (replacementIndex >= 0) context.conversationId = this.conversations[replacementIndex].id;
-			else {
-				const replacement = new Conversation();
-				replacement.workspaceScope = context.workspaceId;
-				this.conversations.push(replacement);
-				context.conversationId = replacement.id;
+			const tabs = context.workspaceToolTabs ?? [];
+			const removedTabs = tabs.filter((tab) =>
+				tab.conversationId === id ||
+				(tab.kind === 'investigation' && !tab.conversationId && context.conversationId === id)
+			);
+			if (removedTabs.length) {
+				const removedIds = new Set(removedTabs.map((tab) => tab.id));
+				context.workspaceToolTabs = tabs.filter((tab) => !removedIds.has(tab.id));
+				const activeTabWasRemoved = Boolean(context.activeWorkspaceToolTabId && removedIds.has(context.activeWorkspaceToolTabId));
+				if (activeTabWasRemoved) {
+					const next = context.workspaceToolTabs[Math.min(tabs.findIndex((tab) => removedIds.has(tab.id)), context.workspaceToolTabs.length - 1)] ?? null;
+					context.activeWorkspaceToolTabId = next?.id ?? null;
+					context.workspacePane = next?.kind === 'investigation' ? 'investigation' : 'context';
+					context.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
+					context.workspacePaneOpen = Boolean(next);
+				} else if (context.investigationId && removedTabs.some((tab) => tab.investigationId === context.investigationId)) {
+					const activeTab = context.workspaceToolTabs.find((tab) => tab.id === context.activeWorkspaceToolTabId);
+					context.investigationId = activeTab?.kind === 'investigation' ? activeTab.investigationId ?? null : null;
+				}
+				removedToolState = true;
+			}
+			if (context.conversationId === id) {
+				const replacement = this.conversations.findLast((item) => item.workspaceScope === context.workspaceId);
+				if (replacement) context.conversationId = replacement.id;
+				else {
+					const blank = new Conversation();
+					blank.workspaceScope = context.workspaceId;
+					this.conversations.push(blank);
+					context.conversationId = blank.id;
+				}
+				const activeTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId);
+				if (activeTab?.kind === 'investigation') {
+					context.investigationId = activeTab.investigationId ?? null;
+					if (activeTab.conversationId) context.conversationId = activeTab.conversationId;
+				} else context.investigationId = null;
+				removedToolState = true;
 			}
 		}
+		const owner = ownerId ? this.workspaceAt(ownerId) : null;
 		if (owner?.conversationId === id) {
 			const replacement = this.conversations.findLast((item) => item.workspaceScope === owner.path);
 			if (replacement) owner.conversationId = replacement.id;
 		}
+		this.investigationsVersion++;
+		if (removedToolState) {
+			if (this.activeWorkspaceContext) {
+				this.activeInvestigationId = this.activeWorkspaceContext.investigationId ?? null;
+				this.workspacePane = this.activeWorkspaceContext.workspacePane ?? 'investigation';
+				if (!this.activeWorkspaceContext.workspacePaneOpen) this.workspaceToolChooserOpen = false;
+			}
+			this.#writeWorkspaceState();
+		}
+		if (i < 0) return;
 		if (this.conversations.length === 0) {
 			const replacement = new Conversation();
 			replacement.workspaceScope = ownerId;

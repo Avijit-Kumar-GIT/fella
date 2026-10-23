@@ -264,7 +264,7 @@ export const ipc = {
 	/** Reopen a completed Investigation for further edits or analysis. */
 	investigationReopen: (investigationId: string) =>
 		invoke<Investigation>('investigation_reopen', { investigationId }),
-	/** Resolve or create the Investigation associated with this stable Conversation. */
+	/** Legacy resolver used to attach old Investigation records to their original chat. */
 	investigationEnsure: (workspaceId: string, conversationId: string, initialRequest: string, sourceMessageId: string) =>
 		invoke<Investigation>('investigation_ensure', { workspaceId, conversationId, initialRequest, sourceMessageId }),
 	/** Save the analyst-edited current brief on an Investigation. */
@@ -312,8 +312,10 @@ export const ipc = {
 	/** Load one Investigation independently of its conversation surface. */
 	investigationLoad: (investigationId: string) =>
 		invoke<Investigation>('investigation_load', { investigationId }),
-	/** List durable Investigations, most recently updated first. */
-	investigationsList: () => invoke<Investigation[]>('investigations_list'),
+	/** List durable Investigations, most recently updated first. Active chat IDs
+	 * protect unsaved conversations while stale source-backed records are pruned. */
+	investigationsList: (activeConversationIds: string[]) =>
+		invoke<Investigation[]>('investigations_list', { activeConversationIds }),
 	/** Compare a stored turn's source snapshot with the mounted workspace. */
 	analysisTurnReplayStatus: (turnId: string, workspaceId?: string | null) =>
 		invoke<AnalysisTurnReplayStatus>('analysis_turn_replay_status', { turnId, ...workspaceArgs(workspaceId) }),

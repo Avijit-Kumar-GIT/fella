@@ -60,7 +60,7 @@
 		loading = true;
 		loadError = '';
 		try {
-			const all = await ipc.investigationsList();
+			const all = await ipc.investigationsList(session.conversations.map((conversation) => conversation.id));
 			const matching = all.filter((item) => item.workspace_id === workspace);
 			const runIds = new Set<string>();
 			for (const investigation of matching) {

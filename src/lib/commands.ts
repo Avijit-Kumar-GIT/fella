@@ -14,40 +14,6 @@ import type {
 import type { ResolvedArtifact } from './analytics-artifacts';
 import type { OutputTarget } from './analytical-output.svelte';
 
-const ensuredInvestigations = new Map<string, Promise<Investigation>>();
-
-/** Workspace bookkeeping is automatic but must never prevent an analysis.
- * The Conversation ID is stable across archive/reopen and is also persisted
- * as the Investigation's direct navigation link. */
-async function ensureWorkspaceInvestigation(conv: Conversation): Promise<Investigation | undefined> {
-	if (!isDesktop() || !conv.workspaceScope) return;
-	const workspace = session.workspaceAt(conv.workspaceScope);
-	if (!workspace || workspace.historyOnly) return;
-	const source = conv.messages.find(isActualQuestion);
-	if (!source) return;
-
-	const key = JSON.stringify([conv.workspaceScope, conv.id]);
-	let pending = ensuredInvestigations.get(key);
-	const ownsRequest = !pending;
-	if (!pending) {
-		pending = ipc.investigationEnsure(conv.workspaceScope, conv.id, source.text, source.id);
-		ensuredInvestigations.set(key, pending);
-	}
-
-	try {
-		const investigation = await pending;
-		if (ownsRequest) session.investigationsVersion += 1;
-		return investigation;
-	} catch (cause) {
-		conv.addSystem(`Couldn't save this workspace Investigation: ${errMsg(cause)}. The analysis will continue.`);
-		return undefined;
-	} finally {
-		// Deduplicate only concurrent setup calls. A later turn must fetch the
-		// current saved Question plan rather than reuse a stale resolved record.
-		if (ensuredInvestigations.get(key) === pending) ensuredInvestigations.delete(key);
-	}
-}
-
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
 
@@ -979,7 +945,9 @@ async function ask(
 	if (!requireEngine()) return;
 	conv.busy = true;
 	conv.activity = 'preparing the analysis…';
-	const investigation = knownInvestigation ?? (await ensureWorkspaceInvestigation(conv));
+	// Ordinary chat stays an Ask conversation. Only explicit Investigation
+	// actions pass an owning record and Question reference into this run.
+	const investigation = knownInvestigation;
 	if (questionRef && investigation?.id !== questionRef.investigationId) {
 		conv.busy = false;
 		conv.activity = '';
@@ -1145,8 +1113,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 	}
 	conv.busy = true;
 	conv.activity = 'preparing the analysis…';
-	await ensureWorkspaceInvestigation(conv);
-
 	const msg = conv.addAssistant('');
 	msg.rerun_of = turnId;
 	const messageIndex = conv.messages.indexOf(message);

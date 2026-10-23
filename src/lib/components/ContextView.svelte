@@ -117,7 +117,7 @@
 			const [memoryResult, factsResult, investigationResult] = await Promise.allSettled([
 				ipc.memoryFile(workspace),
 				ipc.memoryFacts(workspace),
-				ipc.investigationsList()
+				ipc.investigationsList(session.conversations.map((conversation) => conversation.id))
 			]);
 			if (request !== loadRequest || workspace !== loadedWorkspace) return;
 			if (memoryResult.status === 'fulfilled') {

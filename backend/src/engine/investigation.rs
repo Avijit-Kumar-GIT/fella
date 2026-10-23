@@ -1764,8 +1764,8 @@ pub fn create(
     ))
 }
 
-/// Resolve the Investigation already seeded by this conversation's first
-/// user message, or create it without requiring a separate setup action.
+/// Resolve or migrate a legacy Investigation that was seeded from a
+/// conversation's first user message. New Investigation creation is explicit.
 pub fn ensure_for_conversation(
     data_dir: &Path,
     workspace_id: &str,
@@ -2604,6 +2604,177 @@ pub fn list(data_dir: &Path) -> EngineResult<Vec<Investigation>> {
     Ok(records)
 }
 
+/// Delete every Investigation owned by a Conversation and all of its child
+/// records. Saved analytical artifacts are stored separately and are not
+/// removed here.
+pub fn delete_for_conversation(
+    data_dir: &Path,
+    conversation_id: &str,
+) -> EngineResult<Vec<String>> {
+    let directory = investigations_dir(data_dir);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(EngineError::io(
+                format!("read {}", directory.display()),
+                error,
+            ));
+        }
+    };
+
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            EngineError::io(format!("read entries in {}", directory.display()), error)
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path)
+            .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        if value
+            .get("conversation_id")
+            .and_then(serde_json::Value::as_str)
+            == Some(conversation_id)
+        {
+            let id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| EngineError::msg("investigation filename is not valid UTF-8"))?;
+            record_path(data_dir, id)?;
+            ids.push(id.to_owned());
+        }
+    }
+
+    for id in &ids {
+        delete_record_and_children(data_dir, id)?;
+    }
+    Ok(ids)
+}
+
+/// Remove older automatically-created Investigations whose source chat has
+/// already been deleted. Explicitly blank Investigations have no source
+/// message and are deliberately retained. `preserved_conversation_ids`
+/// includes both archived chats and chats currently open in the UI.
+pub fn delete_orphaned_source_investigations(
+    data_dir: &Path,
+    preserved_conversation_ids: &HashSet<String>,
+) -> EngineResult<Vec<String>> {
+    let directory = investigations_dir(data_dir);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(EngineError::io(
+                format!("read {}", directory.display()),
+                error,
+            ));
+        }
+    };
+
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            EngineError::io(format!("read entries in {}", directory.display()), error)
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path)
+            .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        let conversation_id = value
+            .get("conversation_id")
+            .and_then(serde_json::Value::as_str);
+        let has_source_message = value
+            .get("brief_source_message_id")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|message_id| !message_id.trim().is_empty());
+        let is_orphan = conversation_id
+            .is_some_and(|id| has_source_message && !preserved_conversation_ids.contains(id));
+        if is_orphan {
+            let id = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .ok_or_else(|| EngineError::msg("investigation filename is not valid UTF-8"))?;
+            record_path(data_dir, id)?;
+            ids.push(id.to_owned());
+        }
+    }
+
+    for id in &ids {
+        delete_record_and_children(data_dir, id)?;
+    }
+    Ok(ids)
+}
+
+fn delete_record_and_children(data_dir: &Path, id: &str) -> EngineResult<()> {
+    let parent = record_path(data_dir, id)?;
+    // Fail before removing any children when the parent is already corrupt.
+    read_raw_record(&parent, id)?;
+    for directory_name in [QUESTIONS_DIR, DEFINITIONS_DIR, FINDINGS_DIR] {
+        delete_owned_children(data_dir, directory_name, id)?;
+    }
+    match std::fs::remove_file(&parent) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(EngineError::io(
+            format!("remove {}", parent.display()),
+            error,
+        )),
+    }
+}
+
+fn delete_owned_children(
+    data_dir: &Path,
+    directory_name: &str,
+    investigation_id: &str,
+) -> EngineResult<()> {
+    let directory = data_dir.join(directory_name);
+    let entries = match std::fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(EngineError::io(
+                format!("read {}", directory.display()),
+                error,
+            ));
+        }
+    };
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            EngineError::io(format!("read entries in {}", directory.display()), error)
+        })?;
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+            continue;
+        }
+        let body = std::fs::read_to_string(&path)
+            .map_err(|error| EngineError::io(format!("read {}", path.display()), error))?;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
+            continue;
+        };
+        if value
+            .get("investigation_id")
+            .and_then(serde_json::Value::as_str)
+            != Some(investigation_id)
+        {
+            continue;
+        }
+        std::fs::remove_file(&path)
+            .map_err(|error| EngineError::io(format!("remove {}", path.display()), error))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2617,6 +2788,96 @@ mod tests {
             "fella-investigation-store-{}-{nonce}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn deleting_a_conversation_removes_its_investigation_and_children_only() {
+        let data_dir = scratch();
+        let deleted = create(
+            &data_dir,
+            "/work/sales",
+            "Quarterly revenue",
+            Some("What changed in quarterly revenue?"),
+            Some("source-deleted"),
+            Some("conversation-deleted"),
+        )
+        .unwrap();
+        let retained = create(
+            &data_dir,
+            "/work/sales",
+            "Customer retention",
+            Some("How many customers returned?"),
+            Some("source-retained"),
+            Some("conversation-retained"),
+        )
+        .unwrap();
+        let deleted_question_id = deleted.questions.as_ref().unwrap()[0].id.clone();
+        let retained_question_id = retained.questions.as_ref().unwrap()[0].id.clone();
+
+        assert_eq!(
+            delete_for_conversation(&data_dir, "conversation-deleted").unwrap(),
+            vec![deleted.id.clone()]
+        );
+        let remaining = list(&data_dir).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, retained.id);
+        assert!(!question_path(&data_dir, &deleted_question_id)
+            .unwrap()
+            .exists());
+        assert!(question_path(&data_dir, &retained_question_id)
+            .unwrap()
+            .exists());
+
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn orphan_cleanup_keeps_live_and_intentionally_blank_investigations() {
+        let data_dir = scratch();
+        let orphan = create(
+            &data_dir,
+            "/work/sales",
+            "Deleted chat",
+            Some("What were sales?"),
+            Some("orphan-source"),
+            Some("conversation-deleted"),
+        )
+        .unwrap();
+        let live = create(
+            &data_dir,
+            "/work/sales",
+            "Live chat",
+            Some("What were costs?"),
+            Some("live-source"),
+            Some("conversation-live"),
+        )
+        .unwrap();
+        let blank = create(
+            &data_dir,
+            "/work/sales",
+            "Untitled investigation",
+            None,
+            None,
+            Some("conversation-blank"),
+        )
+        .unwrap();
+        let preserved = HashSet::from([
+            "conversation-live".to_owned(),
+            "conversation-blank".to_owned(),
+        ]);
+
+        assert_eq!(
+            delete_orphaned_source_investigations(&data_dir, &preserved).unwrap(),
+            vec![orphan.id.clone()]
+        );
+        let remaining: HashSet<_> = list(&data_dir)
+            .unwrap()
+            .into_iter()
+            .map(|item| item.id)
+            .collect();
+        assert_eq!(remaining, HashSet::from([live.id, blank.id]));
+
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[test]

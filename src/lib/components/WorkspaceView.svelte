@@ -82,7 +82,8 @@
 		}
 		const request = ++listRequest;
 		investigationsUnavailable = false;
-		void ipc.investigationsList().then((records) => {
+		const activeConversationIds = session.conversations.map((conversation) => conversation.id);
+		void ipc.investigationsList(activeConversationIds).then((records) => {
 			if (request !== listRequest || path !== workspacePath) return;
 			const workspaceInvestigations = records.filter((item) => item.workspace_id === path);
 			session.rememberInvestigationNames(workspaceInvestigations);
