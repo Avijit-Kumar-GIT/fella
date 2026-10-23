@@ -177,6 +177,154 @@ test('generative v2.1: a plain workspace answer does not wait for JSON-render', 
 	}
 });
 
+test('generative v2.2: a multirow analytical answer gets a presentation-only recovery when the model omits its finalizer', async ({ desktop }) => {
+	test.setTimeout(90_000);
+	const { page, workspace, profile } = desktop;
+	const modelRequests = [];
+	let analysisResultReturned = false;
+	const canonical = 'Revenue increased from 10 in Q3 to 20 in Q4.';
+	const baseSpec = {
+		root: 'document',
+		elements: {
+			document: { type: 'Document', props: {}, children: ['title', 'chart'] },
+			title: { type: 'Title', props: { content: 'Revenue by quarter' }, children: [] },
+			chart: { type: 'Chart', props: {
+				resultId: 'evidence-0',
+				title: 'Revenue trend',
+				spec: {
+					mark: { type: 'line', point: true },
+					encoding: {
+						x: { field: 'period', type: 'ordinal' },
+						y: { field: 'revenue', type: 'quantitative' },
+						tooltip: [
+							{ field: 'period', type: 'ordinal' },
+							{ field: 'revenue', type: 'quantitative' }
+						]
+					}
+				}
+			}, children: [] }
+		}
+	};
+	let expectedSpec = null;
+	function resultBinding(payload) {
+		const userMessage = [...(payload.messages ?? [])].reverse().find((entry) => entry.role === 'user' && entry.content?.includes('Accepted saved result bindings and exact row samples'));
+		if (!userMessage) throw new Error('presentation-only recovery must receive the accepted result rows');
+		const marker = 'Accepted saved result bindings and exact row samples (charts render from the full saved result, not only this sample):';
+		const start = userMessage.content.indexOf(marker);
+		const bindings = JSON.parse(userMessage.content.slice(start + marker.length).trim());
+		if (!bindings[0]?.id) throw new Error('presentation-only recovery must receive a result ID');
+		return bindings[0].id;
+	}
+	const modelServer = createServer(async (request, response) => {
+		if (request.method === 'GET' && request.url === '/v1/models') {
+			response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ data: [{ id: 'fella-presentation-recovery-e2e' }] }));
+			return;
+		}
+		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+			response.writeHead(404).end();
+			return;
+		}
+		let body = '';
+		for await (const chunk of request) body += chunk;
+		const payload = JSON.parse(body);
+		modelRequests.push(payload);
+		let message;
+		let finishReason = 'stop';
+		if (payload.response_format?.type === 'json_schema') {
+			const invalidSpec = structuredClone(baseSpec);
+			invalidSpec.elements.chart.props.resultId = 'unavailable-result';
+			message = { role: 'assistant', content: JSON.stringify({ presentation_spec: invalidSpec }) };
+		} else if (payload.response_format?.type === 'json_object') {
+			expectedSpec = structuredClone(baseSpec);
+			expectedSpec.elements.chart.props.resultId = resultBinding(payload);
+			message = { role: 'assistant', content: JSON.stringify({ presentation_spec: expectedSpec }) };
+		} else if (!analysisResultReturned && payload.tools?.some((tool) => tool.function?.name === 'run_sql')) {
+			analysisResultReturned = true;
+			message = {
+				role: 'assistant', content: '',
+				tool_calls: [{
+					type: 'function', id: 'call_quarterly_revenue',
+					function: { name: 'run_sql', arguments: JSON.stringify({ sql: 'SELECT period, revenue FROM sales ORDER BY period' }) }
+				}]
+			};
+			finishReason = 'tool_calls';
+		} else if (payload.tools?.length) {
+			message = { role: 'assistant', content: canonical };
+		} else {
+			message = { role: 'assistant', content: 'The answer is consistent with the saved Q3 and Q4 result.' };
+		}
+		response.writeHead(200, { 'content-type': 'application/json' }).end(`${JSON.stringify({
+			choices: [{ index: 0, message, finish_reason: finishReason }],
+			usage: { prompt_tokens: 20, completion_tokens: 15 }
+		})}\n`);
+	});
+	await new Promise((resolve, reject) => {
+		modelServer.once('error', reject);
+		modelServer.listen(0, '127.0.0.1', resolve);
+	});
+	const address = modelServer.address();
+	expect(address && typeof address === 'object').toBeTruthy();
+
+	try {
+		await rm(join(profile, 'enforce-engine-budget'), { force: true });
+		const credentialState = await invoke(page, 'set_api_key', { provider: 'custom', key: 'generative-e2e-local-key' });
+		expect(credentialState.has_credential).toBe(true);
+		const settings = await invoke(page, 'set_settings', {
+			settings: { provider: 'custom', base_url: `http://127.0.0.1:${address.port}/v1`, model: 'fella-presentation-recovery-e2e' }
+		});
+		expect(settings.has_credential).toBe(true);
+		await page.reload();
+		await expect(page.getByRole('button', { name: 'Open conversation: What changed between Q3 and Q4 revenue?', exact: true })).toBeVisible();
+		await page.getByRole('button', { name: 'Open conversation: What changed between Q3 and Q4 revenue?', exact: true }).click();
+
+		const composer = page.getByRole('combobox', { name: 'Ask about commerce', exact: true });
+		await composer.fill('Show the revenue trend from Q3 to Q4.');
+		await composer.press('Enter');
+		await expect(page.locator('.msg.user').last()).toContainText('Show the revenue trend from Q3 to Q4.');
+		const assistant = page.locator('.msg.assistant').last();
+		const primary = assistant.locator('.analytical-answer');
+		await expect(primary.locator('.analytical-presentation .presentation-chart')).toBeVisible({ timeout: 30_000 });
+		await expect(primary.locator('.view-note')).toHaveCount(0);
+		await expect(primary).not.toContainText(/could not compose|layout could not be displayed/i);
+
+		const turnId = await assistant.getAttribute('data-analysis-turn-id');
+		expect(turnId).toBeTruthy();
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		expect(turn.result).toMatchObject({ text: canonical, presentation_spec: expectedSpec });
+		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
+		expect(artifacts).toHaveLength(1);
+		expect(artifacts[0].revisions[0]).toMatchObject({ run_id: turnId, spec: expectedSpec });
+
+		const structuredRequest = modelRequests.find((payload) => payload.response_format?.type === 'json_schema');
+		expect(structuredRequest, 'omitted finalizer should cause one schema-constrained presentation-only call').toBeTruthy();
+		expect(structuredRequest.tools ?? []).toEqual([]);
+		const resultId = resultBinding(structuredRequest);
+		expect(JSON.stringify(structuredRequest.messages)).toContain(resultId);
+		expect(JSON.stringify(structuredRequest.messages)).toContain('Q3');
+		expect(JSON.stringify(structuredRequest.messages)).toContain('Q4');
+		const jsonRetry = modelRequests.find((payload) => payload.response_format?.type === 'json_object');
+		expect(jsonRetry, 'an invalid result binding should trigger one JSON-mode correction call').toBeTruthy();
+		expect(jsonRetry.tools ?? []).toEqual([]);
+		expect(expectedSpec.elements.chart.props.resultId).toBe(resultId);
+		const answerRequest = modelRequests.find((payload) => payload.tools?.some((tool) =>
+			tool.function?.name === 'fella_presentation_answer' && tool.function?.description?.includes(resultId)));
+		expect(answerRequest, 'the refreshed finalizer schema should include the saved result binding').toBeTruthy();
+		const methods = (await engineRequests(profile)).map(({ method }) => method);
+		expect(methods.filter((method) => method === 'ask')).toHaveLength(1);
+		expect(methods.filter((method) => method === 'artifact_create')).toHaveLength(1);
+	} finally {
+		await test.info().attach('presentation-recovery-requests', {
+			body: JSON.stringify(modelRequests.map(({ tools, response_format, messages }) => ({
+				tools: tools?.map((tool) => tool.function.name) ?? [],
+				response_format: response_format?.type ?? null,
+				messages: messages?.map(({ role, content, name }) => ({ role, content, name })) ?? []
+			})), null, 2),
+			contentType: 'application/json'
+		});
+		await new Promise((resolve) => modelServer.close(resolve));
+	}
+});
+
 test('generative v2.1: repeated tool calls recover a plain answer instead of surfacing a presentation error', async ({ desktop }) => {
 	test.setTimeout(90_000);
 	const { page, profile } = desktop;

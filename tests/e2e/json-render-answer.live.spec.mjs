@@ -4,6 +4,9 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test, _electron as electron } from '@playwright/test';
 
+// Live model acceptance v1.1: the action assertion follows the current
+// “Create report” label; chart rendering, answer, and artifact criteria remain fixed.
+
 const root = resolve('.');
 
 function authPath() {
@@ -83,16 +86,41 @@ for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.mode
 		assert.ok(turnId, 'the real-model response should link its canonical analysis turn');
 		const turn = await invoke(page, 'analysis_turn_load', { turnId });
 		const spec = turn.result?.presentation_spec;
-		console.log(`REAL_MODEL_JSON_RENDER_SPEC ${modelCase.provider}/${modelCase.model}\n${JSON.stringify(spec ?? null, null, 2)}\nEND_REAL_MODEL_JSON_RENDER_SPEC`);
+		if (!spec) {
+			console.log(`REAL_MODEL_JSON_RENDER_DIAGNOSTICS ${modelCase.provider}/${modelCase.model}: ${JSON.stringify({
+				state: turn.state,
+				answer: turn.result?.text,
+				model_calls: turn.trace?.model_calls,
+				evidence: turn.result?.evidence?.map(({ id, tool, columns, row_count, error, error_kind }) => ({ id, tool, columns, row_count, error, error_kind }))
+			})}`);
+		}
+		const presentationSummary = spec ? {
+			root: spec.root,
+			components: Object.values(spec.elements ?? {}).map(({ type }) => type),
+			charts: Object.values(spec.elements ?? {}).filter(({ type }) => type === 'Chart').map(({ props }) => ({
+				title: props.title,
+				resultId: props.resultId,
+				mark: typeof props.spec?.mark === 'string' ? props.spec.mark : props.spec?.mark?.type,
+				fields: Object.fromEntries(Object.entries(props.spec?.encoding ?? {}).filter(([, value]) => value && typeof value === 'object').map(([channel, value]) => [channel, Array.isArray(value) ? value.map((entry) => entry.field) : value.field]))
+			}))
+		} : null;
+		console.log(`REAL_MODEL_JSON_RENDER_SUMMARY ${modelCase.provider}/${modelCase.model}: ${JSON.stringify(presentationSummary)}`);
 		assert.ok(spec && typeof spec === 'object' && !Array.isArray(spec), 'the real model must return the same-turn json-render spec');
 		assert.equal(spec.elements?.[spec.root]?.type, 'Document', 'the model output must have the catalog root');
 		const chartNodes = Object.values(spec.elements ?? {}).filter((element) => element.type === 'Chart');
 		assert.ok(chartNodes.length > 0, 'a chart-worthy multi-period comparison should receive a chart without the user requesting one');
 		for (const element of chartNodes) assert.ok(element.props?.resultId && element.props?.spec?.encoding, 'chart presentation must be bound to a saved result and field encodings');
 
-		await expect(answer.getByRole('button', { name: 'Save to Studio' })).toBeVisible({ timeout: 30_000 });
+		await expect(answer.getByRole('button', { name: 'Create report' })).toBeVisible({ timeout: 30_000 });
+		if (await answer.locator('.view-note').count()) {
+			const summary = answer.locator('.view-note details summary');
+			if (await summary.count()) await summary.click();
+			console.log(`REAL_MODEL_PRESENTATION_DISPLAY_ERROR ${modelCase.provider}/${modelCase.model}: ${await answer.locator('.view-note').innerText()}`);
+		}
 		await expect(answer.locator('.view-note')).toHaveCount(0);
-		await expect(answer.locator('.analytical-presentation .presentation-chart')).toBeVisible();
+		const renderedCharts = answer.locator('.analytical-presentation .presentation-chart');
+		await expect(renderedCharts).toHaveCount(chartNodes.length);
+		await expect(renderedCharts.first()).toBeVisible();
 		await expect(answer.locator('.analytical-presentation .fallback')).toHaveCount(0);
 		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
 		assert.ok(artifacts.some((artifact) => artifact.revisions.some((revision) => revision.run_id === turnId && JSON.stringify(revision.spec) === JSON.stringify(spec))), 'the validated same-turn answer should be persisted as a JSON spec artifact');

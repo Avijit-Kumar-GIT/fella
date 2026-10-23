@@ -18,8 +18,9 @@ const server = await createServer({
 try {
 	const { componentDefinitions } = await server.ssrLoadModule('/src/lib/presentation/schemas.ts');
 	const { presentationCatalog, presentationRegistry } = await server.ssrLoadModule('/src/lib/presentation/library.ts');
-	const { presentationManifest, presentationPrompt } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
+	const { presentationManifest, presentationPrompt, presentationComponentSchemas } = await server.ssrLoadModule('/src/lib/presentation/manifest.ts');
 	const { validatePresentation } = await server.ssrLoadModule('/src/lib/presentation/validate.ts');
+	const { bindChartSpec } = await server.ssrLoadModule('/src/lib/presentation/chart.ts');
 	const { exportPresentation } = await server.ssrLoadModule('/src/lib/presentation/export.ts');
 	const { setPresentationValue, evaluatePresentationAction } = await server.ssrLoadModule('/src/lib/presentation/runtime.ts');
 	const { render } = await server.ssrLoadModule('svelte/server');
@@ -31,6 +32,7 @@ try {
 	assert.deepEqual(generated.componentNames, names);
 	assert.deepEqual(Object.keys(presentationRegistry), names);
 	assert.equal(presentationManifest().version, generated.version);
+	assert.deepEqual(generated.componentSchemas, presentationComponentSchemas());
 	assert.match(presentationPrompt(), /json-render spec/);
 	assert.match(presentationPrompt(), /Do not use a table merely because analysis returned rows/);
 
@@ -81,6 +83,13 @@ try {
 	const unsafeChart = structuredClone(spec);
 	unsafeChart.elements.chart.props.spec.encoding.y.field = 'invented';
 	assert.equal(validatePresentation(unsafeChart, results).valid, false);
+	const standardChartSchema = structuredClone(spec);
+	standardChartSchema.elements.chart.props.spec.$schema = 'https://vega.github.io/schema/vega-lite/v5.json';
+	assert.equal(validatePresentation(standardChartSchema, results).valid, true, 'standard Vega-Lite schema metadata must not make a valid chart fail');
+	assert.equal(Object.hasOwn(bindChartSpec(standardChartSchema.elements.chart.props.spec, results[0]), '$schema'), false, 'schema metadata is not sent to the Vega runtime');
+	const unsupportedChartSchema = structuredClone(spec);
+	unsupportedChartSchema.elements.chart.props.spec.$schema = 'https://untrusted.example/chart.json';
+	assert.equal(validatePresentation(unsupportedChartSchema, results).valid, false, 'unknown schema URLs remain rejected');
 	const orphan = structuredClone(spec);
 	orphan.elements.unused = { type: 'Text', props: { content: 'orphan' }, children: [] };
 	assert.equal(validatePresentation(orphan, results).valid, false);

@@ -25,10 +25,14 @@ export function presentationSchema(): object {
 	return presentationCatalog.jsonSchema();
 }
 
+export function presentationComponentSchemas(): Record<string, object> {
+	return Object.fromEntries(Object.entries(componentDefinitions).map(([name, definition]) => [name, z.toJSONSchema(definition.props)]));
+}
+
 export function presentationPrompt(results: Pick<BoundResult, 'id' | 'columns' | 'row_count' | 'complete'>[] = []): string {
+	const componentSchemas = presentationComponentSchemas();
 	const components = Object.entries(componentDefinitions).map(([name, definition]) => {
-		const json = z.toJSONSchema(definition.props);
-		return `${name}: ${definition.description}\nProps schema: ${JSON.stringify(json)}`;
+		return `${name}: ${definition.description}\nProps schema: ${JSON.stringify(componentSchemas[name])}`;
 	});
 	return [
 		`Fella analytical answer output format: json-render spec ${PRESENTATION_VERSION}.`,
@@ -45,6 +49,7 @@ export function presentationManifest() {
 		version: PRESENTATION_VERSION,
 		componentNames: Object.keys(componentDefinitions),
 		schema,
+		componentSchemas: presentationComponentSchemas(),
 		prompt: presentationPrompt(),
 		designGuidance: PRESENTATION_DESIGN_GUIDANCE,
 		rules: PRESENTATION_RULES

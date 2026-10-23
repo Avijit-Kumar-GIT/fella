@@ -167,6 +167,173 @@ fn validate_title(title: &str) -> EngineResult<String> {
     Ok(title.to_owned())
 }
 
+fn schema_type_matches(value: &Json, kind: &str) -> bool {
+    match kind {
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "string" => value.is_string(),
+        "integer" => {
+            value.as_i64().is_some()
+                || value.as_u64().is_some()
+                || value.as_f64().is_some_and(|n| n.fract() == 0.0)
+        }
+        "number" => value.is_number(),
+        "boolean" => value.is_boolean(),
+        "null" => value.is_null(),
+        _ => true,
+    }
+}
+
+/// Validate the catalog's generated JSON Schema subset. The schemas come from
+/// the same Zod component definitions as the Svelte renderer and use only
+/// standard structural keywords; keep Rust from persisting a tree the UI will
+/// reject on reopen.
+fn validate_component_schema(value: &Json, schema: &Json, path: &str) -> EngineResult<()> {
+    if let Some(expected) = schema.get("type") {
+        let matches = if let Some(kind) = expected.as_str() {
+            schema_type_matches(value, kind)
+        } else {
+            expected.as_array().is_some_and(|kinds| {
+                kinds
+                    .iter()
+                    .filter_map(Json::as_str)
+                    .any(|kind| schema_type_matches(value, kind))
+            })
+        };
+        if !matches {
+            return Err(EngineError::msg(format!("{path} has the wrong JSON type")));
+        }
+    }
+    if let Some(values) = schema.get("enum").and_then(Json::as_array) {
+        if !values.contains(value) {
+            return Err(EngineError::msg(format!("{path} has an unsupported value")));
+        }
+    }
+    if schema
+        .get("const")
+        .is_some_and(|expected| expected != value)
+    {
+        return Err(EngineError::msg(format!("{path} has an unsupported value")));
+    }
+    if let Some(choices) = schema.get("oneOf").and_then(Json::as_array) {
+        let matches = choices
+            .iter()
+            .filter(|choice| validate_component_schema(value, choice, path).is_ok())
+            .count();
+        if matches != 1 {
+            return Err(EngineError::msg(format!(
+                "{path} must match exactly one supported form"
+            )));
+        }
+    }
+    if let Some(choices) = schema.get("anyOf").and_then(Json::as_array) {
+        if !choices
+            .iter()
+            .any(|choice| validate_component_schema(value, choice, path).is_ok())
+        {
+            return Err(EngineError::msg(format!(
+                "{path} does not match a supported form"
+            )));
+        }
+    }
+    if let Some(string) = value.as_str() {
+        let length = string.chars().count();
+        if schema
+            .get("minLength")
+            .and_then(Json::as_u64)
+            .is_some_and(|min| length < min as usize)
+            || schema
+                .get("maxLength")
+                .and_then(Json::as_u64)
+                .is_some_and(|max| length > max as usize)
+        {
+            return Err(EngineError::msg(format!(
+                "{path} exceeds its text length limits"
+            )));
+        }
+    }
+    if let Some(array) = value.as_array() {
+        if schema
+            .get("minItems")
+            .and_then(Json::as_u64)
+            .is_some_and(|min| array.len() < min as usize)
+            || schema
+                .get("maxItems")
+                .and_then(Json::as_u64)
+                .is_some_and(|max| array.len() > max as usize)
+        {
+            return Err(EngineError::msg(format!(
+                "{path} exceeds its item count limits"
+            )));
+        }
+        if let Some(items) = schema.get("items") {
+            for (index, item) in array.iter().enumerate() {
+                validate_component_schema(item, items, &format!("{path}[{index}]"))?;
+            }
+        }
+    }
+    if let Some(number) = value.as_f64() {
+        if schema
+            .get("minimum")
+            .and_then(Json::as_f64)
+            .is_some_and(|min| number < min)
+            || schema
+                .get("maximum")
+                .and_then(Json::as_f64)
+                .is_some_and(|max| number > max)
+            || schema
+                .get("exclusiveMinimum")
+                .and_then(Json::as_f64)
+                .is_some_and(|min| number <= min)
+        {
+            return Err(EngineError::msg(format!(
+                "{path} is outside its numeric limits"
+            )));
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = schema.get("required").and_then(Json::as_array) {
+            if required
+                .iter()
+                .filter_map(Json::as_str)
+                .any(|key| !object.contains_key(key))
+            {
+                return Err(EngineError::msg(format!(
+                    "{path} is missing a required property"
+                )));
+            }
+        }
+        let properties = schema.get("properties").and_then(Json::as_object);
+        if let Some(name_schema) = schema.get("propertyNames") {
+            for key in object.keys() {
+                validate_component_schema(
+                    &Json::String(key.clone()),
+                    name_schema,
+                    &format!("{path} property name"),
+                )?;
+            }
+        }
+        for (key, child) in object {
+            if let Some(child_schema) = properties.and_then(|properties| properties.get(key)) {
+                validate_component_schema(child, child_schema, &format!("{path}.{key}"))?;
+                continue;
+            }
+            match schema.get("additionalProperties") {
+                Some(Json::Bool(false)) => {
+                    return Err(EngineError::msg(format!(
+                        "{path}.{key} is not a supported property"
+                    )))
+                }
+                Some(additional) if additional.is_object() => {
+                    validate_component_schema(child, additional, &format!("{path}.{key}"))?
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_spec(spec: &Json) -> EngineResult<()> {
     let object = spec
         .as_object()
@@ -230,6 +397,15 @@ pub fn validate_spec(spec: &Json) -> EngineResult<()> {
                 "presentation uses an unknown component or invalid props",
             ));
         }
+        let prop_schema = catalog["componentSchemas"][kind]
+            .as_object()
+            .map(|_| &catalog["componentSchemas"][kind])
+            .ok_or_else(|| EngineError::msg("presentation component schemas are unavailable"))?;
+        validate_component_schema(
+            &element["props"],
+            prop_schema,
+            &format!("elements.{key}.props"),
+        )?;
         let children = element
             .get("children")
             .and_then(Json::as_array)
@@ -1120,6 +1296,30 @@ mod tests {
 
     fn sample_spec() -> Json {
         serde_json::json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}})
+    }
+
+    #[test]
+    fn json_render_specs_must_match_the_generated_component_prop_schemas() {
+        let mut valid = sample_spec();
+        valid["elements"]["doc"]["children"] = json!(["card"]);
+        valid["elements"]["card"] = json!({
+            "type":"Card", "props":{"tone":"quiet"}, "children":["title"]
+        });
+        assert!(validate_spec(&valid).is_ok());
+
+        let mut invalid_enum = valid.clone();
+        invalid_enum["elements"]["card"]["props"]["tone"] = json!("success");
+        assert!(validate_spec(&invalid_enum)
+            .unwrap_err()
+            .to_string()
+            .contains("unsupported value"));
+
+        let mut invalid_property = valid;
+        invalid_property["elements"]["card"]["props"]["className"] = json!("custom");
+        assert!(validate_spec(&invalid_property)
+            .unwrap_err()
+            .to_string()
+            .contains("not a supported property"));
     }
 
     #[test]

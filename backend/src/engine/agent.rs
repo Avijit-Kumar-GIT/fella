@@ -88,24 +88,73 @@ fn presentation_manifest() -> &'static serde_json::Value {
     })
 }
 
-fn presentation_answer_schema() -> ToolSchema {
+fn presentation_result_rows(item: &EvidenceItem) -> Option<(&[String], &[Vec<serde_json::Value>])> {
+    if let Some(table) = &item.result_table {
+        Some((&table.columns, &table.rows))
+    } else {
+        Some((item.columns.as_deref()?, item.rows.as_deref()?))
+    }
+}
+
+fn presentation_bindings(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
+    evidence
+        .iter()
+        .filter(|item| is_presentation_result(item))
+        .filter_map(|item| {
+            let (columns, rows) = presentation_result_rows(item)?;
+            Some(serde_json::json!({
+                "id": item.id,
+                "tool": item.tool,
+                "columns": columns,
+                "row_count": item.row_count.unwrap_or(rows.len()),
+                "complete": item.row_count.map_or(true, |count| count == rows.len())
+            }))
+        })
+        .collect()
+}
+
+fn presentation_prompt(evidence: &[EvidenceItem]) -> String {
+    const BINDINGS_MARKER: &str =
+        "\nAvailable result bindings (metadata only; the result rows themselves are provided separately as evidence):\n";
+    let prompt = presentation_manifest()["prompt"].as_str().unwrap_or("");
+    let bindings =
+        serde_json::to_string(&presentation_bindings(evidence)).unwrap_or_else(|_| "[]".to_owned());
+    if let Some((prompt, _)) = prompt.rsplit_once(BINDINGS_MARKER) {
+        format!("{prompt}{BINDINGS_MARKER}{bindings}")
+    } else {
+        format!("{prompt}{BINDINGS_MARKER}{bindings}")
+    }
+}
+
+fn presentation_answer_schema(evidence: &[EvidenceItem]) -> ToolSchema {
     let manifest = presentation_manifest();
-    let instructions = manifest["prompt"].as_str().unwrap_or("");
+    let instructions = presentation_prompt(evidence);
     ToolSchema {
-		name: PRESENTATION_ANSWER_TOOL.into(),
-			description: format!(
-			"Use this finalizer when an interactive or structured presentation materially improves the completed workspace answer. `answer` is the canonical, evidence-grounded answer used for verification and history; it remains complete and useful on its own if the presentation is rejected. `presentation_spec` is an optional rendering of that same answer. Do not call this until analysis is complete or in the same response as another tool. Bind analytical values to supplied result IDs and fields; use exact result rows for metrics. Never invent a dataset or put executable code in the presentation.\n\n{instructions}"
-		),
-		parameters: serde_json::json!({
-			"type":"object",
-			"properties": {
-				"answer": {"type":"string", "minLength":1, "maxLength":16000},
-				"presentation_spec": manifest["schema"].clone()
-			},
-			"required":["answer", "presentation_spec"],
-			"additionalProperties":false
-		}),
+        name: PRESENTATION_ANSWER_TOOL.into(),
+        description: format!(
+            "Call this finalizer once after analysis when an accepted multi-row result supports a useful structured answer. A presentation is required when the result supports it for a requested time trend, period comparison, category ranking, distribution, or relationship; use a result-bound chart when that makes the pattern clearer. The `answer` is the canonical, evidence-grounded answer used for verification and history. `presentation_spec` is its primary structured view and must use only the supplied result IDs and fields. Do not call this with another tool. Never invent data or use executable code.\n\n{instructions}"
+        ),
+        parameters: serde_json::json!({
+            "type":"object",
+            "properties": {
+                "answer": {"type":"string", "minLength":1, "maxLength":16000},
+                "presentation_spec": manifest["schema"].clone()
+            },
+            "required":["answer", "presentation_spec"],
+            "additionalProperties":false
+        }),
 	}
+}
+
+fn presentation_spec_response_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "presentation_spec": presentation_manifest()["schema"].clone()
+        },
+        "required": ["presentation_spec"],
+        "additionalProperties": false
+    })
 }
 
 #[derive(Debug)]
@@ -223,6 +272,7 @@ fn validate_presentation_shape(spec: &serde_json::Value) -> EngineResult<()> {
             "Every presentation element must be reachable from the root.",
         ));
     }
+    crate::engine::artifacts::validate_spec(spec)?;
     Ok(())
 }
 
@@ -239,6 +289,346 @@ fn parse_presentation_answer(arguments: &serde_json::Value) -> EngineResult<Pres
         text: text.to_owned(),
         spec,
     })
+}
+
+fn parse_structured_presentation(content: &str) -> EngineResult<serde_json::Value> {
+    let content = content.trim();
+    let unfenced = content
+        .strip_prefix("```json")
+        .or_else(|| content.strip_prefix("```JSON"))
+        .or_else(|| content.strip_prefix("```"))
+        .unwrap_or(content)
+        .trim();
+    let content = unfenced.strip_suffix("```").unwrap_or(unfenced).trim();
+    let output: serde_json::Value = serde_json::from_str(content).map_err(|error| {
+        EngineError::msg(format!("Presentation response was not JSON: {error}"))
+    })?;
+    let spec = output.get("presentation_spec").cloned().ok_or_else(|| {
+        EngineError::msg("Presentation response did not include presentation_spec.")
+    })?;
+    validate_presentation_shape(&spec)?;
+    Ok(spec)
+}
+
+fn presentation_sample(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
+    evidence
+        .iter()
+        .filter(|item| is_presentation_result(item))
+        .filter_map(|item| {
+            let (columns, rows) = presentation_result_rows(item)?;
+            Some(serde_json::json!({
+                "id": item.id,
+                "tool": item.tool,
+                "columns": columns,
+                "row_count": item.row_count.unwrap_or(rows.len()),
+                "complete": item.row_count.map_or(true, |count| count == rows.len()),
+                "sample_rows": rows.iter().take(24).collect::<Vec<_>>()
+            }))
+        })
+        .collect()
+}
+
+fn presentation_composition_needed(evidence: &[EvidenceItem]) -> bool {
+    evidence.iter().any(|item| {
+        is_presentation_result(item)
+            && presentation_result_rows(item).is_some_and(|(_, rows)| rows.len() > 1)
+    })
+}
+
+fn presentation_has_chart(spec: &serde_json::Value) -> bool {
+    spec.get("elements")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|elements| {
+            elements.values().any(|element| {
+                element.get("type").and_then(serde_json::Value::as_str) == Some("Chart")
+            })
+        })
+}
+
+fn presentation_result<'a>(
+    evidence: &'a [EvidenceItem],
+    id: &str,
+) -> Option<(&'a [String], &'a [Vec<serde_json::Value>])> {
+    evidence
+        .iter()
+        .find(|item| item.id == id && is_presentation_result(item))
+        .and_then(presentation_result_rows)
+}
+
+fn validate_chart_field_references(
+    value: &serde_json::Value,
+    columns: &[String],
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_chart_field_references(value, columns)?;
+            }
+        }
+        serde_json::Value::Object(object) => {
+            if let Some(field) = object.get("field").and_then(serde_json::Value::as_str) {
+                let repeat =
+                    object.len() == 1 && ["row", "column", "repeat", "layer"].contains(&field);
+                if !repeat && !columns.iter().any(|column| column == field) {
+                    return Err(format!("chart field {field:?} is not in the bound result"));
+                }
+            }
+            for value in object.values() {
+                validate_chart_field_references(value, columns)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_presentation_bindings(
+    spec: &serde_json::Value,
+    evidence: &[EvidenceItem],
+) -> Result<(), String> {
+    let elements = spec
+        .get("elements")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "presentation elements are missing".to_owned())?;
+    for (key, element) in elements {
+        let kind = element
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let props = element.get("props").and_then(serde_json::Value::as_object);
+        let Some(props) = props else { continue };
+        let needs_result = matches!(
+            kind,
+            "Metric" | "Progress" | "Table" | "Chart" | "ResultFilter"
+        );
+        if !needs_result {
+            continue;
+        }
+        let id = props
+            .get("resultId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("elements.{key} needs a resultId"))?;
+        let (columns, rows) = presentation_result(evidence, id)
+            .ok_or_else(|| format!("elements.{key} references unavailable result {id:?}"))?;
+        let field_exists = |field: &str| columns.iter().any(|column| column == field);
+        if matches!(kind, "Metric" | "Progress" | "ResultFilter") {
+            let field = props
+                .get("field")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("elements.{key} needs a result field"))?;
+            if !field_exists(field) {
+                return Err(format!(
+                    "elements.{key} field {field:?} is not in result {id:?}"
+                ));
+            }
+            if matches!(kind, "Metric" | "Progress") {
+                let row = props
+                    .get("row")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| format!("elements.{key} needs a result row"))?
+                    as usize;
+                if row >= rows.len() {
+                    return Err(format!("elements.{key} row {row} is not in result {id:?}"));
+                }
+            }
+        }
+        if kind == "Table" {
+            if let Some(fields) = props.get("fields").and_then(serde_json::Value::as_array) {
+                for field in fields.iter().filter_map(serde_json::Value::as_str) {
+                    if !field_exists(field) {
+                        return Err(format!(
+                            "elements.{key} field {field:?} is not in result {id:?}"
+                        ));
+                    }
+                }
+            }
+            if let Some(formats) = props
+                .get("columnFormats")
+                .and_then(serde_json::Value::as_object)
+            {
+                if let Some(field) = formats.keys().find(|field| !field_exists(field)) {
+                    return Err(format!(
+                        "elements.{key} format field {field:?} is not in result {id:?}"
+                    ));
+                }
+            }
+        }
+        if kind == "Chart" {
+            if let Some(chart) = props.get("spec") {
+                validate_chart_field_references(chart, columns)
+                    .map_err(|error| format!("elements.{key}: {error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_composed_presentation(
+    spec: &serde_json::Value,
+    evidence: &[EvidenceItem],
+    require_chart: bool,
+) -> Result<(), String> {
+    validate_presentation_bindings(spec, evidence)?;
+    if require_chart && !presentation_has_chart(spec) {
+        return Err("this time-trend answer requires a result-bound chart".into());
+    }
+    Ok(())
+}
+
+fn question_needs_time_chart(question: &str, evidence: &[EvidenceItem]) -> bool {
+    let question = question.to_ascii_lowercase();
+    let asks_for_pattern = [
+        "trend",
+        "over time",
+        "quarter-by-quarter",
+        "month-by-month",
+        "year-by-year",
+        "week-by-week",
+        "change between",
+        "changed between",
+        "growth across",
+        "compare the quarters",
+    ]
+    .iter()
+    .any(|phrase| question.contains(phrase));
+    asks_for_pattern
+        && evidence.iter().any(|item| {
+            is_presentation_result(item)
+                && presentation_result_rows(item).is_some_and(|(columns, rows)| {
+                    rows.len() > 1
+                        && columns.iter().any(|column| {
+                            let column = column.to_ascii_lowercase();
+                            ["date", "time", "period", "quarter", "month", "week", "year"]
+                                .iter()
+                                .any(|part| column.contains(part))
+                        })
+                })
+        })
+}
+
+async fn ensure_presentation(
+    llm: &LlmClient,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    current_spec: Option<&serde_json::Value>,
+    ids: &mut RunIds,
+    usage: &mut Option<Usage>,
+    cancel: &AtomicBool,
+) -> Option<serde_json::Value> {
+    let current_is_valid = current_spec.is_some_and(|spec| {
+        validate_presentation_shape(spec).is_ok()
+            && validate_presentation_bindings(spec, evidence).is_ok()
+    });
+    let chart_required = question_needs_time_chart(question, evidence);
+    let needs_composition = presentation_composition_needed(evidence)
+        && (!current_is_valid
+            || chart_required && !current_spec.is_some_and(presentation_has_chart));
+    if needs_composition {
+        if let Some(spec) =
+            compose_presentation(llm, question, answer, evidence, ids, usage, cancel).await
+        {
+            return Some(spec);
+        }
+    }
+    if current_is_valid && !(chart_required && !current_spec.is_some_and(presentation_has_chart)) {
+        current_spec.cloned()
+    } else {
+        None
+    }
+}
+
+fn presentation_composer_messages(
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+) -> Vec<ChatMessage> {
+    let system = format!(
+        "You compose Fella's primary analytical presentation after the answer and analysis are complete. Return only a JSON object with one property, `presentation_spec`, matching the supplied response schema. Do not change, repeat, or add claims to the canonical answer. Use the exact result IDs and field names below; charts and tables must bind to those saved results, never embed invented data. When the question asks for a trend across ordered periods, make a result-bound line or area chart the primary view; for a category ranking use bars; for exact records use a table. Add concise interpretation and caveats without repeating values as unbound literals. Keep the view responsive and avoid duplicate content.\n\n{}",
+        presentation_prompt(evidence)
+    );
+    let user = format!(
+        "Original user question:\n{question}\n\nCanonical answer, already completed and verified; preserve it as the authority:\n{answer}\n\nAccepted saved result bindings and exact row samples (charts render from the full saved result, not only this sample):\n{}",
+        serde_json::to_string(&presentation_sample(evidence)).unwrap_or_else(|_| "[]".to_owned())
+    );
+    vec![ChatMessage::System(system), ChatMessage::User(user)]
+}
+
+async fn compose_presentation(
+    llm: &LlmClient,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    ids: &mut RunIds,
+    usage: &mut Option<Usage>,
+    cancel: &AtomicBool,
+) -> Option<serde_json::Value> {
+    if !presentation_composition_needed(evidence) {
+        return None;
+    }
+    let messages = presentation_composer_messages(question, answer, evidence);
+    let schema = presentation_spec_response_schema();
+    let suppress = |_text: &str| {};
+    let mut retry_messages = messages.clone();
+    let mut retry_reason = "the model did not return a valid presentation".to_owned();
+    let started = Instant::now();
+    let first = tokio::select! {
+        result = llm.chat_structured(&messages, &schema, &suppress, &suppress) => result,
+        _ = cancelled(cancel) => return None,
+    };
+    match first {
+        Ok(response) => {
+            record_model_call(ids, started, true, response.usage.clone());
+            *usage = Usage::merge(usage.take(), response.usage);
+            let require_chart = question_needs_time_chart(question, evidence);
+            match parse_structured_presentation(&response.content)
+                .map_err(|error| error.to_string())
+                .and_then(|spec| {
+                    validate_composed_presentation(&spec, evidence, require_chart).map(|()| spec)
+                }) {
+                Ok(spec) => return Some(spec),
+                Err(error) => retry_reason = error,
+            }
+        }
+        Err(error) => {
+            record_model_call(ids, started, false, None);
+            log::warn!(
+                "agent: schema-constrained presentation call failed; trying JSON mode: {error}"
+            );
+        }
+    }
+
+    retry_messages.push(ChatMessage::User(format!(
+        "The previous layout failed local validation: {retry_reason}. Return a corrected `presentation_spec` only. Use one of the exact result IDs and field names already supplied; remove unsupported properties. Preserve the canonical answer and analysis."
+    )));
+    let retry_started = Instant::now();
+    let response = tokio::select! {
+        result = llm.chat_json(&retry_messages, &suppress, &suppress) => match result {
+            Ok(response) => response,
+            Err(error) => {
+                record_model_call(ids, retry_started, false, None);
+                log::warn!("agent: JSON-mode presentation retry failed; keeping canonical answer: {error}");
+                return None;
+            }
+        },
+        _ = cancelled(cancel) => return None,
+    };
+    record_model_call(ids, retry_started, true, response.usage.clone());
+    *usage = Usage::merge(usage.take(), response.usage);
+    let require_chart = question_needs_time_chart(question, evidence);
+    match parse_structured_presentation(&response.content)
+        .map_err(|error| error.to_string())
+        .and_then(|spec| {
+            validate_composed_presentation(&spec, evidence, require_chart).map(|()| spec)
+        }) {
+        Ok(spec) => Some(spec),
+        Err(error) => {
+            log::warn!(
+                "agent: JSON-mode presentation was invalid; keeping canonical answer: {error}"
+            );
+            None
+        }
+    }
 }
 
 fn canonical_answer_text(arguments: &serde_json::Value) -> Option<String> {
@@ -540,8 +930,9 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         }),
         _ => None,
     };
+    let profile = PromptProfile::from_env();
     let mut sys = system_prompt(
-        &PromptProfile::from_env(),
+        &profile,
         &catalog,
         &context.user_context,
         &context.schema,
@@ -643,7 +1034,7 @@ pretend workspace field.",
             "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
         sys.push_str(
-            "\n\nWorkspace answer format: Complete the analysis and answer the user's request; presentation must never gate the answer. Use `fella_presentation_answer` once when an interactive or structured layout materially improves the result, and bind displayed analytical values to result IDs and fields returned in this turn. A concise plain-language answer is appropriate for simple inventory, definition, and exact-lookup questions when a layout adds no value. If a presentation is rejected or cannot be composed, preserve and return the canonical answer in plain language. Never replace an answer with a presentation-generation error. Keep conclusions, assumptions, and limitations visible.\n",
+            "\n\nWorkspace answer format: Complete the analysis and answer the user's request; presentation must never gate the answer. After collecting accepted multi-row analytical results, call `fella_presentation_answer` once and bind displayed values to the supplied result IDs and fields. For an ordered time trend, period comparison, category ranking, distribution, or relationship, the presentation is required when the result supports it; choose the visualization that makes the pattern clearest. A concise plain-language answer is appropriate for simple inventory, definition, document summary, and exact single-value lookups with no structured result. If a presentation is rejected or cannot be composed, preserve and return the canonical answer in plain language. Never replace an answer with a presentation-generation error. Keep conclusions, assumptions, and limitations visible.\n",
         );
     }
     let mut messages = vec![
@@ -676,18 +1067,13 @@ pretend workspace field.",
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
-    let schemas = if catalog.workspace.is_some() {
+    let mut schemas = if catalog.workspace.is_some() {
         let mut schemas = registry.schemas_with_contract();
-        schemas.push(presentation_answer_schema());
+        schemas.push(presentation_answer_schema(&[]));
         schemas
     } else {
         Vec::new()
     };
-    let finalizer_only: Vec<_> = schemas
-        .iter()
-        .filter(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
-        .cloned()
-        .collect();
     let mut evidence: Vec<EvidenceItem> = Vec::new();
 
     // Forward a retry/backoff line from the model client to the transcript.
@@ -721,6 +1107,19 @@ pretend workspace field.",
     let soft_stop = soft_stop_round_trips();
     let mut semantic_repair_attempts = 0usize;
     for step in 0..steps {
+        if catalog.workspace.is_some() {
+            if let Some(schema) = schemas
+                .iter_mut()
+                .find(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
+            {
+                *schema = presentation_answer_schema(&evidence);
+            }
+        }
+        let finalizer_only: Vec<_> = schemas
+            .iter()
+            .filter(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
+            .cloned()
+            .collect();
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
         // Race the model call against a stop request; dropping the future
@@ -1004,6 +1403,21 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     checks.push(check);
                 }
             }
+            let presentation_spec = if profile.presentation_rule {
+                ensure_presentation(
+                    llm,
+                    question,
+                    &text,
+                    &evidence,
+                    presentation_final.as_ref().map(|answer| &answer.spec),
+                    &mut ids,
+                    &mut usage,
+                    cancel.as_ref(),
+                )
+                .await
+            } else {
+                presentation_final.map(|answer| answer.spec)
+            };
             return Ok(finish_with(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
                 question,
@@ -1011,7 +1425,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 evidence,
                 usage,
                 checks,
-                presentation_final.map(|answer| answer.spec),
+                presentation_spec,
             ));
         }
         // `resp.content` (any "let me check…" preamble before the tool calls)
@@ -1508,12 +1922,13 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
     // Out of steps: one final answer turn. A model may use the non-executing
     // presentation function, but plain text remains a valid completion.
     messages.push(ChatMessage::User(
-        "You're out of tool-calling steps for this question. Don't call any more \
-tools. Answer using only what you've already found. Call `fella_presentation_answer` only if \
-you can provide a valid, useful presentation; otherwise answer in plain language. If you're not \
-confident, say so plainly rather than guessing."
+        "You're out of tool-calling steps for this question. Don't call any more analysis \
+tools. Answer using only what you've already found. If accepted multi-row results support a useful \
+presentation, call `fella_presentation_answer` now; otherwise answer in plain language. If you're \
+not confident, say so plainly rather than guessing."
             .to_string(),
     ));
+    let finalizer_only = vec![presentation_answer_schema(&evidence)];
     let final_call_started = Instant::now();
     let resp = tokio::select! {
         result = llm.chat(&messages, finalizer_only.as_slice(), &notify, &on_delta) => match result {
@@ -1581,7 +1996,6 @@ confident, say so plainly rather than guessing."
         ids.model_calls.len(),
         evidence.len()
     );
-    let context = finish_context(engine, workspace.as_ref(), &ids, emit);
     let checks = verify::run_for_answer(
         engine,
         question,
@@ -1590,7 +2004,22 @@ confident, say so plainly rather than guessing."
         ids.contract.as_ref(),
         ids.grounding.as_ref(),
     );
-    let presentation_spec = final_output.as_ref().map(|answer| answer.spec.clone());
+    let presentation_spec = if profile.presentation_rule {
+        ensure_presentation(
+            llm,
+            question,
+            &text,
+            &evidence,
+            final_output.as_ref().map(|answer| &answer.spec),
+            &mut ids,
+            &mut usage,
+            cancel.as_ref(),
+        )
+        .await
+    } else {
+        final_output.map(|answer| answer.spec)
+    };
+    let context = finish_context(engine, workspace.as_ref(), &ids, emit);
     Ok(finish_with(
         context,
         question,
@@ -2581,8 +3010,8 @@ sandbox with no filesystem, network, environment, or subprocess access."
     if has_workspace && profile.presentation_rule {
         rules.push(
             "Choose an answer-specific presentation based on the question and the actual result shape. \
-When a structured presentation materially improves the answer, use Fella's json-render output as its primary surface and compose it from saved evidence-bound components; \
-make the main analytical relationship visible and avoid repetitive templates. Plain language remains a valid complete answer, and presentation failure must never block it. \
+When a structured presentation materially improves the answer, use Fella's json-render output as its primary surface and compose it from saved evidence-bound components. After producing accepted multi-row results, you MUST compose a presentation for trends, period comparisons, rankings, distributions, and relationships; use a result-bound chart when it best explains the pattern. \
+Make the main analytical relationship visible and avoid repetitive templates. Plain language remains a valid complete answer if composition fails, and presentation failure must never block it. \
 Bind every displayed analytical value to a returned result; do not copy result numbers into \
 Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
 display-only calculations use @Rows(). Presentation choices never change analysis, source scope, or verification."
@@ -2761,7 +3190,7 @@ mod tests {
 
     #[test]
     fn json_render_answer_is_a_single_non_executing_finalizer_with_a_complete_spec() {
-        let schema = presentation_answer_schema();
+        let schema = presentation_answer_schema(&[]);
         assert_eq!(schema.name, PRESENTATION_ANSWER_TOOL);
         assert_eq!(
             schema.parameters["required"],
@@ -2771,7 +3200,9 @@ mod tests {
         assert!(schema
             .description
             .contains("canonical, evidence-grounded answer"));
-        assert!(schema.description.contains("optional rendering"));
+        assert!(schema
+            .description
+            .contains("required when the result supports it"));
         assert!(schema.description.contains("json-render spec"));
 
         let answer = parse_presentation_answer(&serde_json::json!({
@@ -2836,9 +3267,136 @@ mod tests {
 
     #[test]
     fn presentation_finalizer_uses_json_render_schema_and_no_expression_language() {
-        let schema = presentation_answer_schema();
+        let schema = presentation_answer_schema(&[]);
         assert!(schema.description.contains("JSON object"));
         assert!(schema.description.contains("result"));
+    }
+
+    #[test]
+    fn finalizer_catalog_lists_current_result_bindings_instead_of_an_empty_placeholder() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-2".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        result.row_count = Some(2);
+
+        let schema = presentation_answer_schema(&[result]);
+        assert!(schema.description.contains(
+            "Available result bindings (metadata only; the result rows themselves are provided separately as evidence):\n[{\"columns\":[\"quarter\",\"revenue\"],\"complete\":true,\"id\":\"evidence-2\",\"row_count\":2,\"tool\":\"run_sql\"}]"
+        ));
+        assert!(!schema.description.ends_with("evidence):\n[]"));
+    }
+
+    #[test]
+    fn multirow_analytical_results_trigger_the_presentation_recovery() {
+        let mut result = evidence_item("run_sql");
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        assert!(presentation_composition_needed(&[result.clone()]));
+
+        result.rows = Some(vec![vec![serde_json::json!("Q4"), serde_json::json!(20)]]);
+        assert!(!presentation_composition_needed(&[result]));
+        assert!(!presentation_composition_needed(&[evidence_item(
+            "list_files"
+        )]));
+    }
+
+    #[test]
+    fn result_bound_presentations_reject_unknown_result_ids_and_columns() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-1".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        let spec = serde_json::json!({
+            "root":"doc",
+            "elements":{
+                "doc":{"type":"Document","props":{},"children":["chart"]},
+                "chart":{"type":"Chart","props":{"resultId":"evidence-1","spec":{
+                    "mark":"line",
+                    "encoding":{"x":{"field":"quarter","type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}
+                }},"children":[]}
+            }
+        });
+        assert!(validate_presentation_bindings(&spec, &[result.clone()]).is_ok());
+
+        let mut wrong_result = spec.clone();
+        wrong_result["elements"]["chart"]["props"]["resultId"] = serde_json::json!("evidence-0");
+        assert!(validate_presentation_bindings(&wrong_result, &[result.clone()]).is_err());
+
+        let mut wrong_field = spec;
+        wrong_field["elements"]["chart"]["props"]["spec"]["encoding"]["y"]["field"] =
+            serde_json::json!("profit");
+        assert!(validate_presentation_bindings(&wrong_field, &[result]).is_err());
+    }
+
+    #[test]
+    fn a_requested_time_trend_cannot_be_recovered_with_a_text_only_layout() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-1".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q1"), serde_json::json!(10)],
+            vec![serde_json::json!("Q2"), serde_json::json!(12)],
+        ]);
+        let text_only = serde_json::json!({
+            "root":"doc",
+            "elements":{
+                "doc":{"type":"Document","props":{},"children":["body"]},
+                "body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}
+            }
+        });
+        assert!(validate_composed_presentation(&text_only, &[result.clone()], false).is_ok());
+        assert!(validate_composed_presentation(&text_only, &[result], true)
+            .unwrap_err()
+            .contains("requires a result-bound chart"));
+    }
+
+    #[test]
+    fn requested_time_trends_require_a_chart_when_the_result_has_a_time_dimension() {
+        let mut result = evidence_item("run_sql");
+        result.columns = Some(vec!["period".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q1"), serde_json::json!(10)],
+            vec![serde_json::json!("Q2"), serde_json::json!(12)],
+        ]);
+        assert!(question_needs_time_chart(
+            "Compare the quarter-by-quarter revenue trend.",
+            &[result.clone()]
+        ));
+        assert!(!question_needs_time_chart(
+            "What was revenue in Q2?",
+            &[result.clone()]
+        ));
+        result.columns = Some(vec!["category".into(), "revenue".into()]);
+        assert!(!question_needs_time_chart(
+            "Show the revenue trend.",
+            &[result]
+        ));
+    }
+
+    #[test]
+    fn structured_composer_requires_and_validates_only_the_presentation_spec() {
+        let response = r#"{"presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#;
+        let spec = parse_structured_presentation(response).unwrap();
+        assert_eq!(spec["root"], "doc");
+        assert_eq!(
+            parse_structured_presentation(&format!("```json\n{response}\n```")).unwrap(),
+            spec
+        );
+        assert!(parse_structured_presentation(r#"{"answer":"Plain text"}"#).is_err());
+        assert!(parse_structured_presentation(
+            r#"{"presentation_spec":{"root":"missing","elements":{}}}"#
+        )
+        .is_err());
     }
 
     #[test]

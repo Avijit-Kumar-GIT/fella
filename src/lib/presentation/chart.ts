@@ -6,6 +6,10 @@ const object = (value: unknown): value is Obj => !!value && typeof value === 'ob
 const marks = new Set(['arc', 'area', 'bar', 'boxplot', 'circle', 'errorband', 'errorbar', 'line', 'point', 'rect', 'rule', 'square', 'text', 'tick', 'trail']);
 const channels = new Set('x y x2 y2 xOffset yOffset theta theta2 radius radius2 color fill stroke opacity fillOpacity strokeOpacity strokeWidth size shape angle text tooltip detail order row column facet longitude latitude longitude2 latitude2'.split(' '));
 const styleChannels = new Set('color fill stroke opacity fillOpacity strokeOpacity strokeWidth size shape angle'.split(' '));
+const supportedSchemas = new Set([
+	'https://vega.github.io/schema/vega-lite/v5.json',
+	'https://vega.github.io/schema/vega-lite/v6.json'
+]);
 const forbidden = /^(?:__proto__|prototype|constructor|data|datasets|url|href|image|images|signals?|expr|expression|calculate|filter|transform|params?|bind|on|usermeta|labelExpr|encode|handler|event|selection|lookup|config)$/i;
 const markKeys = new Set('type color fill stroke opacity fillOpacity strokeOpacity strokeWidth strokeDash size shape angle orient interpolate tension point line clip filled cornerRadius cornerRadiusTopLeft cornerRadiusTopRight cornerRadiusBottomLeft cornerRadiusBottomRight thickness binSpacing continuousBandSize discreteBandSize strokeCap strokeJoin font fontSize fontStyle fontWeight align baseline dx dy limit ellipsis'.split(' '));
 const encodingKeys = new Set('field type title aggregate bin timeUnit sort scale axis legend stack impute bandPosition spacing header value format formatType'.split(' '));
@@ -35,6 +39,12 @@ export function validateChartSpec(spec: unknown, result: BoundResult): void {
 			value.forEach((item) => bounded(item, depth + 1));
 		} else if (object(value)) {
 			for (const [key, item] of Object.entries(value)) {
+				// Vega-Lite's schema URL is inert metadata. Accept only the pinned
+				// major versions Fella can compile, then omit it from the runtime spec.
+				if (key === '$schema') {
+					if (typeof item !== 'string' || !supportedSchemas.has(item)) throw new Error('Chart schema metadata must name a supported Vega-Lite version.');
+					continue;
+				}
 				if (forbidden.test(key)) throw new Error(`Chart property “${key}” is not permitted.`);
 				bounded(item, depth + 1);
 			}
@@ -93,9 +103,10 @@ export function validateChartSpec(spec: unknown, result: BoundResult): void {
 			}
 		}
 	}
-	const viewKeys = new Set('mark encoding layer facet spec repeat concat hconcat vconcat resolve title description width height spacing columns bounds center align autosize background padding'.split(' '));
+	const viewKeys = new Set('mark encoding layer facet spec repeat concat hconcat vconcat resolve title description width height spacing columns bounds center align autosize background padding $schema'.split(' '));
 	function view(value: unknown): void {
 		if (!object(value)) throw new Error('Every chart view must be an object.');
+		if (value.$schema !== undefined && (typeof value.$schema !== 'string' || !supportedSchemas.has(value.$schema))) throw new Error('Chart schema metadata must name a supported Vega-Lite version.');
 		if (++views > limits.chartLayers) throw new Error('Too many composed chart views.');
 		known(value, viewKeys, 'chart');
 		pixels += (typeof value.width === 'number' ? value.width : 300) * (typeof value.height === 'number' ? value.height : 240);
@@ -166,6 +177,7 @@ export function bindChartSpec(spec: Record<string, unknown>, result: BoundResult
 		if (!object(value)) return value;
 		const copy: Obj = {};
 		for (const [k, v] of Object.entries(value)) {
+			if (k === '$schema') continue;
 			if (k === 'repeat' && (Array.isArray(v) || (object(v) && !('repeat' in v)))) {
 				const mapFields = (items: unknown) => (items as string[]).map((f) => `fella_col_${result.columns.indexOf(f)}`);
 				copy[k] = Array.isArray(v) ? mapFields(v) : Object.fromEntries(Object.entries(v as Obj).map(([group, items]) => [group, mapFields(items)]));
