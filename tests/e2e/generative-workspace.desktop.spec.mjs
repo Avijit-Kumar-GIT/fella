@@ -124,6 +124,126 @@ test('generative v2.0: same-turn json-render answer is interactive and persists 
 	}
 });
 
+test('generative v2.1: a plain workspace answer does not wait for JSON-render', async ({ desktop }) => {
+	test.setTimeout(90_000);
+	const { page, profile } = desktop;
+	const modelRequests = [];
+	const plainAnswer = 'PLAIN_WORKSPACE_ANSWER: the available files cover commerce, finance, marketing, inventory, support, and experiments.';
+	const server = createServer(async (request, response) => {
+		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+			response.writeHead(404).end();
+			return;
+		}
+		let body = '';
+		for await (const chunk of request) body += chunk;
+		const payload = JSON.parse(body);
+		modelRequests.push(payload);
+		const choice = modelRequests.length === 1
+			? { message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', id: 'call_inventory', function: { name: 'list_files', arguments: JSON.stringify({ kind: 'all', offset: 0, limit: 40 }) } }] }, finish_reason: 'tool_calls' }
+			: { message: { role: 'assistant', content: plainAnswer }, finish_reason: 'stop' };
+		response.writeHead(200, { 'content-type': 'application/json' }).end(`${JSON.stringify({ choices: [{ index: 0, ...choice }], usage: { prompt_tokens: 12, completion_tokens: 8 } })}\n`);
+	});
+	await new Promise((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	const address = server.address();
+	expect(address && typeof address === 'object').toBeTruthy();
+
+	try {
+		await rm(join(profile, 'enforce-engine-budget'), { force: true });
+		await invoke(page, 'set_api_key', { provider: 'custom', key: 'generative-e2e-local-key' });
+		await invoke(page, 'set_settings', {
+			settings: { provider: 'custom', base_url: `http://127.0.0.1:${address.port}/v1`, model: 'fella-plain-answer-e2e' }
+		});
+
+		const composer = page.getByRole('combobox', { name: 'Ask about commerce', exact: true });
+		await composer.fill('What kinds of data are available in this workspace?');
+		await composer.press('Enter');
+		const primary = page.locator('.msg.assistant').last().locator('.analytical-answer');
+		await expect(primary).toContainText(plainAnswer, { timeout: 30_000 });
+		await expect(primary.locator('.analytical-presentation')).toHaveCount(0);
+		const turnId = await page.locator('.msg.assistant').last().getAttribute('data-analysis-turn-id');
+		expect(turnId).toBeTruthy();
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		expect(turn.result?.presentation_spec ?? null).toBeNull();
+		expect(modelRequests).toHaveLength(2);
+	} finally {
+		await test.info().attach('plain-answer-without-presentation-requests', {
+			body: JSON.stringify(modelRequests.map(({ tools }) => tools?.map((tool) => tool.function.name) ?? []), null, 2),
+			contentType: 'application/json'
+		});
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
+test('generative v2.1: repeated tool calls recover a plain answer instead of surfacing a presentation error', async ({ desktop }) => {
+	test.setTimeout(90_000);
+	const { page, profile } = desktop;
+	const modelRequests = [];
+	const plainAnswer = 'PLAIN_RECOVERY_WORKSPACE_OVERVIEW: this workspace contains commerce, finance, marketing, inventory, support, and experiment data.';
+	const inventoryCall = {
+		id: 'call_repeat_inventory',
+		function: { name: 'list_files', arguments: JSON.stringify({ kind: 'all', offset: 0, limit: 40 }) }
+	};
+	const server = createServer(async (request, response) => {
+		if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+			response.writeHead(404).end();
+			return;
+		}
+		let body = '';
+		for await (const chunk of request) body += chunk;
+		const payload = JSON.parse(body);
+		modelRequests.push(payload);
+		const reply = modelRequests.length < 4
+			? { message: { role: 'assistant', content: '', tool_calls: [{ type: 'function', ...inventoryCall }] }, finish_reason: 'tool_calls' }
+			: { message: { role: 'assistant', content: plainAnswer }, finish_reason: 'stop' };
+		response.writeHead(200, { 'content-type': 'application/json' }).end(`${JSON.stringify({
+			choices: [{ index: 0, ...reply }],
+			usage: { prompt_tokens: 12, completion_tokens: 8 }
+		})}\n`);
+	});
+	await new Promise((resolve, reject) => {
+		server.once('error', reject);
+		server.listen(0, '127.0.0.1', resolve);
+	});
+	const address = server.address();
+	expect(address && typeof address === 'object').toBeTruthy();
+
+	try {
+		await rm(join(profile, 'enforce-engine-budget'), { force: true });
+		await invoke(page, 'set_api_key', { provider: 'custom', key: 'generative-e2e-local-key' });
+		await invoke(page, 'set_settings', {
+			settings: { provider: 'custom', base_url: `http://127.0.0.1:${address.port}/v1`, model: 'fella-plain-recovery-e2e' }
+		});
+
+		const composer = page.getByRole('combobox', { name: 'Ask about commerce', exact: true });
+		await composer.fill('What kinds of data are available in this workspace?');
+		await composer.press('Enter');
+		const primary = page.locator('.msg.assistant').last().locator('.analytical-answer');
+		await expect(primary).toContainText(plainAnswer, { timeout: 30_000 });
+		await expect(primary).not.toContainText(/already gathered the repeated result|could not compose an interactive layout/i);
+		await expect(primary.locator('.analytical-presentation')).toHaveCount(0);
+		const turnId = await page.locator('.msg.assistant').last().getAttribute('data-analysis-turn-id');
+		expect(turnId).toBeTruthy();
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		expect(turn.result?.presentation_spec ?? null).toBeNull();
+		expect(modelRequests.length).toBeGreaterThanOrEqual(4);
+		expect(modelRequests[2].tools.map((tool) => tool.function.name)).toEqual(['fella_presentation_answer']);
+		expect(modelRequests[3].tools ?? []).toEqual([]);
+		expect(modelRequests[3].messages.some(({ role, content }) => role === 'user' && /answer.*plain language/i.test(content ?? ''))).toBe(true);
+	} finally {
+		await test.info().attach('plain-answer-recovery-requests', {
+			body: JSON.stringify(modelRequests.map(({ tools, messages }) => ({
+				tools: tools?.map((tool) => tool.function.name) ?? [],
+				messages: messages?.map(({ role, content, tool_calls, name }) => ({ role, content, tool_calls, name })) ?? []
+			})), null, 2),
+			contentType: 'application/json'
+		});
+		await new Promise((resolve) => server.close(resolve));
+	}
+});
+
 test('generative v2.0: rejected component tree gets finalizer-only correction without rerunning analysis', async ({ desktop }) => {
 	test.setTimeout(90_000);
 	const { page, workspace, profile } = desktop;

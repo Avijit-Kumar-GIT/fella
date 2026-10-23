@@ -4,12 +4,13 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Generative workspace contract v2; executable task set v2.0 (2026-10-22).
+ * Generative workspace contract v2.1; executable task set v2.1 (2026-10-23).
  * Expected semantics are fixed before candidate execution and come from
  * docs/testing/GENERATIVE-WORKSPACE-v2.md, not observed rendering output.
- * json-render specs are the same-turn primary answer contract. Local-state
- * interactions and saved artifact persistence make no extra model, analytics,
- * or source requests. This suite makes no live-model quality claim.
+ * Useful json-render specs are returned in the same turn; canonical answer text
+ * remains usable when presentation composition fails. Local-state interactions
+ * and saved artifact persistence make no extra model, analytics, or source
+ * requests. This suite makes no live-model quality claim.
  *
  * 1. Recorded analysis -> persisted artifact -> Studio; narrative/order survive
  *    restart with exact saved values and no model call or source query.

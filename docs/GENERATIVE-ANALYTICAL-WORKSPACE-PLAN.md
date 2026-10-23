@@ -57,7 +57,8 @@ query source files or call a model.
 
 ### Implemented
 
-- Same-turn model finalizer for the canonical answer and JSON presentation spec.
+- Optional same-turn model finalizer for rich JSON presentation; canonical
+  answer text remains usable and verifiable when no layout is useful or valid.
 - Shared generated component catalog and Svelte `CatalogRenderer` integration.
 - Fella components for structured narrative, responsive layouts, metrics,
   result tables, locally controlled tabs/filters, and Vega-Lite charts.

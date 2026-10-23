@@ -94,7 +94,7 @@ fn presentation_answer_schema() -> ToolSchema {
     ToolSchema {
 		name: PRESENTATION_ANSWER_TOOL.into(),
 			description: format!(
-			"Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_spec` is the primary user-visible answer surface: a json-render spec for that same answer. Do not call this until analysis is complete or in the same response as another tool. Bind analytical values to supplied result IDs and fields; use exact result rows for metrics. Never invent a dataset or put executable code in the presentation.\n\n{instructions}"
+			"Use this finalizer when an interactive or structured presentation materially improves the completed workspace answer. `answer` is the canonical, evidence-grounded answer used for verification and history; it remains complete and useful on its own if the presentation is rejected. `presentation_spec` is an optional rendering of that same answer. Do not call this until analysis is complete or in the same response as another tool. Bind analytical values to supplied result IDs and fields; use exact result rows for metrics. Never invent a dataset or put executable code in the presentation.\n\n{instructions}"
 		),
 		parameters: serde_json::json!({
 			"type":"object",
@@ -241,31 +241,47 @@ fn parse_presentation_answer(arguments: &serde_json::Value) -> EngineResult<Pres
     })
 }
 
-fn fallback_presentation_answer(text: &str) -> PresentationAnswer {
-    let text = text.trim();
-    let text = if text.is_empty() {
-        "The model could not compose an interactive layout for this answer."
-    } else {
-        text
-    };
-    let text: String = text.chars().take(16_000).collect();
-    PresentationAnswer {
-        text: text.clone(),
-        spec: serde_json::json!({
-            "root": "answer",
-            "elements": {
-                "answer": { "type": "Document", "props": {}, "children": ["body"] },
-                "body": { "type": "Text", "props": { "content": text }, "children": [] }
-            }
-        }),
+fn canonical_answer_text(arguments: &serde_json::Value) -> Option<String> {
+    let text = arguments.get("answer")?.as_str()?.trim();
+    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
+        return None;
     }
+    Some(text.to_owned())
 }
 
-fn parse_structured_presentation_answer(content: &str) -> EngineResult<PresentationAnswer> {
-    let arguments: serde_json::Value = serde_json::from_str(content).map_err(|error| {
-        EngineError::msg(format!("Structured presentation was not JSON: {error}"))
-    })?;
-    parse_presentation_answer(&arguments)
+/// Ask for a plain answer only when answer presentation has failed. A renderer
+/// failure or repeated tool call must not prevent the user from getting the
+/// supported result gathered so far.
+async fn recover_plain_answer(
+    llm: &LlmClient,
+    messages: &mut Vec<ChatMessage>,
+    ids: &mut RunIds,
+    usage: &mut Option<Usage>,
+    notify: &(dyn Fn(&str) + Send + Sync),
+    cancel: &AtomicBool,
+) -> Option<Option<String>> {
+    messages.push(ChatMessage::User(
+        "The interactive presentation could not be completed. Answer the user's original request now in concise plain language, using only the workspace evidence already gathered. Do not call tools, produce JSON, or discuss presentation generation. If the evidence is incomplete, state what it supports and what remains unknown.".into(),
+    ));
+    let started = Instant::now();
+    let suppress_delta = |_text: &str| {};
+    let result = tokio::select! {
+        result = llm.chat(messages, &[], notify, &suppress_delta) => result,
+        _ = cancelled(cancel) => return None,
+    };
+    match result {
+        Ok(response) => {
+            record_model_call(ids, started, true, response.usage);
+            *usage = Usage::merge(usage.take(), response.usage);
+            let answer = response.content.trim();
+            Some((!answer.is_empty()).then(|| answer.chars().take(16_000).collect()))
+        }
+        Err(error) => {
+            record_model_call(ids, started, false, None);
+            log::warn!("agent: plain answer recovery failed: {error}");
+            Some(None)
+        }
+    }
 }
 
 struct RunIds {
@@ -627,7 +643,7 @@ pretend workspace field.",
             "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
         sys.push_str(
-            "\n\nWorkspace answer format: Do not finish a workspace answer as ordinary prose. Once analysis is complete, call `fella_presentation_answer` exactly once with the verified canonical answer and a complete json-render spec for the user-visible answer. The JSON spec is the primary answer surface, not a second view. Do not call it in the same response as analysis tools. Use only result IDs and field names explicitly returned in this turn; bind values to those results rather than inventing them. The canonical answer remains the verification/history record. When the answer is document-based or no tabular result exists, compose a substantive text-first JSON-render document. Keep conclusions, assumptions, and limitations visible.\n",
+            "\n\nWorkspace answer format: Complete the analysis and answer the user's request; presentation must never gate the answer. Use `fella_presentation_answer` once when an interactive or structured layout materially improves the result, and bind displayed analytical values to result IDs and fields returned in this turn. A concise plain-language answer is appropriate for simple inventory, definition, and exact-lookup questions when a layout adds no value. If a presentation is rejected or cannot be composed, preserve and return the canonical answer in plain language. Never replace an answer with a presentation-generation error. Keep conclusions, assumptions, and limitations visible.\n",
         );
     }
     let mut messages = vec![
@@ -755,7 +771,17 @@ pretend workspace field.",
         };
         usage = Usage::merge(usage, resp.usage);
 
-        let mut presentation_final = if resp.tool_calls.len() == 1
+        for call in &resp.tool_calls {
+            if call.name == PRESENTATION_ANSWER_TOOL {
+                if let Some(answer) = canonical_answer_text(&call.arguments) {
+                    // Preserve the canonical answer independently from
+                    // validation of its optional presentation tree.
+                    unformatted_answer = Some(answer);
+                }
+            }
+        }
+
+        let presentation_final = if resp.tool_calls.len() == 1
             && resp.tool_calls[0].name == PRESENTATION_ANSWER_TOOL
         {
             match parse_presentation_answer(&resp.tool_calls[0].arguments) {
@@ -780,132 +806,77 @@ pretend workspace field.",
         } else {
             None
         };
+        let mut plain_final: Option<String> = None;
 
         if force_final_answer && !resp.tool_calls.is_empty() && presentation_final.is_none() {
             log::warn!("agent: model requested tools after the repeat guard disabled them");
-            return Ok(finish(
-                finish_context(engine, workspace.as_ref(), &ids, emit),
-                question,
-                "I already gathered the repeated result and stopped the loop, but the model did not return a final answer. Please try the question again or rephrase it.".into(),
-                evidence,
-                usage,
-            ));
+            let recovered = match unformatted_answer
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+            {
+                Some(answer) => Some(answer.to_owned()),
+                None => match recover_plain_answer(
+                    llm,
+                    &mut messages,
+                    &mut ids,
+                    &mut usage,
+                    &notify,
+                    cancel.as_ref(),
+                )
+                .await
+                {
+                    Some(answer) => answer,
+                    None => {
+                        return Ok(stopped(
+                            finish_context(engine, workspace.as_ref(), &ids, emit),
+                            question,
+                            evidence,
+                            usage,
+                        ));
+                    }
+                },
+            };
+            let answer = recovered.unwrap_or_else(|| {
+                "I couldn't complete a reliable answer from the available workspace evidence. Try narrowing the question or naming a source to inspect.".to_owned()
+            });
+            plain_final = Some(answer);
         }
 
         if resp.tool_calls.is_empty() && catalog.workspace.is_some() {
-            // Some compatible models may ignore the final-output function.
-            // Give one explicit format correction while exposing no analysis
-            // tools, rather than showing the prose response first.
-            if !force_final_answer {
-                if !resp.content.trim().is_empty() {
-                    unformatted_answer = Some(resp.content.clone());
-                }
-                messages.push(ChatMessage::Assistant {
-                    content: resp.content.clone(),
-                    tool_calls: Vec::new(),
+            let mut answer = unformatted_answer
+                .take()
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| {
+                    (!resp.content.trim().is_empty()).then(|| resp.content.trim().to_owned())
                 });
-                messages.push(ChatMessage::User(
-                    "The workspace response is not finished until it is returned through `fella_presentation_answer`. Use the required answer and presentation_spec fields now. Do not add text outside the function call.".into(),
-                ));
-                force_final_answer = true;
-                continue;
-            }
-
-            // Ollama's native chat API has no required-tool mode, and some
-            // compatible models still answer in prose after a finalizer-only
-            // retry. Give them one schema-constrained response opportunity;
-            // do not stream raw JSON into the visible conversation.
-            messages.push(ChatMessage::User(
-                "Return the final answer as a JSON object matching the supplied response schema. Include both `answer` and `presentation_spec`; do not call tools or add text outside the JSON object.".into(),
-            ));
-            let structured_started = Instant::now();
-            let structured_schema = presentation_answer_schema();
-            let suppress_delta = |_text: &str| {};
-            let structured_result = tokio::select! {
-                result = llm.chat_structured(
-                    &messages,
-                    &structured_schema.parameters,
+            if answer.is_none() {
+                match recover_plain_answer(
+                    llm,
+                    &mut messages,
+                    &mut ids,
+                    &mut usage,
                     &notify,
-                    &suppress_delta,
-                ) => result,
-                _ = cancelled(cancel.as_ref()) => {
-                    return Ok(stopped(
-                        finish_context(engine, workspace.as_ref(), &ids, emit),
-                        question,
-                        evidence,
-                        usage,
-                    ))
-                }
-            };
-            let structured = match structured_result {
-                Ok(response) => {
-                    record_model_call(&mut ids, structured_started, true, response.usage);
-                    response
-                }
-                Err(error) => {
-                    record_model_call(&mut ids, structured_started, false, None);
-                    log::warn!("agent: structured JSON-render finalizer failed: {error}");
-                    Default::default()
-                }
-            };
-            usage = Usage::merge(usage, structured.usage);
-            match parse_structured_presentation_answer(&structured.content) {
-                Ok(answer) => presentation_final = Some(answer),
-                Err(error) => {
-                    log::warn!("agent: structured JSON-render finalizer was rejected: {error}");
-                    messages.push(ChatMessage::Assistant {
-                        content: structured.content,
-                        tool_calls: Vec::new(),
-                    });
-                    messages.push(ChatMessage::User(format!(
-                        "The prior JSON response did not validate ({error}). Return a corrected JSON object only, using this shape: {{\"answer\":\"concise supported answer\",\"presentation_spec\":{{\"root\":\"answer\",\"elements\":{{\"answer\":{{\"type\":\"Document\",\"props\":{{}},\"children\":[\"body\"]}},\"body\":{{\"type\":\"Text\",\"props\":{{\"content\":\"answer content\"}},\"children\":[]}}}}}}}}. Use the registered components and supplied results; for a trend across three or more ordered time periods, include a result-bound Chart."
-                    )));
-                    let json_started = Instant::now();
-                    let json_result = tokio::select! {
-                        result = llm.chat_json(&messages, &notify, &suppress_delta) => result,
-                        _ = cancelled(cancel.as_ref()) => {
-                            return Ok(stopped(
-                                finish_context(engine, workspace.as_ref(), &ids, emit),
-                                question,
-                                evidence,
-                                usage,
-                            ))
-                        }
-                    };
-                    let json_response = match json_result {
-                        Ok(response) => {
-                            record_model_call(&mut ids, json_started, true, response.usage);
-                            response
-                        }
-                        Err(error) => {
-                            record_model_call(&mut ids, json_started, false, None);
-                            log::warn!("agent: JSON-mode presentation recovery failed: {error}");
-                            Default::default()
-                        }
-                    };
-                    usage = Usage::merge(usage, json_response.usage);
-                    match parse_structured_presentation_answer(&json_response.content) {
-                        Ok(answer) => presentation_final = Some(answer),
-                        Err(error) => {
-                            log::warn!(
-                                "agent: JSON-mode presentation recovery was rejected: {error}"
-                            );
-                            let fallback = unformatted_answer
-                                .as_deref()
-                                .filter(|text| !text.trim().is_empty())
-                                .or_else(|| {
-                                    (!resp.content.trim().is_empty())
-                                        .then_some(resp.content.as_str())
-                                })
-                                .unwrap_or_default();
-                            presentation_final = Some(fallback_presentation_answer(fallback));
-                        }
+                    cancel.as_ref(),
+                )
+                .await
+                {
+                    Some(recovered) => answer = recovered,
+                    None => {
+                        return Ok(stopped(
+                            finish_context(engine, workspace.as_ref(), &ids, emit),
+                            question,
+                            evidence,
+                            usage,
+                        ));
                     }
                 }
             }
+            plain_final = Some(answer.unwrap_or_else(|| {
+                "I couldn't complete a reliable answer from the available workspace evidence. Try narrowing the question or naming a source to inspect.".to_owned()
+            }));
         }
 
-        if resp.tool_calls.is_empty() || presentation_final.is_some() {
+        if resp.tool_calls.is_empty() || presentation_final.is_some() || plain_final.is_some() {
             emit(AskEvent::TurnState {
                 turn_id: ids.turn_id.clone(),
                 state: TurnState::Verifying,
@@ -920,6 +891,8 @@ pretend workspace field.",
             // leave a blank reply. Give the user something to act on.
             let text = if let Some(answer) = presentation_final.as_ref() {
                 answer.text.clone()
+            } else if let Some(answer) = plain_final.as_ref() {
+                answer.clone()
             } else if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
@@ -1532,12 +1505,13 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
         );
     }
 
-    // Out of steps: one final answer-format turn, with only the non-executing
-    // JSON-render answer function available in workspace mode.
+    // Out of steps: one final answer turn. A model may use the non-executing
+    // presentation function, but plain text remains a valid completion.
     messages.push(ChatMessage::User(
         "You're out of tool-calling steps for this question. Don't call any more \
-tools. Use only what you've already found, and finish through `fella_presentation_answer`. If \
-you're not confident, say so plainly rather than guessing."
+tools. Answer using only what you've already found. Call `fella_presentation_answer` only if \
+you can provide a valid, useful presentation; otherwise answer in plain language. If you're not \
+confident, say so plainly rather than guessing."
             .to_string(),
     ));
     let final_call_started = Instant::now();
@@ -1563,21 +1537,44 @@ you're not confident, say so plainly rather than guessing."
         }
     };
     usage = Usage::merge(usage, resp.usage);
-    let final_output = resp
+    let final_call = resp
         .tool_calls
         .iter()
-        .find(|call| call.name == PRESENTATION_ANSWER_TOOL)
-        .and_then(|call| parse_presentation_answer(&call.arguments).ok());
-    let text = final_output
+        .find(|call| call.name == PRESENTATION_ANSWER_TOOL);
+    let final_output = final_call.and_then(|call| parse_presentation_answer(&call.arguments).ok());
+    let final_canonical = final_call
+        .and_then(|call| canonical_answer_text(&call.arguments))
+        .or_else(|| unformatted_answer.clone());
+    let mut final_text = final_output
         .as_ref()
         .map(|answer| answer.text.clone())
-        .unwrap_or_else(|| {
-            if resp.content.trim().is_empty() {
-                "I ran out of analysis steps before reaching a confident answer.".to_string()
-            } else {
-                resp.content
+        .or(final_canonical)
+        .or_else(|| (!resp.content.trim().is_empty()).then(|| resp.content.trim().to_owned()));
+    if final_text.is_none() {
+        match recover_plain_answer(
+            llm,
+            &mut messages,
+            &mut ids,
+            &mut usage,
+            &notify,
+            cancel.as_ref(),
+        )
+        .await
+        {
+            Some(recovered) => final_text = recovered,
+            None => {
+                return Ok(stopped(
+                    finish_context(engine, workspace.as_ref(), &ids, emit),
+                    question,
+                    evidence,
+                    usage,
+                ));
             }
-        });
+        }
+    }
+    let text = final_text.unwrap_or_else(|| {
+        "I ran out of analysis steps before reaching a confident answer.".to_string()
+    });
     log::info!(
         "agent run: {:?}, {} model call(s), {tool_calls_total} tool call(s), {} evidence (hit step cap)",
         run_start.elapsed(),
@@ -1593,14 +1590,7 @@ you're not confident, say so plainly rather than guessing."
         ids.contract.as_ref(),
         ids.grounding.as_ref(),
     );
-    let presentation_spec = final_output
-        .as_ref()
-        .map(|answer| answer.spec.clone())
-        .or_else(|| {
-            workspace
-                .as_ref()
-                .map(|_| fallback_presentation_answer(&text).spec)
-        });
+    let presentation_spec = final_output.as_ref().map(|answer| answer.spec.clone());
     Ok(finish_with(
         context,
         question,
@@ -1665,19 +1655,7 @@ fn finish(
         context.ids.contract.as_ref(),
         context.ids.grounding.as_ref(),
     );
-    let presentation_spec = context
-        .workspace
-        .as_ref()
-        .map(|_| fallback_presentation_answer(&text).spec);
-    finish_with(
-        context,
-        question,
-        text,
-        evidence,
-        usage,
-        checks,
-        presentation_spec,
-    )
+    finish_with(context, question, text, evidence, usage, checks, None)
 }
 
 fn finish_with(
@@ -2603,8 +2581,8 @@ sandbox with no filesystem, network, environment, or subprocess access."
     if has_workspace && profile.presentation_rule {
         rules.push(
             "Choose an answer-specific presentation based on the question and the actual result shape. \
-Fella's json-render output is the answer surface: compose it creatively from saved evidence-bound components, \
-make the main analytical relationship visible and avoid repetitive templates. \
+When a structured presentation materially improves the answer, use Fella's json-render output as its primary surface and compose it from saved evidence-bound components; \
+make the main analytical relationship visible and avoid repetitive templates. Plain language remains a valid complete answer, and presentation failure must never block it. \
 Bind every displayed analytical value to a returned result; do not copy result numbers into \
 Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
 display-only calculations use @Rows(). Presentation choices never change analysis, source scope, or verification."
@@ -2790,10 +2768,10 @@ mod tests {
             serde_json::json!(["answer", "presentation_spec"])
         );
         assert_eq!(schema.parameters["additionalProperties"], false);
-        assert!(
-            schema.description.contains("primary answer surface")
-                || schema.description.contains("user-visible answer")
-        );
+        assert!(schema
+            .description
+            .contains("canonical, evidence-grounded answer"));
+        assert!(schema.description.contains("optional rendering"));
         assert!(schema.description.contains("json-render spec"));
 
         let answer = parse_presentation_answer(&serde_json::json!({
@@ -2820,24 +2798,28 @@ mod tests {
     }
 
     #[test]
-    fn structured_finalizer_accepts_schema_constrained_json_content() {
-        let answer = parse_structured_presentation_answer(
+    fn serialized_presentation_payload_uses_the_same_tree_validation() {
+        let arguments: serde_json::Value = serde_json::from_str(
             r#"{"answer":"Revenue increased.","presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#,
         )
         .unwrap();
+        let answer = parse_presentation_answer(&arguments).unwrap();
         assert_eq!(answer.text, "Revenue increased.");
         assert_eq!(answer.spec["elements"]["body"]["type"], "Text");
-        assert!(parse_structured_presentation_answer("not json").is_err());
     }
 
     #[test]
-    fn prose_recovery_is_still_rendered_by_the_json_catalog() {
-        let answer = fallback_presentation_answer("A result could not be laid out interactively.");
-        validate_presentation_shape(&answer.spec).unwrap();
-        assert_eq!(answer.spec["elements"]["answer"]["type"], "Document");
+    fn canonical_answer_survives_an_invalid_presentation_spec() {
+        let arguments = serde_json::json!({
+            "answer": "The workspace contains monthly sales and refund data.",
+            "presentation_spec": {"root": "missing", "elements": {}}
+        });
+
+        let canonical = canonical_answer_text(&arguments).unwrap();
+        assert!(parse_presentation_answer(&arguments).is_err());
         assert_eq!(
-            answer.spec["elements"]["body"]["props"]["content"],
-            answer.text
+            canonical,
+            "The workspace contains monthly sales and refund data."
         );
     }
 
@@ -3507,7 +3489,7 @@ mod tests {
     }
 
     #[test]
-    fn presentation_prompt_requires_answer_specific_json_render() {
+    fn presentation_prompt_prefers_answer_specific_json_render_without_gating_plain_answers() {
         let prompt = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -3518,7 +3500,8 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("Fella's json-render output is the answer surface"));
+        assert!(prompt.contains("When a structured presentation materially improves the answer"));
+        assert!(prompt.contains("presentation failure must never block it"));
         assert!(prompt.contains("saved evidence-bound components"));
         assert!(!prompt.contains("make_chart"));
     }
@@ -3569,7 +3552,8 @@ mod tests {
         assert!(!got.contains("contract's typed `clarification` field"));
         assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
-        assert!(got.contains("Fella's json-render output is the answer surface"));
+        assert!(got.contains("When a structured presentation materially improves the answer"));
+        assert!(got.contains("presentation failure must never block it"));
         assert!(got
             .contains("Distinguish association from causation and observed values from estimates"));
         assert!(got.contains("Forecasts and scenarios are valid analysis requests"));

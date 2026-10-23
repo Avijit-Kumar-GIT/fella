@@ -308,7 +308,7 @@
 				<summary>Statistics and forecasting</summary>
 				<p>Python helpers include median, standard deviation, quantiles, correlation, regression, and distribution checks. Correlation returns r only (no p-value); pandas, NumPy, and SciPy are not available. The sandbox has no filesystem or network access.</p>
 				<p>Forecast regular numeric series with naive, mean, drift, linear-trend, or seasonal-naive methods. Fella compares a forecast with a baseline and reports rolling-origin MAE/RMSE when the history supports it; error bands appear only when there are enough varied holdout errors. Forecasting needs Table analysis and runs in Ask.</p>
-				<p>For workspace questions, the final answer is composed as a json-render presentation from saved analysis results. The presentation cannot run queries or change the verified analysis.</p>
+				<p>When a structured view helps, Fella can present saved analysis results with json-render components. The view cannot run queries or change verified analysis; if a layout cannot be composed, Fella still returns the answer in plain language.</p>
 			</details>
 			<div class="capability-core">
 				<strong>Always included</strong>
