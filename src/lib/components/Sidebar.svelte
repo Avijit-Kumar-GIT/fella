@@ -2,60 +2,35 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
-	import { focusInvestigationConversation } from '$lib/investigation-navigation';
-	import type { Investigation } from '$lib/types';
 	import type { StudioDocument } from '$lib/analytics-artifacts';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import type { ConversationSummary } from '$lib/types';
-	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import WorkspaceEnvironment from './WorkspaceEnvironment.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let {
-		onsearch,
-		onworkspaceselect
-	}: {
-		onsearch?: () => void;
-		onworkspaceselect: (id: string) => void | Promise<void>;
-	} = $props();
+	let { onsearch }: { onsearch?: () => void } = $props();
 
-	let sidebarMode = $state<'chats' | 'environment' | 'reports'>('chats');
-	let notebookInvestigations = $state<Investigation[]>([]);
-	let notebookReports = $state<StudioDocument[]>([]);
-	let notebookError = $state('');
-	let notebookRequest = 0;
-	let navigationRequest = 0;
+	let sidebarMode = $state<'chat' | 'files' | 'reports'>('chat');
+	let workspaceReports = $state<StudioDocument[]>([]);
+	let reportsError = $state('');
+	let reportsRequest = 0;
 	$effect(() => {
-		const path = session.catalog.workspace, layout = session.contentLayout;
-		const version = session.investigationsVersion, tabs = session.workspaceToolTabs.length;
+		const path = session.catalog.workspace;
 		const reportsVersion = session.reportsVersion;
-		void version; void tabs; void reportsVersion;
-		const request = ++notebookRequest;
-		if (layout !== 'notebook' || !path) { notebookInvestigations = []; notebookReports = []; return; }
-		notebookError = '';
-		void Promise.all([ipc.investigationsList(), ipc.studioList(path)]).then(([investigations, reports]) => {
-			if (request !== notebookRequest) return;
-			notebookInvestigations = investigations.filter(item => item.workspace_id === path).sort((a,b) => b.updated_at_ms - a.updated_at_ms);
-			notebookReports = reports;
-		}).catch(() => { if (request === notebookRequest) notebookError = 'Could not load saved work.'; });
+		const mode = sidebarMode;
+		void reportsVersion;
+		const request = ++reportsRequest;
+		if (mode !== 'reports' || !path) { workspaceReports = []; reportsError = ''; return; }
+		workspaceReports = [];
+		reportsError = '';
+		void ipc.studioList(path).then((reports) => {
+			if (request === reportsRequest) workspaceReports = reports;
+		}).catch(() => { if (request === reportsRequest) reportsError = 'Could not load reports.'; });
 	});
-	async function openNotebookInvestigation(item: Investigation): Promise<void> {
-		const request = ++navigationRequest;
-		const outgoingTabId = session.activeWorkspaceToolTab?.id;
-		const isCurrent = () => request === navigationRequest && session.contentLayout === 'notebook'
-			&& session.catalog.workspace === item.workspace_id
-			&& (session.activeWorkspaceToolTab?.id === outgoingTabId
-				|| session.activeWorkspaceToolTab?.kind === 'investigation' && session.activeWorkspaceToolTab.conversationId === item.conversation_id);
-		session.setWorkspacePaneOpen(false);
-		try {
-			const linked = await focusInvestigationConversation(item, 'preserve', undefined, isCurrent);
-			if (linked && isCurrent()) session.openWorkspaceToolTab('investigation', linked.id, linked.conversation_id ?? session.activeChat.id);
-		} catch (error) { if (request === navigationRequest) notebookError = errMsg(error); }
-	}
 
 	type Repository = {
 		key: string;
@@ -246,46 +221,17 @@
 			</Button>
 		</div>
 	</div>
-	<WorkspaceSwitcher onselect={onworkspaceselect} />
-	<nav class="nav-section" aria-label="Conversation">
-		<Button
-			variant="ghost"
-			class="nav-row"
-			title={`New conversation (${shortcutModifier}+Shift+A)`}
-			aria-label="New conversation"
-			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
-			type="button"
-			onclick={newChat}
-		>
-			<Icon name="ask" size={16} />
-			<span>New conversation</span>
-		</Button>
+	<nav class="sidebar-mode-switch fella-pill-nav" aria-label="Sidebar">
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'chat'} onclick={() => (sidebarMode = 'chat')}>Chat</Button>
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'files'} onclick={() => (sidebarMode = 'files')}>Files</Button>
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'reports'} onclick={() => (sidebarMode = 'reports')}>Reports</Button>
 	</nav>
-	<div class="sidebar-mode-switch" role="group" aria-label="Sidebar view">
-		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'chats' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'chats'} onclick={() => (sidebarMode = 'chats')}>
-			<Icon name="ask" size={14} /><span>{session.contentLayout === 'notebook' ? 'Work' : 'Chats'}</span>
-		</Button>
-		<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'environment' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'environment'} onclick={() => (sidebarMode = 'environment')}>
-			<Icon name="folder" size={14} /><span>Files</span>
-		</Button>
-		{#if session.contentLayout === 'notebook'}<Button variant="ghost" class={`sidebar-mode-option${sidebarMode === 'reports' ? ' active' : ''}`} type="button" aria-pressed={sidebarMode === 'reports'} onclick={() => (sidebarMode = 'reports')}><Icon name="file" size={14} /><span>Reports</span></Button>{/if}
-	</div>
-	{#if session.contentLayout === 'notebook' && sidebarMode !== 'environment'}
-		<section class="repository-section" aria-label={sidebarMode === 'reports' ? 'Workspace reports' : 'Workspace Investigations'}>
-			<div class="section-head"><h2>{sidebarMode === 'reports' ? 'Reports' : 'Investigations'}</h2>{#if sidebarMode === 'reports'}<Button variant="ghost" size="icon" aria-label="New report" onclick={() => session.openNewReportTab()}><Icon name="plus" size={14} /></Button>{/if}</div>
-			{#if notebookError}<p class="sidebar-empty" role="status">{notebookError}</p>{/if}
-			<div class="repositories">
-				{#if sidebarMode === 'reports'}
-					{#each notebookReports as report (report.id)}<Button variant="ghost" class="conversation-row" title={report.title} onclick={() => session.openStudioToolTab(report.id)}><span class="preview">{report.title}</span></Button>{:else}<p class="sidebar-empty">No reports yet.</p>{/each}
-				{:else}
-					{#each notebookInvestigations as item (item.id)}<Button variant="ghost" class={`conversation-row${session.activeInvestigationId === item.id ? ' active' : ''}`} title={item.title} onclick={() => void openNotebookInvestigation(item)}><span class="preview">{item.title || 'Untitled Investigation'}</span></Button>{:else}<p class="sidebar-empty">Ask a question to start an Investigation.</p>{/each}
-				{/if}
-			</div>
-		</section>
-	{:else if sidebarMode === 'chats' || sidebarMode === 'reports'}
+	{#if sidebarMode === 'chat'}
 	<section class="repository-section" aria-label="Workspace conversations">
 		<div class="section-head">
-			<h2>Recent</h2>
+			<h2>Conversations</h2>
+			<div class="section-actions">
+				<Button variant="ghost" size="sm" class="section-action new-conversation-action" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={14} /><span>New</span></Button>
 			{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
 				{#if repo.path}
 					<DropdownMenu.Root>
@@ -299,6 +245,7 @@
 					</DropdownMenu.Root>
 				{/if}
 			{/each}
+			</div>
 		</div>
 		<div class="repositories">
 			{#each list.filter((item) => (item.workspace ?? null) === (session.activeWorkspaceId ?? null)) as c (c.id)}
@@ -320,6 +267,19 @@
 			{/each}
 		</div>
 	</section>
+	{:else if sidebarMode === 'reports'}
+		<section class="repository-section" aria-label="Workspace reports">
+			<div class="section-head"><h2>Reports</h2><Button variant="ghost" size="icon" class="section-action" aria-label="New report" title="New report" disabled={!session.catalog.workspace} onclick={() => session.openNewReportTab()}><Icon name="plus" size={16} /></Button></div>
+			{#if !session.catalog.workspace}
+				<p class="sidebar-empty">Open a folder to view its reports.</p>
+			{:else if reportsError}
+				<p class="sidebar-empty" role="status">{reportsError}</p>
+			{:else}
+				<div class="repositories">
+					{#each workspaceReports as report (report.id)}<Button variant="ghost" class="conversation-row" title={report.title} onclick={() => session.openStudioToolTab(report.id)}><span class="preview">{report.title}</span></Button>{:else}<p class="sidebar-empty">No reports yet.</p>{/each}
+				</div>
+			{/if}
+		</section>
 	{:else}
 		<WorkspaceEnvironment onopen={(source) => session.openSourceToolTab(source)} />
 	{/if}
@@ -400,14 +360,14 @@
 	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:44px; padding:0 8px; }
 	.sidebar-brand { display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:var(--fs-sm); font-weight:500; }
 	.header-actions :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:28px; height:28px; min-height:28px; padding:0; border:0; border-radius:var(--radius-sm); background:transparent; color:var(--text-faint); cursor:pointer; }
-	.nav-section { padding:4px 0 12px; }
 	.sidebar :global(.nav-row) { display:flex; justify-content:flex-start; width:100%; min-height:36px; padding:7px 10px; gap:9px; border-radius:var(--radius-sm); color:var(--text-dim); font-size:var(--fs-sm); font-weight:450; }
 	.sidebar :global(.nav-row:hover), .sidebar :global(.nav-row.active) { background:var(--sidebar-hover); color:var(--text); }
-	.sidebar-mode-switch { display:flex; gap:2px; padding:3px; margin:0 8px 12px; border:1px solid var(--border); border-radius:999px; }
-	.sidebar :global(.sidebar-mode-option) { flex:1; justify-content:center; min-height:28px; height:28px; gap:6px; padding:0 8px; border-radius:999px; color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
-	.sidebar :global(.sidebar-mode-option.active) { background:var(--bg-raised); color:var(--text); box-shadow:var(--shadow-xs); }
+	.sidebar-mode-switch { flex:none; display:flex; width:100%; gap:2px; margin:2px 0 10px; }
+	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:28px; height:28px; padding:0 6px; font-size:var(--fs-xs); }
 	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; }
-	.section-head { display:flex; align-items:center; justify-content:space-between; min-height:32px; padding:0 8px; }
+	.section-head { display:flex; align-items:center; justify-content:space-between; min-height:36px; padding:0 4px; }
+	.section-actions { display:flex; align-items:center; gap:2px; }
+	.sidebar :global(.new-conversation-action) { width:auto; min-height:28px; height:28px; gap:4px; padding:0 8px; border-radius:var(--radius-chip); color:var(--text-dim); font-size:var(--fs-xs); }
 	.section-head h2 { margin:0; color:var(--text-faint); font-size:var(--fs-xs); font-weight:550; }
 	.repositories { flex:1; min-height:0; overflow-y:auto; padding-top:4px; }
 	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }

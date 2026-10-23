@@ -6,9 +6,6 @@
 	let { expanded = false, compact = false, ontoggleexpand }: { expanded?: boolean; compact?: boolean; ontoggleexpand?: () => void } = $props();
 
 	let workspacePath = $derived(session.activeChat.workspaceScope);
-	let workspaceName = $derived(
-		workspacePath?.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) ?? ''
-	);
 	let workspaceAvailable = $derived(workspacePath === session.catalog.workspace);
 	let historyOnly = $derived(Boolean(workspacePath && (
 		session.workspaceAt(workspacePath)?.historyOnly || session.historyOnlyRepositoryPaths.includes(workspacePath)
@@ -17,121 +14,65 @@
 		session.workspaceView === 'ask' ||
 		session.workspaceView === 'workspace'
 	);
+	let panelActionLabel = $derived(session.contentLayout === 'notebook'
+		? 'Add a panel tab'
+		: session.workspacePaneOpen ? 'Close the panel' : 'Open the panel');
 </script>
 
 {#if isWorkspaceView}
 	<div class="workspace-context-bar">
-		<div class="workspace-identity" role="group" aria-label={workspaceName ? `Workspace: ${workspaceName}` : 'General conversation'}>
-			{#if workspacePath}<Icon name="folder" size={16} />{/if}
-			<strong class="workspace-name" title={workspacePath ?? undefined}>{workspaceName || 'General'}</strong>
+		<div class="layout-switch fella-pill-nav" role="group" aria-label="Window layout">
+			<button class="fella-pill-nav-item" aria-pressed={session.contentLayout === 'chat'} onclick={() => { session.setContentLayout('chat'); ontoggleexpand && expanded && ontoggleexpand(); }}>Chat</button>
+			<button class="fella-pill-nav-item" aria-pressed={session.contentLayout === 'notebook'} onclick={() => session.setContentLayout('notebook')}>Notebook</button>
 		</div>
-		<div class="layout-switch" role="group" aria-label="Window layout">
-			<button class:active={session.contentLayout === 'chat'} aria-pressed={session.contentLayout === 'chat'} onclick={() => { session.setContentLayout('chat'); ontoggleexpand && expanded && ontoggleexpand(); }}>Chat</button>
-			<button class:active={session.contentLayout === 'notebook'} aria-pressed={session.contentLayout === 'notebook'} onclick={() => session.setContentLayout('notebook')}>Notebook</button>
-		</div>
-		{#if workspaceAvailable}
-			<div class="workspace-context-actions">
-				{#if session.contentLayout === 'chat' && session.workspacePaneOpen && (compact || expanded)}
-					<Button variant="ghost" size="sm" class="workspace-pane-toggle" title="Return to the current conversation" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} />Conversation{#if session.activeChat.busy}<span class="conversation-activity" aria-label="Analysis running"> · Running</span>{/if}</Button>
-				{/if}
-				{#if session.workspacePaneOpen && !compact}
-					<Button variant="ghost" size="sm" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand workspace tools'} title={expanded ? 'Restore split view' : 'Expand workspace tools'} onclick={ontoggleexpand}><Icon name={expanded ? 'panel' : 'arrow-up-right'} size={14} /><span>{expanded ? 'Split view' : 'Expand'}</span></Button>
-				{/if}
+		<div class="workspace-context-actions">
+			{#if session.contentLayout === 'chat' && session.workspacePaneOpen && (compact || expanded)}
+				<Button variant="ghost" size="sm" class="workspace-pane-toggle" aria-label="Show chat" title="Show chat" onclick={() => session.setWorkspacePaneOpen(false)}><Icon name="ask" size={14} /><span>Chat{#if session.activeChat.busy}<span class="conversation-activity" aria-label="Analysis running"> · Running</span>{/if}</span></Button>
+			{/if}
+			{#if session.workspacePaneOpen && !compact}
+				<Button variant="ghost" size="sm" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand panel'} title={expanded ? 'Restore split view' : 'Expand panel'} onclick={ontoggleexpand}><Icon name={expanded ? 'panel' : 'arrow-up-right'} size={14} /><span>{expanded ? 'Split' : 'Expand'}</span></Button>
+			{/if}
+			{#if workspaceAvailable}
 				<Button
 					variant="ghost"
 					size="sm"
-					class="workspace-pane-toggle"
+					class="workspace-pane-toggle panel-action"
 					type="button"
-					aria-expanded={session.workspacePaneOpen}
+					aria-expanded={session.contentLayout === 'chat' ? session.workspacePaneOpen : undefined}
 					aria-controls="workspace-tools-pane"
-					aria-label={session.contentLayout === 'notebook' ? 'Open a document' : session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
-					title={session.contentLayout === 'notebook' ? 'Open a document' : session.workspacePaneOpen ? 'Close workspace tools' : 'Open workspace tools'}
+					aria-label={panelActionLabel}
+					title={panelActionLabel}
 					onclick={() => session.contentLayout === 'notebook' ? session.openWorkspaceToolChooser() : session.toggleWorkspacePane()}
 				>
 					<Icon name="panel" size={16} />
-					<span>{session.contentLayout === 'notebook' ? 'Documents' : 'Tools'}</span>
+					<span>Panel</span>
 				</Button>
-			</div>
-		{:else if session.workspaceView === 'ask' && historyOnly}
-			<div class="workspace-history-action">
-				<span class="workspace-history-label" role="status">History only</span>
+			{:else if historyOnly}
 				<Button
-					variant="outline"
+					variant="ghost"
 					size="sm"
-					class="workspace-open-investigation"
+					class="workspace-pane-toggle reconnect-action"
+					title="Reconnect folder"
+					aria-label="Reconnect folder"
 					onclick={() => { if (workspacePath) void openRepository(workspacePath, { reportFailure: true }); }}
 				>
-					<Icon name="refresh" size={14} />Reconnect folder
+					<Icon name="refresh" size={14} /><span>Reconnect</span>
 				</Button>
-			</div>
-		{/if}
+			{/if}
+		</div>
 	</div>
 {/if}
 
 <style>
-	.layout-switch { display: flex; flex: none; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-inset); }
-	.layout-switch button { min-height: 28px; padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-sm); cursor: pointer; }
-	.layout-switch button.active { background: var(--bg-raised); color: var(--text); box-shadow: var(--shadow-sm); }
-	.layout-switch button:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
-	@media (max-width: 650px) { .workspace-context-bar { gap: 8px; padding-inline: 12px; flex-wrap: wrap; padding-block: 6px; } .workspace-context-actions { gap: 4px; } }
-	.workspace-context-bar {
-		flex: none;
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-4);
-		min-height: 48px;
-		padding: 0 var(--pad);
-		border-bottom: 1px solid var(--border);
-		background: var(--workspace-canvas);
-	}
-	.workspace-identity {
-		display: flex;
-		flex: 1;
-		align-items: center;
-		gap: 8px;
-		min-width: 0;
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-	}
-	.workspace-identity :global(svg) { flex: none; }
-	.workspace-name {
-		min-width: 0;
-		overflow: hidden;
-		color: var(--text);
-		font-weight: 600;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.workspace-context-actions,
-	.workspace-history-action {
-		display: flex;
-		flex: none;
-		align-items: center;
-		gap: var(--space-3);
-	}
-	.workspace-history-label {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	:global(.workspace-pane-toggle) {
-		flex: none;
-		min-height: 34px;
-		gap: 7px;
-		padding-inline: 10px;
-		border-radius: var(--radius);
-		color: var(--text-dim);
-	}
-	:global(.workspace-pane-toggle:hover),
-	:global(.workspace-pane-toggle[aria-expanded='true']) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	:global(.workspace-open-investigation) {
-		flex: none;
-		min-height: 30px;
-		gap: 6px;
-		border-radius: var(--radius);
-		font-size: var(--fs-sm);
+	.workspace-context-bar { display:flex; flex:none; align-items:center; gap:6px; min-width:0; }
+	.layout-switch { display:flex; flex:none; gap:2px; padding:2px; }
+	.layout-switch :global(.fella-pill-nav-item) { min-height:26px; padding-inline:10px; }
+	.workspace-context-actions { display:flex; flex:none; align-items:center; gap:2px; }
+	:global(.workspace-pane-toggle) { flex:none; min-height:30px; gap:6px; padding-inline:8px; border-radius:var(--radius-chip); color:var(--text-dim); font-size:var(--fs-xs); }
+	:global(.workspace-pane-toggle:hover), :global(.workspace-pane-toggle[aria-expanded='true']) { background:var(--bg-inset); color:var(--text); }
+	@media (max-width: 900px) {
+		.layout-switch :global(.fella-pill-nav-item) { padding-inline:7px; }
+		:global(.workspace-pane-toggle) { width:30px; min-width:30px; padding-inline:0; justify-content:center; }
+		:global(.workspace-pane-toggle > span) { display:none; }
 	}
 </style>

@@ -1,25 +1,25 @@
 <script lang="ts">
-	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { session } from '$lib/session.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { isDesktop, win } from '$lib/ipc';
 	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+	import WorkspaceContextBar from './WorkspaceContextBar.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
 	let {
 		onpalette,
-		onworkspaceselect
+		onworkspaceselect,
+		expanded = false,
+		compact = false,
+		ontoggleexpand
 	}: {
 		onpalette: () => void;
 		onworkspaceselect: (id: string) => void | Promise<void>;
+		expanded?: boolean;
+		compact?: boolean;
+		ontoggleexpand?: () => void;
 	} = $props();
-
-	let folder = $derived.by(() => {
-		const workspace = session.activeWorkspace;
-		if (!workspace) return '';
-		if (workspace.id === GENERAL_WORKSPACE_ID) return 'General';
-		return workspace.path?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? 'Workspace';
-	});
 
 	let displayTitle = $derived.by(() => {
 		if (session.workspaceView === 'project') return session.activeProject?.name ?? 'Project';
@@ -62,23 +62,24 @@
 		<span class="folder faint" title={displayTitle}>{displayTitle}</span>
 		<span class="spacer"></span>
 	{:else}
-		<span class="id"><span class="folder" title={displayTitle}>{displayTitle}</span></span>
-		<span class="spacer"></span>
-		{#if session.sidebarCollapsed}
+		<div class="titlebar-context">
 			<WorkspaceSwitcher
 				compact
 				onselect={onworkspaceselect}
 			/>
-		{/if}
-
+			<WorkspaceContextBar {expanded} {compact} {ontoggleexpand} />
+		</div>
+		<span class="spacer"></span>
+		<span class="id"><span class="folder" title={displayTitle}>{displayTitle}</span></span>
 		<Button
 			variant="ghost"
-			size="sm"
+			size="icon"
 			class="hint"
 			onclick={onpalette}
+			aria-label="Search Fella"
 			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
 		>
-			<kbd>{shortcutModifier}</kbd><kbd>K</kbd>
+			<Icon name="search" size={16} /><span><kbd>{shortcutModifier}</kbd><kbd>K</kbd></span>
 		</Button>
 	{/if}
 
@@ -121,6 +122,8 @@
 	.titlebar.collapsed {
 		padding-left: var(--space-2);
 	}
+	.titlebar-context { display:flex; flex:none; align-items:center; gap:8px; min-width:0; }
+	.titlebar-context :global(.workspace-switcher.compact) { width:clamp(116px, 15vw, 190px); }
 	.lights {
 		flex: none;
 		width: 78px;
@@ -160,7 +163,7 @@
 		align-items: baseline;
 		gap: var(--space-2);
 		min-width: 0;
-		max-width: min(27vw, 280px);
+		max-width: min(22vw, 240px);
 	}
 	.folder {
 		font-family: var(--sans);
@@ -214,5 +217,16 @@
 	.winctl button.x:hover {
 		background: var(--err);
 		color: var(--bg-raised);
+	}
+	@media (max-width: 900px) {
+		.titlebar-context { gap:4px; }
+		.titlebar-context :global(.workspace-switcher.compact) { width:130px; }
+		.id { max-width:18vw; }
+	}
+	@media (max-width: 700px) {
+		.titlebar { gap:4px; }
+		.titlebar-context :global(.workspace-switcher.compact) { width:112px; }
+		.id, :global(.titlebar .hint > span) { display:none; }
+		:global(.titlebar .hint) { width:28px; min-width:28px; padding:0; justify-content:center; }
 	}
 </style>

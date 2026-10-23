@@ -173,10 +173,13 @@ exclusive application modes, engines, or mandatory top-level navigation tabs.
 | Investigate | Define an objective, inspect progress, revise Questions/definitions, review findings, continue work | Existing Investigation, Questions, definitions, Findings, and runs |
 | Studio | Open saved output, arrange sections, compare revisions, edit narrative, export | Workspace-owned Studio documents reference artifacts and pinned revisions |
 
-Keep chat as the default. Preserve the left sidebar's workspace and file/chat
-organization and the optional right Tools pane. Studio can open as a Tools
-tab and expand into the primary working surface; do not add an outer board or
-require another workspace/environment layer.
+Keep Chat as the default. Use the same left navigation in both layouts:
+**Chat**, **Files**, and **Reports**. The conversation list belongs inside
+Chat, with the new-conversation action beside its heading. Put the mounted
+Workspace selector and the Chat/Notebook layout controls in the native window
+titlebar. Use one consistent **Panel** label for the optional right-side
+surface. Reports and other saved content can open there as tabs; do not add an
+outer board or another workspace/environment layer.
 
 Start Studio as an ordered, notebook-like document, not a free-positioned
 dashboard canvas. A user may reorder, resize where meaningful, annotate, and

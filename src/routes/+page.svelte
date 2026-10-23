@@ -9,7 +9,6 @@
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
-	import WorkspaceContextBar from '$lib/components/WorkspaceContextBar.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
@@ -309,15 +308,15 @@
 	<div class="shell" class:narrow-navigation={narrowNavigation}>
 		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar
-				onsearch={() => (paletteOpen = true)}
-				onworkspaceselect={selectWorkspace}
-			/>
+			<Sidebar onsearch={() => (paletteOpen = true)} />
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar
 			onpalette={() => (paletteOpen = true)}
 			onworkspaceselect={selectWorkspace}
+			expanded={toolsExpanded}
+			compact={toolsCompact}
+			ontoggleexpand={() => (toolsExpanded = !toolsExpanded)}
 		/>
 		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
@@ -335,7 +334,6 @@
 				</div>
 			{/if}
 			<main>
-				<WorkspaceContextBar expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />
 				<div class="main-row">
 					{#if activeView === 'settings'}
 						<SettingsView />
