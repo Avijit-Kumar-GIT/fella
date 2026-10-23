@@ -4888,6 +4888,36 @@ test('Composer model selection applies to the open conversation and survives its
 	await expect.poll(async () => page.evaluate(async () => (await window.fella.invoke('get_settings')).model)).toBe('gpt-5.1');
 });
 
+test('OpenUI nested grids respond to their actual cell width', async ({ page }) => {
+	const workspace = folders[0].path;
+	const program = 'root = Document([Grid([Grid([Text("Nested content stays readable"), Text("Second nested item")], 4), Text("Outer item 2"), Text("Outer item 3"), Text("Outer item 4")], 4)])';
+	await installDesktopMock(page, {
+		projectConversationArchives: [{
+			id: 'responsive-openui-conversation',
+			workspace: null,
+			saved_at_ms: 2,
+			messages: [
+				{ id: 'responsive-openui-user', role: 'user', text: 'Show a nested responsive layout.', ts: 1 },
+				{ id: 'responsive-openui-answer', role: 'assistant', text: 'Nested layout fixture.', ts: 2, answer: {
+					text: 'Nested layout fixture.', status: 'verified', turn_id: 'responsive-openui-run',
+					workspace: { path: workspace, revision: 'sales-r1' }, evidence: [], verification: [], presentation_program: program
+				} }
+			]
+		}]
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Open conversation: Show a nested responsive layout.' }).click();
+	const presentation = page.locator('.analytical-document');
+	await expect(presentation).toBeVisible();
+	const nestedGrid = presentation.locator('.presentation-grid').nth(1);
+	await expect.poll(async () => nestedGrid.evaluate((element) => {
+		const columns = getComputedStyle(element).gridTemplateColumns;
+		return columns.split(' ').filter(Boolean).length;
+	})).toBe(1);
+	const nestedItemWidth = await nestedGrid.locator(':scope > div').first().evaluate((element) => element.getBoundingClientRect().width);
+	expect(nestedItemWidth).toBeGreaterThan(120);
+});
+
 
 test('Composer command completion uses shared buttons and keeps keyboard selection', async ({ page }) => {
 	await installDesktopMock(page);

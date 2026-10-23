@@ -144,6 +144,14 @@
 	min-width: 0;
 }
 
+/* Grid's anonymous child wrappers are layout containers too. Without this,
+   a nested Grid measures its wide ancestor instead of the actual cell it is
+   rendered in, so it can keep several columns inside a narrow column and
+   squeeze its content down to character-width. */
+.analytical-document .presentation-grid > * {
+	container-type: inline-size;
+}
+
 .analytical-document :where(.presentation-section-content, .presentation-card-content, .presentation-column, .presentation-row-item, .presentation-tab-panel) {
 	container-type: inline-size;
 	min-width: 0;
