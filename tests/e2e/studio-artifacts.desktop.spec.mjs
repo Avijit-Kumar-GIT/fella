@@ -1,10 +1,10 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { test, expect, question, caveat, answer, columns, exactRows, comparisonProgram, secondProgram, invoke, rejected, chooseWorkspace, engineRequests, startBudget, assertNoExecution, launch, seedRun, placement, createArtifact, createDocument, assertCanonicalUnchanged, openStudio, openStudioDocument, addSavedOutput, assertSavedRows, expectMarkdownDownload, expectPackageDownload } from './generative-workspace-harness.mjs';
+import { test, expect, question, caveat, answer, columns, exactRows, comparisonSpec, secondSpec, invoke, rejected, chooseWorkspace, engineRequests, startBudget, assertNoExecution, launch, seedRun, placement, createArtifact, createDocument, assertCanonicalUnchanged, openStudio, openStudioDocument, addSavedOutput, assertSavedRows, expectMarkdownDownload, expectPackageDownload } from './generative-workspace-harness.mjs';
 
 /**
  * Organization-only relocation map (2026-10-22), original task set v1.5.
- * Keep: same-turn OpenUI/state, finalizer-only repair, invalid UI fallback,
+ * Keep: same-turn json-render/state, finalizer-only correction, invalid UI fallback,
  * Markdown conversion/export, portable report export/reopening.
  * Move unchanged: immutable revisions/checkpoints, workspace ownership, chat
  * deletion retention, Studio edits/reordering/restart. Shared setup and helpers
@@ -12,11 +12,9 @@ import { test, expect, question, caveat, answer, columns, exactRows, comparisonP
  * unchanged; this split is not a new baseline or an exclusion of app coverage.
  */
 
-test('generative v1: immutable revisions, pinned placements, optimistic writes, and checkpoints', async ({ desktop }) => {
+test('generative v2.0: immutable revisions, pinned placements, optimistic writes, and checkpoints', async ({ desktop }) => {
 	const { app, page, workspace, run } = desktop;
-	// Blank programs are intentional for this storage-only contract. Rendering
-	// syntax is exercised by the separate UI journeys, not invented here.
-	const artifact = await createArtifact(desktop, run, 'Revenue baseline', '');
+	const artifact = await createArtifact(desktop, run, 'Revenue baseline', secondSpec);
 	const original = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifact.id });
 	expect(original.results).toHaveLength(1);
 	expect(original.results[0]).toMatchObject({ id: 'sales-result', columns, exact_rows: exactRows, complete: true, row_count: 2 });
@@ -25,7 +23,7 @@ test('generative v1: immutable revisions, pinned placements, optimistic writes, 
 	expect(checkpointed.checkpoints).toHaveLength(1);
 	const revision = await invoke(page, 'artifact_revise', {
 		workspaceId: workspace, artifactId: artifact.id, baseRevision: artifact.current_revision,
-		program: '', changeNote: 'Presentation-only revision; no new calculation.'
+		changeNote: 'Presentation-only revision; no new calculation.'
 	});
 	expect(revision.artifact.current_revision).toBe(artifact.current_revision);
 	expect(revision.artifact.revisions).toHaveLength(2);
@@ -37,7 +35,7 @@ test('generative v1: immutable revisions, pinned placements, optimistic writes, 
 	for (const command of ['artifact_revise', 'artifact_adopt']) {
 		const failure = await rejected(page, command, {
 			workspaceId: workspace, artifactId: artifact.id, baseRevision: artifact.current_revision,
-			revision: artifact.current_revision, program: '', changeNote: 'Stale mutation must fail.'
+			revision: artifact.current_revision, changeNote: 'Stale mutation must fail.'
 		});
 		expect(failure.rejected, `${command} must reject a stale adopted base`).toBe(true);
 		expect(failure.message).toMatch(/changed|reload|conflict|stale/i);
@@ -69,16 +67,16 @@ test('generative v1: immutable revisions, pinned placements, optimistic writes, 
 	await assertNoExecution(desktop);
 });
 
-test('generative v1: workspace ownership cannot be bypassed by artifact or Studio IDs', async ({ desktop }) => {
+test('generative v2.0: workspace ownership cannot be bypassed by artifact or Studio IDs', async ({ desktop }) => {
 	const { app, page, workspace, otherWorkspace, run } = desktop;
-	const artifact = await createArtifact(desktop, run, 'Private commerce result', '');
+	const artifact = await createArtifact(desktop, run, 'Private commerce result', secondSpec);
 	const doc = await createDocument(desktop, [artifact]);
 	const checkpointed = await invoke(page, 'studio_checkpoint', { workspaceId: workspace, documentId: doc.id, baseVersion: doc.version, title: 'Commerce checkpoint' });
 	const foreign = { workspaceId: otherWorkspace };
 	const attempts = [
-		['artifact_create', { ...foreign, turnId: run.id, title: 'Stolen run', program: '' }],
+		['artifact_create', { ...foreign, turnId: run.id, title: 'Stolen run', spec: secondSpec }],
 		['artifact_resolve', { ...foreign, artifactId: artifact.id }],
-		['artifact_revise', { ...foreign, artifactId: artifact.id, baseRevision: artifact.current_revision, program: '', changeNote: 'Foreign revision' }],
+		['artifact_revise', { ...foreign, artifactId: artifact.id, baseRevision: artifact.current_revision, changeNote: 'Foreign revision' }],
 		['artifact_adopt', { ...foreign, artifactId: artifact.id, baseRevision: artifact.current_revision, revision: artifact.current_revision }],
 		['studio_load', { ...foreign, documentId: doc.id }],
 		['studio_save', { ...foreign, documentId: doc.id, baseVersion: checkpointed.version, update: { title: 'Stolen document', body: '', placements: [] } }],
@@ -113,10 +111,10 @@ test('generative v1: workspace ownership cannot be bypassed by artifact or Studi
 	await assertNoExecution(desktop);
 });
 
-test('generative v1: deleting a chat retains saved analytical work but not unrelated unsaved runs', async ({ desktop }) => {
+test('generative v2.0: deleting a chat retains saved analytical work but not unrelated unsaved runs', async ({ desktop }) => {
 	const { app, page, workspace, run } = desktop;
 	const unsaved = await seedRun(desktop, { id: 'gen-unsaved-run' });
-	const artifact = await createArtifact(desktop, run, 'Retained revenue comparison', comparisonProgram);
+	const artifact = await createArtifact(desktop, run, 'Retained revenue comparison', comparisonSpec);
 	const doc = await createDocument(desktop, [artifact], { title: 'Retained review' });
 	const row = page.locator('.item-wrap').filter({ has: page.getByRole('button', { name: `Open conversation: ${question}`, exact: true }) });
 	await row.hover();
@@ -142,11 +140,11 @@ test('generative v1: deleting a chat retains saved analytical work but not unrel
 	await assertNoExecution(desktop);
 });
 
-test('generative v1: recorded analysis to Studio, user edits and keyboard reorder survive a desktop restart', async ({ desktop }) => {
+test('generative v2.0: recorded analysis to Studio, user edits and keyboard reorder survive a desktop restart', async ({ desktop }) => {
 	const { page, workspace, profile, run } = desktop;
 	const baselineFiles = (await readdir(join(profile, 'analysis', 'turns'))).sort();
-	const first = await createArtifact(desktop, run, 'Revenue comparison', comparisonProgram);
-	const second = await createArtifact(desktop, run, 'Supporting table', secondProgram);
+	const first = await createArtifact(desktop, run, 'Revenue comparison', comparisonSpec);
+	const second = await createArtifact(desktop, run, 'Supporting table', secondSpec);
 	const studio = await openStudio(desktop);
 	await studio.getByRole('button', { name: 'New document', exact: true }).click();
 	const create = page.getByRole('dialog', { name: 'New Studio document', exact: true });

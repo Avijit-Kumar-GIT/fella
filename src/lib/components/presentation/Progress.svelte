@@ -1,7 +1,13 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ title: string; value: unknown; detail?: string }> = $props();
-	let value = $derived(typeof props.value === 'number' && Number.isFinite(props.value) ? Math.max(0, Math.min(100, props.value)) : 0);
+	import type { BaseComponentProps } from '@json-render/svelte';
+	import { exactValue, requireResult } from '../../presentation/results';
+	import { usePresentation } from './context';
+	let { props }: BaseComponentProps<{ resultId: string; field: string; row: number; title: string; maximum?: number; detail?: string }> = $props();
+	const context = usePresentation();
+	let result = $derived(requireResult(context.results, props.resultId));
+	let exact = $derived(exactValue(result, props.row, props.field));
+	let raw = $derived(Number(exact));
+	let value = $derived(Number.isFinite(raw) ? Math.max(0, Math.min(100, raw / (props.maximum ?? 100) * 100)) : 0);
 </script>
 <div class="progress"><div class="line"><span>{props.title}</span><strong>{Math.round(value)}%</strong></div><div class="track" role="progressbar" aria-label={props.title} aria-valuemin="0" aria-valuemax="100" aria-valuenow={Math.round(value)}><div style:width={`${value}%`}></div></div>{#if props.detail}<p>{props.detail}</p>{/if}</div>
 <style>

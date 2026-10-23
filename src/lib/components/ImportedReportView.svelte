@@ -46,7 +46,7 @@
 			</li>
 		{/each}
 	</ol>
-	<p class="warning">This imported report cannot query its original files. Saved checks are historical and have not been rerun. The presentation program is kept as inert text and is not executed.</p>
+	<p class="warning">This imported report cannot query its original files. Saved checks are historical and have not been rerun. Its presentation is a read-only snapshot and cannot access data.</p>
 </article>
 
 <style>

@@ -198,8 +198,8 @@ export interface Answer {
 	/** Typed links to evidence, included context, and clarification lineage. */
 	provenance?: AnswerProvenance;
 	text: string;
-	/** OpenUI Lang is the primary presentation for workspace answers. */
-	presentation_program?: string;
+	/** Native json-render UI spec for workspace answers. */
+	presentation_spec?: import('./presentation/types').PresentationSpec;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
 	/** One user-facing semantic choice that must be answered before computing. */
@@ -440,7 +440,7 @@ export interface AnalysisTurn {
 	verification?: { status: VerificationStatus; checks: VerificationCheck[] };
 	result: {
 		text: string;
-		presentation_program?: string;
+		presentation_spec?: import('./presentation/types').PresentationSpec;
 		status: VerificationStatus;
 		usage?: { prompt_tokens: number; completion_tokens: number };
 		verification: VerificationCheck[];
@@ -697,7 +697,7 @@ export interface Message {
 	/** Projection link only; Rust artifact/run stores own the analytical output. */
 	artifact_id?: string;
 	artifact_revision?: number;
-	/** Local OpenUI control choices, independent of analytical source or result state. */
+	/** Local presentation control choices, independent of analytical source or result state. */
 	presentation_state?: Record<string, unknown>;
 	/** Small validated display cache; permits immediate rendering after restart. */
 	presentation_snapshot?: import('./presentation/snapshot').PresentationSnapshot;

@@ -2,17 +2,17 @@ import { defineConfig } from '@playwright/test';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Independent real-desktop suite. Build the app and Rust sidecar beforehand;
-// no dev server, hosted model, existing config, or assertion is replaced.
+// Focused real-desktop coverage for generated presentations and saved artifacts.
+// Build the app and Rust sidecar beforehand; these cases use local fixtures.
 export default defineConfig({
 	testDir: './tests/e2e',
-	testMatch: ['**/generative-workspace.desktop.spec.mjs', '**/openui-composition.desktop.spec.mjs'],
+	testMatch: ['**/generative-workspace.desktop.spec.mjs', '**/studio-artifacts.desktop.spec.mjs', '**/chat-notebook.desktop.spec.mjs'],
 	fullyParallel: false,
 	workers: 1,
 	retries: 0,
 	timeout: 45_000,
 	expect: { timeout: 7_000 },
 	reporter: 'list',
-	outputDir: join(tmpdir(), 'fella-generative-workspace-v1.3-results'),
+	outputDir: join(tmpdir(), 'fella-json-render-workspace-v2-results'),
 	use: { trace: 'retain-on-failure', screenshot: 'only-on-failure' }
 });

@@ -271,10 +271,10 @@ pub struct Answer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grounding: Option<crate::engine::grounding::GroundingReport>,
     pub text: String,
-    /// OpenUI program returned as part of the same final model response as
-    /// `text`. It is a presentation of saved evidence, never an execution plan.
+    /// json-render spec returned with `text`. It presents saved evidence and
+    /// is never an execution plan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub presentation_program: Option<String>,
+    pub presentation_spec: Option<Json>,
     /// Typed links to the observed inputs behind this model-generated answer.
     pub provenance: AnswerProvenance,
     pub evidence: Vec<EvidenceItem>,
@@ -422,7 +422,7 @@ mod tests {
             contract: None,
             grounding: None,
             text: "done".into(),
-            presentation_program: None,
+            presentation_spec: None,
             provenance: AnswerProvenance {
                 evidence_ids: vec!["evidence-1".into()],
                 context_sections: vec![crate::engine::context::ContextSection::Conversation],

@@ -65,8 +65,6 @@ fn model_num_ctx() -> u32 {
 /// logs a warning when the estimate still crowds that ceiling.
 /// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
-    let len = |v: &Json| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
-    let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
     let presentation = tools_json.and_then(Json::as_array).is_some_and(|tools| {
         tools.iter().any(|tool| {
             tool["function"]["name"]
@@ -74,7 +72,17 @@ fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
                 .is_some_and(is_presentation_output_tool)
         })
     });
-    ((approx_tok * 5 / 4) + output_token_budget(presentation))
+    fit_num_ctx_with_output_budget(messages_json, tools_json, output_token_budget(presentation))
+}
+
+fn fit_num_ctx_with_output_budget(
+    messages_json: &Json,
+    tools_json: Option<&Json>,
+    output_tokens: u32,
+) -> u32 {
+    let len = |v: &Json| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
+    let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
+    ((approx_tok * 5 / 4) + output_tokens)
         .next_multiple_of(2048)
         .clamp(model_num_ctx(), 32768)
 }
@@ -91,12 +99,11 @@ fn max_output_tokens() -> u32 {
         .unwrap_or(1024)
 }
 
-/// OpenUI is a complete program rather than a short analytical tool argument.
-/// Keep the ordinary-call setting intact, but do not truncate a finalizer or
-/// presentation-only repair at the legacy 1,024-token default. An explicit
-/// larger output setting still applies; smaller settings cannot starve OpenUI.
+/// A generated presentation is a complete JSON tree rather than a short tool
+/// argument. Keep ordinary calls unchanged, but reserve enough output budget
+/// for the final answer spec.
 fn is_presentation_output_tool(name: &str) -> bool {
-    matches!(name, "fella_openui_answer" | "fella_openui_repair")
+    matches!(name, "fella_presentation_answer")
 }
 
 fn output_token_budget(presentation: bool) -> u32 {
@@ -309,9 +316,50 @@ impl LlmClient {
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
         if self.is_openai() {
-            self.chat_openai(messages, tools, on_retry, on_delta).await
+            self.chat_openai(messages, tools, None, on_retry, on_delta)
+                .await
         } else {
-            self.chat_ollama(messages, tools, on_retry, on_delta).await
+            self.chat_ollama(messages, tools, None, on_retry, on_delta)
+                .await
+        }
+    }
+
+    /// Ask for one schema-constrained JSON response after a model ignores its
+    /// finalizer tool. This is a recovery path for providers such as Ollama
+    /// whose native chat endpoint does not support forcing a tool call.
+    pub async fn chat_structured(
+        &self,
+        messages: &[ChatMessage],
+        schema: &Json,
+        on_retry: RetryNotify<'_>,
+        on_delta: RetryNotify<'_>,
+    ) -> EngineResult<ChatResponse> {
+        if self.is_openai() {
+            self.chat_openai(messages, &[], Some(schema), on_retry, on_delta)
+                .await
+        } else {
+            self.chat_ollama(messages, &[], Some(schema), on_retry, on_delta)
+                .await
+        }
+    }
+
+    /// Ask for a JSON object without provider-specific schema features. The
+    /// caller still validates it against Fella's complete local catalog; this
+    /// is a compatibility recovery for models that ignore or reject schemas.
+    pub async fn chat_json(
+        &self,
+        messages: &[ChatMessage],
+        on_retry: RetryNotify<'_>,
+        on_delta: RetryNotify<'_>,
+    ) -> EngineResult<ChatResponse> {
+        if self.is_openai() {
+            let json_object = json!({ "type": "json_object" });
+            self.chat_openai(messages, &[], Some(&json_object), on_retry, on_delta)
+                .await
+        } else {
+            let json_format = json!("json");
+            self.chat_ollama(messages, &[], Some(&json_format), on_retry, on_delta)
+                .await
         }
     }
 
@@ -453,6 +501,7 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        structured_schema: Option<&Json>,
         on_retry: RetryNotify<'_>,
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
@@ -462,8 +511,15 @@ impl LlmClient {
             (!tools.is_empty()).then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
         // `FELLA_MODEL_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
         // the eval harness can measure fixed-vs-adaptive on a big workspace.
+        let output_tokens = if structured_schema.is_some() {
+            output_token_budget(true)
+        } else {
+            request_output_tokens(tools)
+        };
         let num_ctx = if std::env::var_os("FELLA_MODEL_NUM_CTX_FIXED").is_some() {
             model_num_ctx()
+        } else if structured_schema.is_some() {
+            fit_num_ctx_with_output_budget(&messages_json, tools_json.as_ref(), output_tokens)
         } else {
             fit_num_ctx(&messages_json, tools_json.as_ref())
         };
@@ -482,11 +538,14 @@ impl LlmClient {
             "options": {
                 "temperature": 0.2,
                 "num_ctx": num_ctx,
-                "num_predict": request_output_tokens(tools),
+                "num_predict": output_tokens,
             },
         });
         if let Some(t) = tools_json {
             body["tools"] = t;
+        }
+        if let Some(schema) = structured_schema {
+            body["format"] = schema.clone();
         }
 
         let v = self.send_stream(&url, &body, on_retry, on_delta).await?;
@@ -506,6 +565,7 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        structured_schema: Option<&Json>,
         on_retry: RetryNotify<'_>,
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
@@ -535,6 +595,27 @@ impl LlmClient {
         }
         if !tools.is_empty() {
             body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
+        }
+        if let Some(schema) = structured_schema {
+            body["response_format"] = if schema["type"].as_str() == Some("json_object") {
+                schema.clone()
+            } else {
+                json!({
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "fella_presentation_answer",
+                        "strict": false,
+                        "schema": schema,
+                    }
+                })
+            };
+        }
+        if structured_schema.is_some() {
+            if openai_reasoning_model(&self.model) {
+                body["max_completion_tokens"] = json!(output_token_budget(true).max(8192));
+            } else {
+                body["max_tokens"] = json!(output_token_budget(true));
+            }
         }
 
         // Stream so the text appears token by token like the Ollama path.
@@ -1168,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn openui_output_budget_is_scoped_to_actual_finalizer_tools() {
+    fn presentation_output_budget_is_scoped_to_the_finalizer_tool() {
         let schema = |name: &str| ToolSchema {
             name: name.into(),
             description: String::new(),
@@ -1178,19 +1259,20 @@ mod tests {
         assert_eq!(request_output_tokens(&[]), ordinary);
         assert_eq!(request_output_tokens(&[schema("run_sql")]), ordinary);
         assert_eq!(
-            request_output_tokens(&[schema("my_fella_openui_answer")]),
+            request_output_tokens(&[schema("my_fella_presentation_answer")]),
             ordinary
         );
-        for name in ["fella_openui_answer", "fella_openui_repair"] {
-            assert_eq!(request_output_tokens(&[schema(name)]), ordinary.max(8192));
-        }
+        assert_eq!(
+            request_output_tokens(&[schema("fella_presentation_answer")]),
+            ordinary.max(8192)
+        );
     }
 
     #[test]
-    fn openui_context_fit_reserves_the_larger_output_budget() {
+    fn presentation_context_fit_reserves_the_larger_output_budget() {
         let messages = json!([{"role": "user", "content": "saved results".repeat(1000)}]);
         let tool = ToolSchema {
-            name: "fella_openui_repair".into(),
+            name: "fella_presentation_answer".into(),
             description: String::new(),
             parameters: json!({"type": "object"}),
         };

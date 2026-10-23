@@ -5,16 +5,15 @@ schedule or a list of completed backlog items. The repository's versioned
 benchmarks and issues carry the detailed task contracts. Do not turn an
 individual failed example into a special-case production rule.
 
-## Proposed generative analytical workspace
+## Generative analytical workspace
 
-The [OpenUI analytical workspace plan](OPENUI-ANALYTICAL-WORKSPACE-PLAN.md)
-records the proposed path from flexible generated answers to reusable
-artifacts, Studio documents, analytical revisions, and deterministic portable
-reports. It distinguishes inspected implementation from proposed work and
-defines compatibility, security, performance, and delivery gates. It is a
-planning proposal, not a claim that OpenUI or Studio is implemented, and does
-not authorize a sweeping rewrite. Some interface descriptions below are
-historical; the plan identifies the current chat-plus-Tools baseline.
+The [generative analytical workspace plan](GENERATIVE-ANALYTICAL-WORKSPACE-PLAN.md)
+describes the current json-render catalog, evidence-bound result components,
+persistent analytical artifacts, Studio documents, revisions, and deterministic
+portable reports. The Svelte renderer and Rust finalizer share the generated
+component schema; the Rust engine remains authoritative for analysis and saved
+evidence. The plan distinguishes shipped paths from remaining work and sets
+incremental validation gates.
 
 ## Current priorities
 

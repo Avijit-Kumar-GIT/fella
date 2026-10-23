@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
+	import type { BaseComponentProps } from '@json-render/svelte';
 	import './presentation-theme.css';
-	let { props, renderNode }: ComponentRenderProps<{ children: unknown[] }> = $props();
+	let { children }: BaseComponentProps = $props();
 </script>
-<div class="analytical-document">{@render renderNode(props.children)}</div>
+<div class="analytical-document">{@render children?.()}</div>

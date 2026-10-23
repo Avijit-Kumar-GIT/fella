@@ -31,7 +31,7 @@
 	let workspace = $derived(message.answer?.workspace?.path);
 	let turnId = $derived(message.answer?.turn_id);
 	let snapshot = $derived(transcriptPresentation(message));
-	let display = $derived(snapshot ?? (resolved && resolved.run.id === turnId ? { program: resolved.revision.program, results: resolved.results } : null));
+	let display = $derived(snapshot ?? (resolved && resolved.run.id === turnId ? { spec: resolved.revision.spec, results: resolved.results } : null));
 
 	$effect(() => {
 		const id = message.artifact_id;
@@ -79,7 +79,7 @@
 
 <section class="analytical-answer" aria-label="Analytical answer">
 	{#if display}
-			<AnalyticalPresentation program={display.program} results={display.results} initialState={message.presentation_state ?? {}} onstatechange={(state) => {
+			<AnalyticalPresentation spec={display.spec} results={display.results} initialState={message.presentation_state ?? {}} onstatechange={(state) => {
 				message.presentation_state = state;
 				session.persist();
 			}} onaction={(action) => {

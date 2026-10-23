@@ -1,7 +1,7 @@
 //! The reasoning loop. Ask the model; if it calls tools, run them
 //! (deterministically) and feed results back; otherwise verify and return.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
@@ -78,369 +78,194 @@ fn max_steps() -> usize {
 /// This is soft guidance, not an analytical task limit; evaluate it against
 /// multi-step episodes as FQA-Bench coverage grows.
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
-const OPENUI_ANSWER_TOOL: &str = "fella_openui_answer";
+const PRESENTATION_ANSWER_TOOL: &str = "fella_presentation_answer";
 
-fn openui_library() -> &'static serde_json::Value {
-    static LIBRARY: OnceLock<serde_json::Value> = OnceLock::new();
-    LIBRARY.get_or_init(|| {
-        serde_json::from_str(include_str!("../../resources/presentation-library.json"))
-            .expect("generated OpenUI library manifest must be valid JSON")
+fn presentation_manifest() -> &'static serde_json::Value {
+    static MANIFEST: OnceLock<serde_json::Value> = OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        serde_json::from_str(include_str!("../../resources/presentation-catalog.json"))
+            .expect("generated JSON renderer catalog must be valid JSON")
     })
 }
 
-fn openui_answer_schema() -> ToolSchema {
-    let library = openui_library();
-    let instructions = library["prompt"].as_str().unwrap_or("");
+fn presentation_answer_schema() -> ToolSchema {
+    let manifest = presentation_manifest();
+    let instructions = manifest["prompt"].as_str().unwrap_or("");
     ToolSchema {
-        name: OPENUI_ANSWER_TOOL.into(),
-        description: format!(
-            "Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_program` is the user-visible OpenUI Lang presentation of that same answer. Do not call this until analysis is complete. Do not call it in the same response as any other tool. Use only result IDs and fields previously returned in this turn; never invent values. Do not copy numeric results into Metric value props: bind exact cells by result ID, field, and zero-based row, or use a value expression derived from @Rows(). Fella rejects literal Metric values and will ask you to repair the presentation. When no result table is available, create a substantive text-first OpenUI presentation. The complete program must contain one explicit root = Document([...]) statement; local state defaults and reusable component statements may appear before or after it.\n\n{instructions}"
-        ),
-        parameters: serde_json::json!({
-            "type":"object",
-            "properties": {
-                "answer": {"type":"string", "minLength":1, "maxLength":16000},
-                "presentation_program": {"type":"string", "minLength":1, "maxLength":96000}
-            },
-            "required":["answer", "presentation_program"],
-            "additionalProperties":false
+		name: PRESENTATION_ANSWER_TOOL.into(),
+			description: format!(
+			"Finish this workspace answer in one call. `answer` is the concise, evidence-grounded canonical answer used for verification and Investigation history. `presentation_spec` is the primary user-visible answer surface: a json-render spec for that same answer. Do not call this until analysis is complete or in the same response as another tool. Bind analytical values to supplied result IDs and fields; use exact result rows for metrics. Never invent a dataset or put executable code in the presentation.\n\n{instructions}"
+		),
+		parameters: serde_json::json!({
+			"type":"object",
+			"properties": {
+				"answer": {"type":"string", "minLength":1, "maxLength":16000},
+				"presentation_spec": manifest["schema"].clone()
+			},
+			"required":["answer", "presentation_spec"],
+			"additionalProperties":false
+		}),
+	}
+}
+
+#[derive(Debug)]
+struct PresentationAnswer {
+    text: String,
+    spec: serde_json::Value,
+}
+
+fn validate_presentation_shape(spec: &serde_json::Value) -> EngineResult<()> {
+    let object = spec
+        .as_object()
+        .ok_or_else(|| EngineError::msg("Presentation spec must be a JSON object."))?;
+    if object.len() != 2 || !object.contains_key("root") || !object.contains_key("elements") {
+        return Err(EngineError::msg(
+            "Presentation spec must contain only root and elements.",
+        ));
+    }
+    let root = spec["root"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| EngineError::msg("Presentation root is missing."))?;
+    let elements = spec["elements"]
+        .as_object()
+        .ok_or_else(|| EngineError::msg("Presentation elements must be an object."))?;
+    if elements.is_empty()
+        || elements.len() > 240
+        || serde_json::to_vec(spec).map_or(true, |data| data.len() > 256 * 1024)
+    {
+        return Err(EngineError::msg(
+            "Presentation spec is empty or exceeds its size limit.",
+        ));
+    }
+    if elements
+        .get(root)
+        .and_then(|element| element.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("Document")
+    {
+        return Err(EngineError::msg(
+            "Presentation root element must be Document.",
+        ));
+    }
+    let mut parents = HashSet::new();
+    for (key, element) in elements {
+        if key.len() > 80
+            || !key.chars().enumerate().all(|(index, ch)| {
+                ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' && index > 0
+            })
+            || !key
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            return Err(EngineError::msg(
+                "Presentation contains an invalid element key.",
+            ));
+        }
+        let kind = element
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| EngineError::msg("Presentation element is missing a component type."))?;
+        if !presentation_manifest()["schema"]["properties"]["elements"]["additionalProperties"]
+            ["properties"]["type"]["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(kind)))
+        {
+            return Err(EngineError::msg(
+                "Presentation uses a component outside the registered catalog.",
+            ));
+        }
+        if element.get("repeat").is_some_and(|value| !value.is_null()) {
+            return Err(EngineError::msg(
+                "Presentation data repetition is not enabled.",
+            ));
+        }
+        let children = element
+            .get("children")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| EngineError::msg("Presentation element children must be an array."))?;
+        for child in children {
+            let child = child.as_str().ok_or_else(|| {
+                EngineError::msg("Presentation child references must be strings.")
+            })?;
+            if !elements.contains_key(child) || !parents.insert(child.to_owned()) {
+                return Err(EngineError::msg(
+                    "Presentation has a missing or multiply-attached child.",
+                ));
+            }
+        }
+    }
+    if parents.contains(root) {
+        return Err(EngineError::msg("Presentation root cannot have a parent."));
+    }
+    let mut visited = HashSet::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(key) = pending.pop() {
+        if !visited.insert(key.clone()) {
+            return Err(EngineError::msg("Presentation contains a cycle."));
+        }
+        if let Some(children) = elements
+            .get(&key)
+            .and_then(|element| element.get("children"))
+            .and_then(serde_json::Value::as_array)
+        {
+            pending.extend(
+                children
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            );
+        }
+    }
+    if visited.len() != elements.len() {
+        return Err(EngineError::msg(
+            "Every presentation element must be reachable from the root.",
+        ));
+    }
+    Ok(())
+}
+
+fn parse_presentation_answer(arguments: &serde_json::Value) -> EngineResult<PresentationAnswer> {
+    let text = arguments["answer"].as_str().unwrap_or_default().trim();
+    let spec = arguments["presentation_spec"].clone();
+    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
+        return Err(EngineError::msg(
+            "Workspace answer has invalid answer text.",
+        ));
+    }
+    validate_presentation_shape(&spec)?;
+    Ok(PresentationAnswer {
+        text: text.to_owned(),
+        spec,
+    })
+}
+
+fn fallback_presentation_answer(text: &str) -> PresentationAnswer {
+    let text = text.trim();
+    let text = if text.is_empty() {
+        "The model could not compose an interactive layout for this answer."
+    } else {
+        text
+    };
+    let text: String = text.chars().take(16_000).collect();
+    PresentationAnswer {
+        text: text.clone(),
+        spec: serde_json::json!({
+            "root": "answer",
+            "elements": {
+                "answer": { "type": "Document", "props": {}, "children": ["body"] },
+                "body": { "type": "Text", "props": { "content": text }, "children": [] }
+            }
         }),
     }
 }
 
-#[derive(Debug)]
-struct OpenUiAnswer {
-    text: String,
-    program: String,
-}
-
-/// Catch incomplete OpenUI syntax before returning the finalizer tool result to
-/// the model. The renderer still performs authoritative OpenUI parsing and
-/// schema validation; this early check lets the existing finalizer retry repair
-/// common bracket mistakes without rerunning analysis.
-pub(crate) fn validate_openui_delimiters(program: &str) -> EngineResult<()> {
-    let chars: Vec<char> = program.chars().collect();
-    let mut brackets = Vec::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut index = 0;
-
-    while index < chars.len() {
-        let character = chars[index];
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-
-        if character == '"' || character == '\'' {
-            quote = Some(character);
-            index += 1;
-            continue;
-        }
-        if character == '#' || character == '/' && chars.get(index + 1) == Some(&'/') {
-            while index < chars.len() && chars[index] != '\n' {
-                index += 1;
-            }
-            continue;
-        }
-
-        if matches!(character, '(' | '[' | '{') {
-            brackets.push(character);
-            if brackets.len() > 72 {
-                return Err(EngineError::msg(
-                    "OpenUI presentation nesting is too deep; simplify the presentation structure.",
-                ));
-            }
-        } else if matches!(character, ')' | ']' | '}') {
-            let expected = match character {
-                ')' => '(',
-                ']' => '[',
-                _ => '{',
-            };
-            if brackets.pop() != Some(expected) {
-                return Err(EngineError::msg(
-                    "OpenUI presentation has mismatched delimiters; check the matching parentheses, brackets, and braces.",
-                ));
-            }
-        }
-        index += 1;
-    }
-
-    if quote.is_some() || !brackets.is_empty() {
-        return Err(EngineError::msg(
-            "OpenUI presentation has unclosed strings or delimiters; return a complete program.",
-        ));
-    }
-    Ok(())
-}
-
-fn has_openui_document_root(program: &str) -> bool {
-    program.lines().any(|line| {
-        let line = line.trim_start();
-        if line.starts_with('#') || line.starts_with("//") {
-            return false;
-        }
-        line.split_once('=').is_some_and(|(name, expression)| {
-            name.trim() == "root" && expression.trim_start().starts_with("Document(")
-        })
-    })
-}
-
-fn openui_call_close(chars: &[char], open: usize) -> Option<usize> {
-    let mut brackets = vec![')'];
-    let mut quote = None;
-    let mut escaped = false;
-    let mut index = open + 1;
-    while index < chars.len() {
-        let character = chars[index];
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-        if matches!(character, '"' | '\'') {
-            quote = Some(character);
-        } else if matches!(character, '(' | '[' | '{') {
-            brackets.push(match character {
-                '(' => ')',
-                '[' => ']',
-                _ => '}',
-            });
-        } else if matches!(character, ')' | ']' | '}') {
-            if brackets.pop() != Some(character) {
-                return None;
-            }
-            if brackets.is_empty() {
-                return Some(index);
-            }
-        }
-        index += 1;
-    }
-    None
-}
-
-fn split_openui_arguments(source: &[char]) -> Vec<String> {
-    let mut args = Vec::new();
-    let mut brackets = Vec::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut start = 0;
-    for (index, character) in source.iter().copied().enumerate() {
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-            continue;
-        }
-        if matches!(character, '"' | '\'') {
-            quote = Some(character);
-        } else if matches!(character, '(' | '[' | '{') {
-            brackets.push(match character {
-                '(' => ')',
-                '[' => ']',
-                _ => '}',
-            });
-        } else if matches!(character, ')' | ']' | '}') {
-            let _ = brackets.pop();
-        } else if character == ',' && brackets.is_empty() {
-            let value = source[start..index].iter().collect::<String>();
-            if !value.trim().is_empty() {
-                args.push(value.trim().to_owned());
-            }
-            start = index + 1;
-        }
-    }
-    let value = source[start..].iter().collect::<String>();
-    if !value.trim().is_empty() {
-        args.push(value.trim().to_owned());
-    }
-    args
-}
-
-fn openui_named_argument(argument: &str) -> Option<(String, String)> {
-    let chars: Vec<char> = argument.chars().collect();
-    let mut brackets = Vec::new();
-    let mut quote = None;
-    let mut escaped = false;
-    for (index, character) in chars.iter().copied().enumerate() {
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-            continue;
-        }
-        if matches!(character, '"' | '\'') {
-            quote = Some(character);
-        } else if matches!(character, '(' | '[' | '{') {
-            brackets.push(match character {
-                '(' => ')',
-                '[' => ']',
-                _ => '}',
-            });
-        } else if matches!(character, ')' | ']' | '}') {
-            if brackets.pop() != Some(character) {
-                return None;
-            }
-        } else if character == ':' && brackets.is_empty() {
-            let name = chars[..index].iter().collect::<String>();
-            let name = name.trim();
-            if !name.is_empty()
-                && name.chars().enumerate().all(|(offset, ch)| {
-                    ch == '_' || ch.is_ascii_alphanumeric() && (offset > 0 || !ch.is_ascii_digit())
-                })
-            {
-                let value = chars[index + 1..].iter().collect::<String>();
-                return Some((name.to_owned(), value.trim().to_owned()));
-            }
-        }
-    }
-    None
-}
-
-fn is_openui_literal_value(value: &str) -> bool {
-    let value = value.trim();
-    if value == "true" || value == "false" {
-        return true;
-    }
-    if value.parse::<f64>().is_ok() {
-        return true;
-    }
-    let mut chars = value.chars();
-    let first = chars.next();
-    matches!(first, Some('"' | '\'')) && value.chars().last() == first && value.len() >= 2
-}
-
-/// Catch directly-authored Metric values before returning to the UI. The
-/// frontend remains the authoritative OpenUI/schema validator; this narrow
-/// preflight gives the existing finalizer another model turn to replace a
-/// hard-coded number or string with a saved-row binding.
-fn validate_openui_metric_bindings(program: &str) -> EngineResult<()> {
-    let chars: Vec<char> = program.chars().collect();
-    let mut index = 0;
-    let mut quote = None;
-    let mut escaped = false;
-    while index < chars.len() {
-        let character = chars[index];
-        if let Some(delimiter) = quote {
-            if escaped {
-                escaped = false;
-            } else if character == '\\' {
-                escaped = true;
-            } else if character == delimiter {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-        if matches!(character, '"' | '\'') {
-            quote = Some(character);
-            index += 1;
-            continue;
-        }
-        if character == '#' || character == '/' && chars.get(index + 1) == Some(&'/') {
-            while index < chars.len() && chars[index] != '\n' {
-                index += 1;
-            }
-            continue;
-        }
-        if character == '_' || character.is_ascii_alphabetic() {
-            let start = index;
-            index += 1;
-            while index < chars.len()
-                && (chars[index] == '_' || chars[index].is_ascii_alphanumeric())
-            {
-                index += 1;
-            }
-            let name = chars[start..index].iter().collect::<String>();
-            if name != "Metric" {
-                continue;
-            }
-            let mut open = index;
-            while open < chars.len() && chars[open].is_whitespace() {
-                open += 1;
-            }
-            if chars.get(open) != Some(&'(') {
-                continue;
-            }
-            let Some(close) = openui_call_close(&chars, open) else {
-                continue;
-            };
-            let args = split_openui_arguments(&chars[open + 1..close]);
-            let mut positional = 0usize;
-            let mut value = None;
-            for argument in args {
-                if let Some((prop, prop_value)) = openui_named_argument(&argument) {
-                    if prop == "value" {
-                        value = Some(prop_value);
-                    }
-                } else {
-                    if positional == 5 {
-                        value = Some(argument);
-                    }
-                    positional += 1;
-                }
-            }
-            if value
-                .as_deref()
-                .is_some_and(|value| value.trim() != "null" && is_openui_literal_value(value))
-            {
-                return Err(EngineError::msg(
-                    "Metric values cannot be copied into the presentation as literals. Bind an exact saved result by result ID, field, and row, or derive a display-only value from @Rows().",
-                ));
-            }
-            continue;
-        }
-        index += 1;
-    }
-    Ok(())
-}
-
-fn parse_openui_answer(arguments: &serde_json::Value) -> EngineResult<OpenUiAnswer> {
-    let text = arguments["answer"].as_str().unwrap_or_default().trim();
-    let program = arguments["presentation_program"]
-        .as_str()
-        .unwrap_or_default()
-        .trim();
-    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
-        return Err(EngineError::msg("OpenUI answer has invalid answer text"));
-    }
-    if program.is_empty() || program.len() > 96_000 || program.contains('\0') {
-        return Err(EngineError::msg(
-            "OpenUI answer has an invalid presentation program",
-        ));
-    }
-    if !has_openui_document_root(program) {
-        return Err(EngineError::msg(
-            "OpenUI presentation must contain root = Document(...)",
-        ));
-    }
-    validate_openui_delimiters(program)?;
-    validate_openui_metric_bindings(program)?;
-    Ok(OpenUiAnswer {
-        text: text.to_owned(),
-        program: program.to_owned(),
-    })
+fn parse_structured_presentation_answer(content: &str) -> EngineResult<PresentationAnswer> {
+    let arguments: serde_json::Value = serde_json::from_str(content).map_err(|error| {
+        EngineError::msg(format!("Structured presentation was not JSON: {error}"))
+    })?;
+    parse_presentation_answer(&arguments)
 }
 
 struct RunIds {
@@ -612,10 +437,10 @@ fn is_observation_tool(name: &str) -> bool {
     )
 }
 
-/// Whether this successful computation can be bound by the final OpenUI
+/// Whether this successful computation can be bound by the final json-render
 /// presentation. Incomplete results remain usable only with their explicit
 /// completeness warning; inspection samples are never analytical outputs.
-fn is_openui_result(item: &EvidenceItem) -> bool {
+fn is_presentation_result(item: &EvidenceItem) -> bool {
     if !item.is_accepted()
         || !matches!(
             item.tool.as_str(),
@@ -802,7 +627,7 @@ pretend workspace field.",
             "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
         sys.push_str(
-            "\n\nWorkspace answer format: Do not finish a workspace answer as ordinary prose. Once the analysis is complete, call `fella_openui_answer` exactly once, with both the verified canonical answer and a complete OpenUI Lang program for the user-visible answer. The program is the primary answer surface, not an optional second view. Do not call it in the same response as analysis tools. Use only result IDs and field names explicitly returned in this turn; bind values to those results rather than inventing them. The canonical answer text remains the verification/history record. When the answer is document-based or no tabular result exists, compose a substantive text-first OpenUI document. Keep conclusions, assumptions, and limitations visible.\n",
+            "\n\nWorkspace answer format: Do not finish a workspace answer as ordinary prose. Once analysis is complete, call `fella_presentation_answer` exactly once with the verified canonical answer and a complete json-render spec for the user-visible answer. The JSON spec is the primary answer surface, not a second view. Do not call it in the same response as analysis tools. Use only result IDs and field names explicitly returned in this turn; bind values to those results rather than inventing them. The canonical answer remains the verification/history record. When the answer is document-based or no tabular result exists, compose a substantive text-first JSON-render document. Keep conclusions, assumptions, and limitations visible.\n",
         );
     }
     let mut messages = vec![
@@ -837,14 +662,14 @@ pretend workspace field.",
     // NoWorkspace errors, which can take minutes on a slow provider.
     let schemas = if catalog.workspace.is_some() {
         let mut schemas = registry.schemas_with_contract();
-        schemas.push(openui_answer_schema());
+        schemas.push(presentation_answer_schema());
         schemas
     } else {
         Vec::new()
     };
     let finalizer_only: Vec<_> = schemas
         .iter()
-        .filter(|schema| schema.name == OPENUI_ANSWER_TOOL)
+        .filter(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
         .cloned()
         .collect();
     let mut evidence: Vec<EvidenceItem> = Vec::new();
@@ -871,6 +696,7 @@ pretend workspace field.",
     // the model one final answer turn without tools instead of letting it
     // request that same result until the global step ceiling.
     let mut force_final_answer = false;
+    let mut unformatted_answer: Option<String> = None;
 
     let run_start = ids.started_at;
     let mut tool_calls_total = 0usize;
@@ -929,10 +755,10 @@ pretend workspace field.",
         };
         usage = Usage::merge(usage, resp.usage);
 
-        let openui_final = if resp.tool_calls.len() == 1
-            && resp.tool_calls[0].name == OPENUI_ANSWER_TOOL
+        let mut presentation_final = if resp.tool_calls.len() == 1
+            && resp.tool_calls[0].name == PRESENTATION_ANSWER_TOOL
         {
-            match parse_openui_answer(&resp.tool_calls[0].arguments) {
+            match parse_presentation_answer(&resp.tool_calls[0].arguments) {
                 Ok(answer) => Some(answer),
                 Err(error) => {
                     let call = &resp.tool_calls[0];
@@ -944,7 +770,7 @@ pretend workspace field.",
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         content: format!(
-                            "The final OpenUI answer was rejected: {error}. Return a corrected complete answer using the required fields."
+                            "The final JSON presentation was rejected: {error}. Return a corrected complete answer using the required fields."
                         ),
                     });
                     force_final_answer = true;
@@ -955,7 +781,7 @@ pretend workspace field.",
             None
         };
 
-        if force_final_answer && !resp.tool_calls.is_empty() && openui_final.is_none() {
+        if force_final_answer && !resp.tool_calls.is_empty() && presentation_final.is_none() {
             log::warn!("agent: model requested tools after the repeat guard disabled them");
             return Ok(finish(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
@@ -971,19 +797,115 @@ pretend workspace field.",
             // Give one explicit format correction while exposing no analysis
             // tools, rather than showing the prose response first.
             if !force_final_answer {
+                if !resp.content.trim().is_empty() {
+                    unformatted_answer = Some(resp.content.clone());
+                }
                 messages.push(ChatMessage::Assistant {
                     content: resp.content.clone(),
                     tool_calls: Vec::new(),
                 });
                 messages.push(ChatMessage::User(
-                    "The workspace response is not finished until it is returned through `fella_openui_answer`. Use the required answer and presentation_program fields now. Do not add text outside the function call.".into(),
+                    "The workspace response is not finished until it is returned through `fella_presentation_answer`. Use the required answer and presentation_spec fields now. Do not add text outside the function call.".into(),
                 ));
                 force_final_answer = true;
                 continue;
             }
+
+            // Ollama's native chat API has no required-tool mode, and some
+            // compatible models still answer in prose after a finalizer-only
+            // retry. Give them one schema-constrained response opportunity;
+            // do not stream raw JSON into the visible conversation.
+            messages.push(ChatMessage::User(
+                "Return the final answer as a JSON object matching the supplied response schema. Include both `answer` and `presentation_spec`; do not call tools or add text outside the JSON object.".into(),
+            ));
+            let structured_started = Instant::now();
+            let structured_schema = presentation_answer_schema();
+            let suppress_delta = |_text: &str| {};
+            let structured_result = tokio::select! {
+                result = llm.chat_structured(
+                    &messages,
+                    &structured_schema.parameters,
+                    &notify,
+                    &suppress_delta,
+                ) => result,
+                _ = cancelled(cancel.as_ref()) => {
+                    return Ok(stopped(
+                        finish_context(engine, workspace.as_ref(), &ids, emit),
+                        question,
+                        evidence,
+                        usage,
+                    ))
+                }
+            };
+            let structured = match structured_result {
+                Ok(response) => {
+                    record_model_call(&mut ids, structured_started, true, response.usage);
+                    response
+                }
+                Err(error) => {
+                    record_model_call(&mut ids, structured_started, false, None);
+                    log::warn!("agent: structured JSON-render finalizer failed: {error}");
+                    Default::default()
+                }
+            };
+            usage = Usage::merge(usage, structured.usage);
+            match parse_structured_presentation_answer(&structured.content) {
+                Ok(answer) => presentation_final = Some(answer),
+                Err(error) => {
+                    log::warn!("agent: structured JSON-render finalizer was rejected: {error}");
+                    messages.push(ChatMessage::Assistant {
+                        content: structured.content,
+                        tool_calls: Vec::new(),
+                    });
+                    messages.push(ChatMessage::User(format!(
+                        "The prior JSON response did not validate ({error}). Return a corrected JSON object only, using this shape: {{\"answer\":\"concise supported answer\",\"presentation_spec\":{{\"root\":\"answer\",\"elements\":{{\"answer\":{{\"type\":\"Document\",\"props\":{{}},\"children\":[\"body\"]}},\"body\":{{\"type\":\"Text\",\"props\":{{\"content\":\"answer content\"}},\"children\":[]}}}}}}}}. Use the registered components and supplied results; for a trend across three or more ordered time periods, include a result-bound Chart."
+                    )));
+                    let json_started = Instant::now();
+                    let json_result = tokio::select! {
+                        result = llm.chat_json(&messages, &notify, &suppress_delta) => result,
+                        _ = cancelled(cancel.as_ref()) => {
+                            return Ok(stopped(
+                                finish_context(engine, workspace.as_ref(), &ids, emit),
+                                question,
+                                evidence,
+                                usage,
+                            ))
+                        }
+                    };
+                    let json_response = match json_result {
+                        Ok(response) => {
+                            record_model_call(&mut ids, json_started, true, response.usage);
+                            response
+                        }
+                        Err(error) => {
+                            record_model_call(&mut ids, json_started, false, None);
+                            log::warn!("agent: JSON-mode presentation recovery failed: {error}");
+                            Default::default()
+                        }
+                    };
+                    usage = Usage::merge(usage, json_response.usage);
+                    match parse_structured_presentation_answer(&json_response.content) {
+                        Ok(answer) => presentation_final = Some(answer),
+                        Err(error) => {
+                            log::warn!(
+                                "agent: JSON-mode presentation recovery was rejected: {error}"
+                            );
+                            let fallback = unformatted_answer
+                                .as_deref()
+                                .filter(|text| !text.trim().is_empty())
+                                .or_else(|| {
+                                    (!resp.content.trim().is_empty())
+                                        .then_some(resp.content.as_str())
+                                })
+                                .unwrap_or_default();
+                            presentation_final = Some(fallback_presentation_answer(fallback));
+                        }
+                    }
+                }
+            }
         }
 
-        if resp.tool_calls.is_empty() || openui_final.is_some() {
+        if resp.tool_calls.is_empty() || presentation_final.is_some() {
             emit(AskEvent::TurnState {
                 turn_id: ids.turn_id.clone(),
                 state: TurnState::Verifying,
@@ -996,7 +918,7 @@ pretend workspace field.",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let text = if let Some(answer) = openui_final.as_ref() {
+            let text = if let Some(answer) = presentation_final.as_ref() {
                 answer.text.clone()
             } else if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
@@ -1116,7 +1038,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 evidence,
                 usage,
                 checks,
-                openui_final.map(|answer| answer.program),
+                presentation_final.map(|answer| answer.spec),
             ));
         }
         // `resp.content` (any "let me check…" preamble before the tool calls)
@@ -1142,10 +1064,10 @@ the requested measure, filters, and scope. State just the number(s); don't round
         // batches it with data calls, return a protocol-safe explanation and
         // let the analysis calls complete before finalization.
         for (index, call) in resp.tool_calls.iter().enumerate() {
-            if call.name == OPENUI_ANSWER_TOOL {
+            if call.name == PRESENTATION_ANSWER_TOOL {
                 internal_results.insert(
                     index,
-                    "Finish the analysis calls first. Do not combine `fella_openui_answer` with any other tool; call it after reviewing their results.".into(),
+                    "Finish the analysis calls first. Do not combine `fella_presentation_answer` with any other tool; call it after reviewing their results.".into(),
                 );
             }
         }
@@ -1535,9 +1457,9 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
             had_tool_error |= item.error.is_some();
             workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
-            if is_openui_result(&item) {
+            if is_presentation_result(&item) {
                 llm_text = format!(
-                    "Reusable OpenUI result binding: {}. Use this exact evidence ID and its returned field names in `fella_openui_answer` when the result belongs in the presentation. Do not invent values or rerun this computation only to make a visualization.\n\n{llm_text}",
+                    "Reusable JSON-render result binding: {}. Use this exact evidence ID and its returned field names in `fella_presentation_answer` when the result belongs in the presentation. Do not invent values or rerun this computation only to make a visualization.\n\n{llm_text}",
                     item.id
                 );
             }
@@ -1611,10 +1533,10 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
     }
 
     // Out of steps: one final answer-format turn, with only the non-executing
-    // OpenUI answer function available in workspace mode.
+    // JSON-render answer function available in workspace mode.
     messages.push(ChatMessage::User(
         "You're out of tool-calling steps for this question. Don't call any more \
-tools. Use only what you've already found, and finish through `fella_openui_answer`. If \
+tools. Use only what you've already found, and finish through `fella_presentation_answer`. If \
 you're not confident, say so plainly rather than guessing."
             .to_string(),
     ));
@@ -1644,8 +1566,8 @@ you're not confident, say so plainly rather than guessing."
     let final_output = resp
         .tool_calls
         .iter()
-        .find(|call| call.name == OPENUI_ANSWER_TOOL)
-        .and_then(|call| parse_openui_answer(&call.arguments).ok());
+        .find(|call| call.name == PRESENTATION_ANSWER_TOOL)
+        .and_then(|call| parse_presentation_answer(&call.arguments).ok());
     let text = final_output
         .as_ref()
         .map(|answer| answer.text.clone())
@@ -1671,6 +1593,14 @@ you're not confident, say so plainly rather than guessing."
         ids.contract.as_ref(),
         ids.grounding.as_ref(),
     );
+    let presentation_spec = final_output
+        .as_ref()
+        .map(|answer| answer.spec.clone())
+        .or_else(|| {
+            workspace
+                .as_ref()
+                .map(|_| fallback_presentation_answer(&text).spec)
+        });
     Ok(finish_with(
         context,
         question,
@@ -1678,7 +1608,7 @@ you're not confident, say so plainly rather than guessing."
         evidence,
         usage,
         checks,
-        final_output.map(|answer| answer.program),
+        presentation_spec,
     ))
 }
 
@@ -1735,7 +1665,19 @@ fn finish(
         context.ids.contract.as_ref(),
         context.ids.grounding.as_ref(),
     );
-    finish_with(context, question, text, evidence, usage, checks, None)
+    let presentation_spec = context
+        .workspace
+        .as_ref()
+        .map(|_| fallback_presentation_answer(&text).spec);
+    finish_with(
+        context,
+        question,
+        text,
+        evidence,
+        usage,
+        checks,
+        presentation_spec,
+    )
 }
 
 fn finish_with(
@@ -1745,7 +1687,7 @@ fn finish_with(
     mut evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     mut verification: Vec<VerificationCheck>,
-    presentation_program: Option<String>,
+    presentation_spec: Option<serde_json::Value>,
 ) -> Answer {
     let finding_snapshot = chart_finding_snapshot(&text);
     stamp_chart_provenance(
@@ -1848,7 +1790,7 @@ fn finish_with(
         contract: context.ids.contract.clone(),
         grounding: context.ids.grounding.clone(),
         text,
-        presentation_program,
+        presentation_spec,
         provenance: AnswerProvenance {
             evidence_ids: evidence
                 .iter()
@@ -2421,7 +2363,7 @@ pub struct PromptProfile {
     pub python_rule: bool,
     pub depth_rule: bool,
     pub aside_rule: bool,
-    pub openui_rule: bool,
+    pub presentation_rule: bool,
     pub docs_rule: bool,
     pub forecast_rule: bool,
     pub background_rule: bool,
@@ -2460,7 +2402,7 @@ impl PromptProfile {
                 "python_rule" => p.python_rule = false,
                 "depth_rule" => p.depth_rule = false,
                 "aside_rule" => p.aside_rule = false,
-                "openui_rule" => p.openui_rule = false,
+                "presentation_rule" => p.presentation_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "forecast_rule" => p.forecast_rule = false,
                 "background_rule" => p.background_rule = false,
@@ -2489,7 +2431,7 @@ impl PromptProfile {
             python_rule: true,
             depth_rule: true,
             aside_rule: true,
-            openui_rule: true,
+            presentation_rule: true,
             docs_rule: true,
             forecast_rule: true,
             background_rule: true,
@@ -2658,10 +2600,10 @@ sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
-    if has_workspace && profile.openui_rule {
+    if has_workspace && profile.presentation_rule {
         rules.push(
             "Choose an answer-specific presentation based on the question and the actual result shape. \
-Fella's OpenUI output is the answer surface: compose it creatively from saved evidence-bound components, \
+Fella's json-render output is the answer surface: compose it creatively from saved evidence-bound components, \
 make the main analytical relationship visible and avoid repetitive templates. \
 Bind every displayed analytical value to a returned result; do not copy result numbers into \
 Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
@@ -2672,7 +2614,7 @@ display-only calculations use @Rows(). Presentation choices never change analysi
         // rather than only inside a long finalizer-tool description. Both are
         // generated from the same frontend library; this changes presentation
         // guidance, never analytical execution or verification.
-        if let Some(guidance) = openui_library()["designGuidance"].as_str() {
+        if let Some(guidance) = presentation_manifest()["designGuidance"].as_str() {
             rules.push(guidance.to_string());
         }
     }
@@ -2840,109 +2782,81 @@ mod tests {
     use crate::engine::llm::ToolCall;
 
     #[test]
-    fn openui_answer_is_a_single_non_executing_finalizer_with_a_complete_program() {
-        let schema = openui_answer_schema();
-        assert_eq!(schema.name, OPENUI_ANSWER_TOOL);
+    fn json_render_answer_is_a_single_non_executing_finalizer_with_a_complete_spec() {
+        let schema = presentation_answer_schema();
+        assert_eq!(schema.name, PRESENTATION_ANSWER_TOOL);
         assert_eq!(
             schema.parameters["required"],
-            serde_json::json!(["answer", "presentation_program"])
+            serde_json::json!(["answer", "presentation_spec"])
         );
         assert_eq!(schema.parameters["additionalProperties"], false);
         assert!(
             schema.description.contains("primary answer surface")
                 || schema.description.contains("user-visible answer")
         );
-        assert!(schema.description.contains("OpenUI Lang"));
+        assert!(schema.description.contains("json-render spec"));
 
-        let answer = parse_openui_answer(&serde_json::json!({
+        let answer = parse_presentation_answer(&serde_json::json!({
             "answer": "Revenue increased from Q3 to Q4.",
-            "presentation_program": "root = Document([Text(\"Revenue increased from Q3 to Q4.\")])"
+            "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue increased from Q3 to Q4."},"children":[]}}}
         }))
         .unwrap();
         assert_eq!(answer.text, "Revenue increased from Q3 to Q4.");
-        assert!(answer.program.starts_with("root = Document("));
+        assert_eq!(answer.spec["root"], "doc");
     }
 
     #[test]
-    fn openui_answer_rejects_incomplete_or_unrooted_programs() {
+    fn json_render_answer_rejects_incomplete_or_invalid_trees() {
         for arguments in [
-            serde_json::json!({"answer":"An answer", "presentation_program":""}),
-            serde_json::json!({"answer":"An answer", "presentation_program":"Text(\"not rooted\")"}),
-            serde_json::json!({"answer":"", "presentation_program":"root = Document([Text(\"x\")])"}),
-            serde_json::json!({
-                "answer":"An answer",
-                "presentation_program":"root = Document([Chart(\"sales\", {\"mark\":\"line\",\"encoding\":{\"x\":{\"field\":\"quarter\"}} , \"Trend\")])"
-            }),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"missing","elements":{}}}),
+            serde_json::json!({"answer":"", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":[]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Unknown","props":{},"children":[]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["missing"]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"body"},"children":[]},"orphan":{"type":"Text","props":{"content":"orphan"},"children":[]}}}}),
         ] {
-            assert!(parse_openui_answer(&arguments).is_err());
+            assert!(parse_presentation_answer(&arguments).is_err());
         }
     }
 
     #[test]
-    fn openui_answer_accepts_state_and_named_statements_before_the_document_root() {
-        let answer = parse_openui_answer(&serde_json::json!({
-            "answer": "A local selector can change this display.",
-            "presentation_program": "$quarter = \"Q3\"\nheading = Text($quarter + \" revenue\")\nroot = Document([heading])"
-        }))
-        .unwrap();
-
-        assert!(answer.program.contains("root = Document("));
-    }
-
-    #[test]
-    fn openui_answer_requests_repair_for_literal_metric_values_only() {
-        for metric in [
-            "Metric(null, null, null, \"Q4 revenue\", \"USD\", 80)",
-            "Metric(resultId: null, field: null, row: null, title: \"Q4 revenue\", value: \"$80\")",
-        ] {
-            let error = parse_openui_answer(&serde_json::json!({
-                "answer": "Q4 revenue was $80.",
-                "presentation_program": format!("root = Document([{metric}])")
-            }))
-            .unwrap_err();
-            assert!(error
-                .to_string()
-                .contains("cannot be copied into the presentation"));
-        }
-
-        for metric in [
-            "Metric(\"evidence-1\", \"revenue\", 0, \"Q4 revenue\", \"USD\")",
-            "Metric(null, null, null, \"Revenue\", null, @Sum(@Rows(\"evidence-1\").revenue))",
-            "Metric(null, null, null, \"Revenue\", null, revenue)",
-        ] {
-            parse_openui_answer(&serde_json::json!({
-                "answer": "Revenue is shown with its saved-result binding.",
-                "presentation_program": format!("revenue = @Sum(@Rows(\"evidence-1\").revenue)\nroot = Document([{metric}])")
-            }))
-            .unwrap();
-        }
-
-        parse_openui_answer(&serde_json::json!({
-            "answer": "The text mentions a Metric call, but it is just prose.",
-            "presentation_program": "root = Document([Text(\"Metric(null, null, null, 'Revenue', null, 80) is not code\")])"
-        }))
-        .unwrap();
-    }
-
-    #[test]
-    fn openui_answer_delimiter_check_ignores_string_and_comment_content() {
-        let answer = parse_openui_answer(&serde_json::json!({
-            "answer":"A complete answer",
-            "presentation_program":"root = Document([Text(\"brackets ) ] } and comment marks # //\")]) // [ {"
-        }))
-        .unwrap();
-
-        assert!(answer.program.starts_with("root = Document("));
-    }
-
-    #[test]
-    fn openui_answer_delimiter_check_reports_a_missing_chart_props_brace() {
-        let error = validate_openui_delimiters(
-            "root = Document([Chart(\"sales\", {\"mark\":\"line\",\"encoding\":{\"x\":{\"field\":\"quarter\"}} , \"Trend\")])",
+    fn structured_finalizer_accepts_schema_constrained_json_content() {
+        let answer = parse_structured_presentation_answer(
+            r#"{"answer":"Revenue increased.","presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#,
         )
-        .unwrap_err();
+        .unwrap();
+        assert_eq!(answer.text, "Revenue increased.");
+        assert_eq!(answer.spec["elements"]["body"]["type"], "Text");
+        assert!(parse_structured_presentation_answer("not json").is_err());
+    }
 
-        assert!(error.to_string().contains("mismatched delimiters"));
+    #[test]
+    fn prose_recovery_is_still_rendered_by_the_json_catalog() {
+        let answer = fallback_presentation_answer("A result could not be laid out interactively.");
+        validate_presentation_shape(&answer.spec).unwrap();
+        assert_eq!(answer.spec["elements"]["answer"]["type"], "Document");
+        assert_eq!(
+            answer.spec["elements"]["body"]["props"]["content"],
+            answer.text
+        );
+    }
+
+    #[test]
+    fn json_render_answer_accepts_a_flat_rooted_component_tree() {
+        let answer = parse_presentation_answer(&serde_json::json!({
+            "answer": "A local selector can change this display.",
+            "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["select","title"]},"select":{"type":"Select","props":{"name":"Quarter","stateKey":"quarter","options":[{"value":"q3","label":"Q3"},{"value":"q4","label":"Q4"}],"defaultValue":"q3"},"children":[]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}}
+        }))
+        .unwrap();
+
+        assert_eq!(answer.spec["elements"]["select"]["type"], "Select");
+    }
+
+    #[test]
+    fn presentation_finalizer_uses_json_render_schema_and_no_expression_language() {
+        let schema = presentation_answer_schema();
+        assert!(schema.description.contains("JSON object"));
+        assert!(schema.description.contains("result"));
     }
 
     #[test]
@@ -3314,35 +3228,35 @@ mod tests {
     }
 
     #[test]
-    fn analytical_results_are_advertised_as_openui_bindings() {
+    fn analytical_results_are_advertised_as_presentation_bindings() {
         let mut inspection = evidence_item("inspect_table");
         inspection.columns = Some(vec!["category".into(), "amount".into()]);
         inspection.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         inspection.row_count = Some(1);
-        assert!(!is_openui_result(&inspection));
+        assert!(!is_presentation_result(&inspection));
 
         let mut complete_query = evidence_item("run_sql");
         complete_query.columns = Some(vec!["category".into(), "amount".into()]);
         complete_query.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         complete_query.row_count = Some(1);
-        assert!(is_openui_result(&complete_query));
+        assert!(is_presentation_result(&complete_query));
 
         complete_query.row_count = Some(2);
         assert!(
-            is_openui_result(&complete_query),
+            is_presentation_result(&complete_query),
             "incomplete saved results remain bindable with a scope warning"
         );
         complete_query.row_count = Some(1);
         complete_query.error = Some("query failed".into());
-        assert!(!is_openui_result(&complete_query));
+        assert!(!is_presentation_result(&complete_query));
 
         let mut published_python = evidence_item("run_python");
         published_python.result_table = Some(crate::engine::analytics::chart::TabularResult {
             columns: vec!["category".into(), "amount".into()],
             rows: vec![vec!["Rent".into(), 1200.into()]],
         });
-        assert!(is_openui_result(&published_python));
-        assert!(!is_openui_result(&evidence_item("read_file")));
+        assert!(is_presentation_result(&published_python));
+        assert!(!is_presentation_result(&evidence_item("read_file")));
     }
 
     #[test]
@@ -3593,7 +3507,7 @@ mod tests {
     }
 
     #[test]
-    fn presentation_prompt_requires_answer_specific_openui() {
+    fn presentation_prompt_requires_answer_specific_json_render() {
         let prompt = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -3604,7 +3518,7 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("Fella's OpenUI output is the answer surface"));
+        assert!(prompt.contains("Fella's json-render output is the answer surface"));
         assert!(prompt.contains("saved evidence-bound components"));
         assert!(!prompt.contains("make_chart"));
     }
@@ -3617,9 +3531,9 @@ mod tests {
     }
 
     #[test]
-    fn openui_and_structure_rules_are_droppable() {
-        let p = PromptProfile::from_drop(Some("openui_rule, structure_rule"));
-        assert!(!p.openui_rule && !p.structure_rule);
+    fn presentation_and_structure_rules_are_droppable() {
+        let p = PromptProfile::from_drop(Some("presentation_rule, structure_rule"));
+        assert!(!p.presentation_rule && !p.structure_rule);
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
 
@@ -3655,7 +3569,7 @@ mod tests {
         assert!(!got.contains("contract's typed `clarification` field"));
         assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
-        assert!(got.contains("Fella's OpenUI output is the answer surface"));
+        assert!(got.contains("Fella's json-render output is the answer surface"));
         assert!(got
             .contains("Distinguish association from causation and observed values from estimates"));
         assert!(got.contains("Forecasts and scenarios are valid analysis requests"));

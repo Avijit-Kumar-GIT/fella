@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ size?: 'sm' | 'md' | 'lg' }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props }: BaseComponentProps<{ size?: 'sm' | 'md' | 'lg' }> = $props();
 </script>
 <div class="spacer" data-size={props.size ?? 'md'} aria-hidden="true"></div>
 <style>

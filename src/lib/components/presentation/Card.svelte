@@ -1,10 +1,10 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props, renderNode }: ComponentRenderProps<{ children: unknown[]; title?: string; detail?: string; tone?: 'plain' | 'quiet' | 'accent' }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props, children }: BaseComponentProps<{ title?: string; detail?: string; tone?: 'plain' | 'quiet' | 'accent' }> = $props();
 </script>
 <section class="card presentation-card" data-tone={props.tone ?? 'plain'}>
 	{#if props.title || props.detail}<header>{#if props.title}<h3>{props.title}</h3>{/if}{#if props.detail}<p>{props.detail}</p>{/if}</header>{/if}
-	<div class="card-content presentation-card-content">{@render renderNode(props.children)}</div>
+	<div class="card-content presentation-card-content">{@render children?.()}</div>
 </section>
 <style>
 	.card { min-width: 0; }

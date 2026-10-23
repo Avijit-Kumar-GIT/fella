@@ -1,6 +1,4 @@
 allowBuilds:
-  # OpenUI's postinstall is optional installation telemetry, not a build step.
-  '@openuidev/lang-core': false
   electron: true
   electron-winstaller: true
   esbuild: true

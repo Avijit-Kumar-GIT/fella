@@ -1,16 +1,14 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	import { derivedRowsResult, filteredRows, requireResult } from '../../presentation/results';
+	import type { BaseComponentProps } from '@json-render/svelte';
+	import { filteredRows, requireResult } from '../../presentation/results';
 	import { renderBoundChart, type ChartView } from '../../presentation/vega-runtime';
 	import { usePresentation } from './context';
 	import ResultTable from './ResultTable.svelte';
-	import DerivedTable from './DerivedTable.svelte';
-	let { props }: ComponentRenderProps<{ resultId: string; spec: Record<string, unknown>; title?: string; rows?: unknown[] }> = $props();
+	let { props }: BaseComponentProps<{ resultId: string; spec: Record<string, unknown>; title?: string }> = $props();
 	const context = usePresentation();
 	let result = $derived(requireResult(context.results, props.resultId));
-	let isDerived = $derived(props.rows !== undefined);
-	let chartData = $derived(isDerived ? derivedRowsResult(result, props.rows ?? []) : result);
-	let indices = $derived(isDerived ? chartData.rows.map((_, row) => row) : filteredRows(result, context.state));
+	let chartData = $derived(result);
+	let indices = $derived(filteredRows(result, context.state));
 	let container: HTMLDivElement;
 	let status = $state('Loading visualization…');
 	let failed = $state(false);
@@ -26,7 +24,9 @@
 		target.replaceChildren();
 		const mount = document.createElement('div');
 		const styles = getComputedStyle(target);
-		const colors = { text: styles.getPropertyValue('--text-dim').trim() || '#777777', grid: styles.getPropertyValue('--border').trim() || '#888888', accent: styles.getPropertyValue('--accent').trim() || '#648fbe' };
+		const series = ['--chart-violet', '--chart-cyan', '--chart-slate', '--chart-plum', '--chart-orange', '--chart-green', '--chart-gold']
+			.map((token) => styles.getPropertyValue(token).trim()).filter(Boolean);
+		const colors = { text: styles.getPropertyValue('--text-dim').trim() || '#777777', grid: styles.getPropertyValue('--border').trim() || '#888888', accent: styles.getPropertyValue('--link').trim() || '#648fbe', series };
 		renderBoundChart(mount, spec, source, rows, colors, target.clientWidth).then((created) => {
 			if (disposed) created.finalize();
 			else { target.replaceChildren(mount); view = created; status = ''; }
@@ -49,13 +49,8 @@
 	<div class="chart-scroll" aria-label={props.title ?? 'Visualization of saved results'} role="img"><div class="chart-target presentation-chart-target" bind:this={container}></div></div>
 	{#if status}<p class="status" role="status">{status}</p>{/if}
 	{#if !result.complete}<p class="scope">This visualization uses {result.rows.length} saved rows, not the full dataset ({result.row_count} rows).</p>{/if}
-	{#if isDerived}
-		<details open={failed}><summary>Display rows</summary><DerivedTable source={result} rows={props.rows ?? []} /></details>
-		<details><summary>Exact saved source values</summary><ResultTable {result} indices={filteredRows(result, context.state)} /></details>
-	{:else}
-		<p class="scope">Display mappings may summarize saved rows. Exact source values remain available below.</p>
-		<details open={failed}><summary>Exact saved values</summary><ResultTable {result} {indices} /></details>
-	{/if}
+	<p class="scope">The visualization uses saved result rows. Exact source values remain available below.</p>
+	<details open={failed}><summary>Exact saved values</summary><ResultTable {result} {indices} /></details>
 </figure>
 <style>
 	figure { margin: 0; }

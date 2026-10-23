@@ -27,14 +27,14 @@ const modelCases = [
 	{ provider: 'ollama-cloud', model: 'gemma4:31b', credential: 'apikey:ollama-cloud' }
 ];
 
-for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.model} OpenUI answer validates and renders as the primary workspace answer`, async () => {
+for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.model} json-render answer validates and renders as the primary workspace answer`, async () => {
 	test.setTimeout(360_000);
 	const credentialPath = authPath();
 	const auth = JSON.parse(await readFile(credentialPath, 'utf8'));
 	assert.equal(typeof auth[modelCase.credential], 'string', `${modelCase.provider} credential missing from ${credentialPath}`);
 	await access(enginePath()).catch(() => { throw new Error('Electron sidecar is missing; run pnpm electron:build first.'); });
 
-	const profile = await mkdtemp(join(tmpdir(), 'fella-openui-model-'));
+	const profile = await mkdtemp(join(tmpdir(), 'fella-json-render-model-'));
 	const workspace = join(profile, 'quarterly-sales');
 	await writeFile(join(profile, 'auth.json'), await readFile(credentialPath));
 	if (process.platform !== 'win32') await chmod(join(profile, 'auth.json'), 0o600);
@@ -82,16 +82,20 @@ for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.mode
 		const turnId = await answer.getAttribute('data-analysis-turn-id');
 		assert.ok(turnId, 'the real-model response should link its canonical analysis turn');
 		const turn = await invoke(page, 'analysis_turn_load', { turnId });
-		const program = turn.result?.presentation_program;
-		console.log(`REAL_MODEL_OPENUI_PROGRAM ${modelCase.provider}/${modelCase.model}\n${program ?? '(missing)'}\nEND_REAL_MODEL_OPENUI_PROGRAM`);
-		assert.equal(typeof program, 'string', 'the real model must return the same-turn OpenUI program');
-		assert.match(program, /^root\s*=\s*Document\(/, 'the real model program must use the required OpenUI root');
-		assert.match(program, /\bChart\s*\(/, 'a chart-worthy multi-period comparison should receive an OpenUI visualization without the user requesting one');
+		const spec = turn.result?.presentation_spec;
+		console.log(`REAL_MODEL_JSON_RENDER_SPEC ${modelCase.provider}/${modelCase.model}\n${JSON.stringify(spec ?? null, null, 2)}\nEND_REAL_MODEL_JSON_RENDER_SPEC`);
+		assert.ok(spec && typeof spec === 'object' && !Array.isArray(spec), 'the real model must return the same-turn json-render spec');
+		assert.equal(spec.elements?.[spec.root]?.type, 'Document', 'the model output must have the catalog root');
+		const chartNodes = Object.values(spec.elements ?? {}).filter((element) => element.type === 'Chart');
+		assert.ok(chartNodes.length > 0, 'a chart-worthy multi-period comparison should receive a chart without the user requesting one');
+		for (const element of chartNodes) assert.ok(element.props?.resultId && element.props?.spec?.encoding, 'chart presentation must be bound to a saved result and field encodings');
 
 		await expect(answer.getByRole('button', { name: 'Save to Studio' })).toBeVisible({ timeout: 30_000 });
 		await expect(answer.locator('.view-note')).toHaveCount(0);
+		await expect(answer.locator('.analytical-presentation .presentation-chart')).toBeVisible();
+		await expect(answer.locator('.analytical-presentation .fallback')).toHaveCount(0);
 		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
-		assert.ok(artifacts.some((artifact) => artifact.revisions.some((revision) => revision.run_id === turnId)), 'the validated same-turn answer should be persisted as an artifact');
+		assert.ok(artifacts.some((artifact) => artifact.revisions.some((revision) => revision.run_id === turnId && JSON.stringify(revision.spec) === JSON.stringify(spec))), 'the validated same-turn answer should be persisted as a JSON spec artifact');
 	} finally {
 		try { await app?.close(); }
 		finally { await rm(profile, { recursive: true, force: true }); }

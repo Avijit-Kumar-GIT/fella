@@ -362,6 +362,57 @@
 	min-width: 0;
 }
 
+.analytical-document .fella-chart-view {
+	position: relative;
+}
+
+.analytical-document .fella-chart-tooltip {
+	position: absolute;
+	z-index: 2;
+	box-sizing: border-box;
+	width: max-content;
+	max-width: min(216px, calc(100% - 16px));
+	padding: 8px 10px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	color: var(--text);
+	box-shadow: var(--shadow-pop);
+	font-size: var(--fs-xs);
+	line-height: 1.4;
+	font-variant-numeric: tabular-nums;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	pointer-events: none;
+}
+
+.analytical-document .fella-chart-tooltip[hidden] {
+	display: none;
+}
+
+.analytical-document .fella-chart-tooltip-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 12px;
+}
+
+.analytical-document .fella-chart-tooltip-row + .fella-chart-tooltip-row {
+	margin-top: 3px;
+}
+
+.analytical-document .fella-chart-tooltip-label {
+	min-width: 0;
+	color: var(--text-dim);
+}
+
+.analytical-document .fella-chart-tooltip-value {
+	min-width: 0;
+	color: var(--text);
+	text-align: right;
+	font-weight: 550;
+}
+
 .analytical-document .presentation-chart-target :where(canvas, svg) {
 	height: auto;
 }

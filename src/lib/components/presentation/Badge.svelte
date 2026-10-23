@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ content: string; tone?: 'neutral' | 'positive' | 'caution' | 'negative' | 'accent' }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props }: BaseComponentProps<{ content: string; tone?: 'neutral' | 'positive' | 'caution' | 'negative' | 'accent' }> = $props();
 </script>
 <span class="presentation-badge" data-tone={props.tone ?? 'neutral'}>{props.content}</span>
 <style>

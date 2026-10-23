@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ content: string; level?: number }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props }: BaseComponentProps<{ content: string; level?: number }> = $props();
 </script>
 {#if (props.level ?? 1) === 1}<h2 class="presentation-title">{props.content}</h2>{:else if props.level === 2}<h3 class="presentation-title">{props.content}</h3>{:else if props.level === 3}<h4 class="presentation-title">{props.content}</h4>{:else}<h5 class="presentation-title">{props.content}</h5>{/if}
 <style>

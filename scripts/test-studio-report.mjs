@@ -15,7 +15,7 @@ try {
 	const { buildStudioReport, studioReportFilename } = await server.ssrLoadModule('/src/lib/studio-report.ts');
 	const first = {
 		artifact: { id: 'revenue', workspace: '/private/work', title: 'Revenue', current_revision: 3, saved: true, revisions: [], created_at_ms: 1, updated_at_ms: 2 },
-		revision: { revision: 2, run_id: 'run-revenue', program: 'root = UnregisteredWidget("Keep this content");', library_version: 'fella-v1', change_note: 'Exclude refunds.', created_at_ms: 2 },
+		revision: { revision: 2, run_id: 'run-revenue', spec: { root: 'doc', elements: { doc: { type: 'Document', props: {}, children: ['chart'] }, chart: { type: 'Chart', props: { resultId: 'ev-revenue', title: 'Saved revenue chart', spec: { mark: 'line', encoding: { x: { field: 'period', type: 'ordinal' }, y: { field: 'net_usd', type: 'quantitative' } } } }, children: [] } } }, schema_version: 'fella-json-render-v1', change_note: 'Exclude refunds.', created_at_ms: 2 },
 		run: {
 			id: 'run-revenue', conversation_id: 'private-chat', workspace: '/private/work', workspace_revision: 'sources-r7', question: 'What is net revenue?',
 			state: 'accepted', plan: { strategy: 'compiled_sql', steps: [] }, trace: { id: 'trace', turn_id: 'run-revenue', steps: [] },
@@ -32,7 +32,7 @@ try {
 	second.artifact.id = 'orders'; second.artifact.title = 'Orders'; second.revision.revision = 1;
 	second.run.id = 'run-orders'; second.revision.run_id = 'run-orders'; second.run.question = 'How many orders?';
 	second.results = [{ id: 'orders-result', columns: ['label', 'count'], rows: [['a', 0]], exact_rows: [['a|b\n<c>', '0']], row_count: 1, complete: true }];
-	second.revision.program = '';
+	second.revision.spec = { root: 'doc', elements: { doc: { type: 'Document', props: {}, children: [] } } };
 	const document = {
 		id: 'studio-one', workspace: '/private/work', title: 'Quarterly / review', version: 5,
 		body: '## Executive notes\n\nA hand-written introduction.',
@@ -48,7 +48,7 @@ try {
 	assert.equal(report, buildStudioReport(document, resolved), 'Export is deterministic, without implicit current time.');
 	assert.ok(report.indexOf('## Executive notes') < report.indexOf('## Orders'));
 	assert.ok(report.indexOf('## Orders') < report.indexOf('## Revenue'));
-	for (const value of ['0.100000000000000001', '9007199254740993', '| null |', '| 0 |', 'December is missing.', 'sources-r7', 'USD', 'Revenue excludes refunds.', 'Refunds excluded.', 'ev-revenue', 'SELECT SUM(net) FROM orders', 'West', 'forecast', 'UnregisteredWidget', 'Keep this content', 'revision 2', 'missing', 'unavailable', 'incomplete', '1 of 8']) {
+	for (const value of ['0.100000000000000001', '9007199254740993', '| null |', '| 0 |', 'December is missing.', 'sources-r7', 'USD', 'Revenue excludes refunds.', 'Refunds excluded.', 'ev-revenue', 'SELECT SUM(net) FROM orders', 'West', 'forecast', 'Saved revenue chart', '"type": "Chart"', 'revision 2', 'missing', 'unavailable', 'incomplete', '1 of 8']) {
 		assert.ok(report.includes(value), `Report preserves/discloses ${JSON.stringify(value)}`);
 	}
 	assert.ok(report.includes('not converted'), 'Unconverted presentation is explicitly disclosed.');
@@ -73,8 +73,8 @@ try {
 	assert.ok(!missingExactReport.includes('9007199254740992'));
 
 	const withAdapter = buildStudioReport(document, resolved, {
-		presentation: ({ program, results, state }) => {
-			assert.equal(program, first.revision.program);
+		presentation: ({ spec, results, state }) => {
+			assert.deepEqual(spec, first.revision.spec);
 			assert.equal(results[0].exact_rows[0][2], '9007199254740993');
 			assert.equal(state.region, 'West');
 			return { markdown: '### Converted layout\n\nAn ordered, deterministic figure.', disclosures: ['Widget needs an image fallback.'] };

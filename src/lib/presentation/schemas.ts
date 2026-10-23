@@ -1,16 +1,13 @@
 import { z } from 'zod/v4';
-import { markReactive } from '@openuidev/lang-core';
 import { PRESENTATION_LIMITS as limits } from './types';
 
 const label = z.string().min(1).max(240);
 const resultId = z.string().min(1).max(240);
-// Element-node validation happens recursively after the real OpenUI parser resolves references.
-const children = z.array(z.unknown()).min(1).max(limits.components);
+const content = z.string().min(1).max(limits.text);
 const selectOptions = z.array(z.object({ value: z.string().max(240), label: z.string().max(240) }).strict()).min(1).max(200);
 const columnFormat = z.object({ label: label.optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), unit: z.string().max(40).optional(), decimals: z.number().int().min(0).max(8).optional() }).strict();
 
 export type CardTone = 'plain' | 'quiet' | 'accent';
-/** Cosmetic compatibility only: no model string becomes a class, color or executable style. */
 export const CARD_TONE_ALIASES: Readonly<Record<string, CardTone>> = Object.freeze({
 	plain: 'plain', default: 'plain', normal: 'plain', neutral: 'plain', outline: 'plain', outlined: 'plain', ghost: 'plain', transparent: 'plain',
 	quiet: 'quiet', soft: 'quiet', subtle: 'quiet', muted: 'quiet', secondary: 'quiet', positive: 'quiet', negative: 'quiet', success: 'quiet', warning: 'quiet', caution: 'quiet', danger: 'quiet',
@@ -23,110 +20,111 @@ export function normalizeCardTone(value: unknown): CardTone {
 	return Object.hasOwn(CARD_TONE_ALIASES, key) ? CARD_TONE_ALIASES[key] : 'plain';
 }
 
-/** One definition source drives the actual Svelte registry, prompt and strict validation. */
+/** Fella's native json-render catalog. Components receive structure as child keys, not props. */
 export const componentDefinitions = {
 	Document: {
-		description: 'The root analytical document. Children are registered component calls or references.',
-		props: z.object({ children }).strict()
+		description: 'The root analytical answer. Organize it into a useful reading order.',
+		props: z.object({}).strict(), slots: ['default'] as const
 	},
 	Card: {
-		description: 'A restrained surface that groups related content. Preferred tones: plain, quiet, accent. Soft/subtle/muted and semantic positive/negative map to quiet; outline maps to plain; highlight/primary map to accent. Unknown or omitted cosmetic tones default to plain, never arbitrary colors. Use sparingly; do not wrap every component in a card.',
-		props: z.object({ children, title: label.nullable().optional(), detail: z.string().max(1000).nullable().optional(), tone: z.string().max(80).nullable().optional() }).strict()
+		description: 'A restrained surface grouping related information. Use sparingly, not around every element.',
+		props: z.object({ title: label.optional(), detail: z.string().max(1000).optional(), tone: z.enum(['plain', 'quiet', 'accent']).optional() }).strict(), slots: ['default'] as const
 	},
 	Section: {
-		description: 'A titled, left-aligned section of analytical content.',
-		props: z.object({ title: label, children }).strict()
+		description: 'A titled, left-aligned group of analytical content.',
+		props: z.object({ title: label }).strict(), slots: ['default'] as const
 	},
 	Columns: {
-		description: 'A responsive group, at most three columns. Collapses naturally on narrow surfaces.',
-		props: z.object({ children, count: z.number().int().min(1).max(3).nullable().optional() }).strict()
+		description: 'A responsive group of at most three content columns; collapses at narrow widths.',
+		props: z.object({ count: z.number().int().min(1).max(3).optional() }).strict(), slots: ['default'] as const
 	},
 	Row: {
-		description: 'A flexible horizontal group. Wraps on narrow surfaces. Gap is in 4px spacing units (prefer 0–8); the host clamps larger values to its spacing scale.',
-		props: z.object({ children, gap: z.number().min(0).nullable().optional(), align: z.enum(['start', 'center', 'end', 'stretch']).nullable().optional() }).strict()
+		description: 'A flexible horizontal group that wraps at narrow widths.',
+		props: z.object({ gap: z.number().min(0).max(8).optional(), align: z.enum(['start', 'center', 'end', 'stretch']).optional() }).strict(), slots: ['default'] as const
 	},
 	Grid: {
-		description: 'A responsive grid for a small related set of items. It collapses to one column on narrow surfaces.',
-		props: z.object({ children, columns: z.number().int().min(1).max(4).nullable().optional() }).strict()
+		description: 'A responsive grid for a small set of related components.',
+		props: z.object({ columns: z.number().int().min(1).max(4).optional() }).strict(), slots: ['default'] as const
 	},
 	Divider: {
-		description: 'A quiet separator between two larger groups, not between every component.',
-		props: z.object({ label: z.string().max(240).nullable().optional() }).strict()
+		description: 'A quiet separator between major content groups.',
+		props: z.object({ label: z.string().max(240).optional() }).strict(), slots: [] as const
 	},
 	Spacer: {
 		description: 'A small amount of intentional breathing room.',
-		props: z.object({ size: z.enum(['sm', 'md', 'lg']).nullable().optional() }).strict()
+		props: z.object({ size: z.enum(['sm', 'md', 'lg']).optional() }).strict(), slots: [] as const
 	},
 	Title: {
 		description: 'A clear heading for the answer or one of its major sections.',
-		props: z.object({ content: label, level: z.number().int().min(1).max(4).nullable().optional() }).strict()
+		props: z.object({ content: label, level: z.number().int().min(1).max(4).optional() }).strict(), slots: [] as const
 	},
 	Text: {
-		description: 'Plain explanatory text, not HTML. Use expressions to bind analytical values from saved results.',
-		props: z.object({ content: z.string().min(1).max(limits.text) }).strict()
+		description: 'Plain explanatory text for interpretation, method, or narrative.',
+		props: z.object({ content }).strict(), slots: [] as const
 	},
 	Caption: {
-		description: 'Quiet supporting context such as a unit, date range, method note, or source caveat.',
-		props: z.object({ content: z.string().min(1).max(2000) }).strict()
+		description: 'Quiet supporting context such as units, date range, source, or caveat.',
+		props: z.object({ content: z.string().min(1).max(2000) }).strict(), slots: [] as const
 	},
 	Badge: {
-		description: 'A compact label for a category or status; use tone sparingly.',
-		props: z.object({ content: label, tone: z.enum(['neutral', 'positive', 'caution', 'negative', 'accent']).nullable().optional() }).strict()
+		description: 'A compact label for a category or meaningful status.',
+		props: z.object({ content: label, tone: z.enum(['neutral', 'positive', 'caution', 'negative', 'accent']).optional() }).strict(), slots: [] as const
 	},
 	Callout: {
-		description: 'An emphasized interpretation or caveat. Use for meaningful context, not routine decoration.',
-		props: z.object({ title: label.nullable().optional(), content: z.string().min(1).max(4000), tone: z.enum(['neutral', 'info', 'positive', 'caution']).nullable().optional() }).strict()
+		description: 'An emphasized interpretation or caveat; not routine decoration.',
+		props: z.object({ title: label.optional(), content: z.string().min(1).max(4000), tone: z.enum(['neutral', 'info', 'positive', 'caution']).optional() }).strict(), slots: [] as const
 	},
 	Metric: {
-		description: 'A prominent exact value. Never copy a data value into this component as a literal. Bind an exact value to a saved result row (resultId, field, row); use value only for an expression derived from @Rows("result-id"). Literal values are rejected so the displayed number always retains evidence provenance.',
-		props: z.object({ resultId: resultId.nullable().optional(), field: label.nullable().optional(), row: z.number().int().min(0).nullable().optional(), title: label, unit: z.string().max(40).nullable().optional(), value: z.unknown().optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).nullable().optional(), detail: z.string().max(1000).nullable().optional() }).strict()
+		description: 'A prominent exact value read from a supplied saved result. Always bind resultId, field and zero-based row; literal metric values are not accepted.',
+		props: z.object({ resultId, field: label, row: z.number().int().min(0), title: label, unit: z.string().max(40).optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), detail: z.string().max(1000).optional() }).strict(), slots: [] as const
 	},
 	Select: {
-		description: 'A local selector. Bind value to a declared $variable; changes update every expression that reads it without a model or analytics call.',
-		props: z.object({ name: label, options: selectOptions, value: z.string().nullable() }).strict()
+		description: 'A local selector that changes only the presentation state, not the question or analysis.',
+		props: z.object({ name: label, options: selectOptions, stateKey: label, defaultValue: z.string().max(240).optional() }).strict(), slots: [] as const
 	},
 	SegmentedControl: {
-		description: 'A compact single-choice control for a few mutually exclusive display options. Bind value to a declared $variable.',
-		props: z.object({ name: label, options: selectOptions.min(2).max(6), value: z.string().nullable() }).strict()
+		description: 'A compact single-choice local presentation control for a few mutually exclusive options.',
+		props: z.object({ name: label, options: selectOptions.min(2).max(6), stateKey: label, defaultValue: z.string().max(240).optional() }).strict(), slots: [] as const
 	},
 	Checkbox: {
-		description: 'A local display toggle. Bind checked to a declared $variable; it does not change analytical definitions.',
-		props: z.object({ label, checked: z.boolean() }).strict()
+		description: 'A local display toggle; it does not change analytical definitions.',
+		props: z.object({ label, stateKey: label, defaultChecked: z.boolean().optional() }).strict(), slots: [] as const
 	},
 	Button: {
-		description: 'A deliberate user action such as setting local presentation state or asking Fella a follow-up. No automatic action runs.',
-		props: z.object({ label, action: z.unknown().optional() }).strict()
+		description: 'A deliberate user action. Its only allowed effect is to set local display state or ask Fella a follow-up.',
+		props: z.object({ label, action: z.discriminatedUnion('type', [
+			z.object({ type: z.literal('follow_up'), message: z.string().min(1).max(2000) }).strict(),
+			z.object({ type: z.literal('set_state'), stateKey: label, value: z.union([z.string().max(256), z.number().finite(), z.boolean(), z.null()]) }).strict()
+		]).optional() }).strict(), slots: [] as const
 	},
 	Table: {
-		description: 'A table for exact records and lookups, bound to saved result rows. Optional rows reshape those rows locally. Optional columnFormats maps field names to readable labels, numeric format, unit and decimal places. Original exact values remain accessible. Patterns and trends are usually clearer with a Chart.',
-		props: z.object({ resultId, fields: z.array(label).min(1).max(100).nullable().optional(), rows: z.unknown().optional(), title: label.nullable().optional(), columnFormats: z.record(label, columnFormat).nullable().optional() }).strict()
+		description: 'A result-bound table for exact records, lookups, and detailed comparisons. Do not choose it by default when a chart better explains a pattern.',
+		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional(), title: label.optional(), columnFormats: z.record(label, columnFormat).optional() }).strict(), slots: [] as const
 	},
 	Chart: {
-		description: 'A flexible Vega-Lite visualization: layers, facets, concatenation, encodings, marks and style. Optional rows are a local view derived only from the bound saved result. No authored data, transforms, URL loaders or executable expressions.',
-		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.nullable().optional(), rows: z.unknown().optional() }).strict()
+		description: 'A flexible, responsive result-bound Vega-Lite visualization. Select a useful form for the task (for example, line or area for a time trend, bar for category comparisons, arc for a small part-to-whole view, or points for relationships), and compose, facet, layer, or add a legend and result-bound tooltip when they clarify the answer. Keep axes, labels, units, and number of series readable. The spec describes presentation only and cannot supply data or executable transforms.',
+		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.optional() }).strict(), slots: [] as const
 	},
 	Progress: {
-		description: 'A compact progress or share indicator with an optional numeric display value.',
-		props: z.object({ title: label, value: z.unknown(), detail: z.string().max(1000).nullable().optional() }).strict()
+		description: 'A compact indicator for an exact saved numeric value bound to a result row.',
+		props: z.object({ resultId, field: label, row: z.number().int().min(0), title: label, maximum: z.number().positive().optional(), detail: z.string().max(1000).optional() }).strict(), slots: [] as const
 	},
 	Tabs: {
-		description: 'Local presentation tabs. Stable name, labels and equally sized children arrays. No queries are run.',
-		props: z.object({ name: label, labels: z.array(label).min(1).max(12), children }).strict()
+		description: 'A local presentation tab set. Supply one TabPanel child per label in the same order.',
+		props: z.object({ name: label, labels: z.array(label).min(1).max(12) }).strict(), slots: ['default'] as const
+	},
+	TabPanel: {
+		description: 'One child panel of a Tabs component. index must match its zero-based position.',
+		props: z.object({ name: label, index: z.number().int().min(0).max(11) }).strict(), slots: ['default'] as const
 	},
 	ResultFilter: {
-		description: 'A local exact-match selector over a bound result. Filters only saved rows, never the source dataset; visible scope warning on incomplete results. Fields cannot change analytical definitions.',
-		props: z.object({ resultId, field: label, name: label, title: label.nullable().optional() }).strict()
+		description: 'A local exact-match selector over rows in a saved result; it never reruns analysis or changes source scope.',
+		props: z.object({ resultId, field: label, name: label, title: label.optional() }).strict(), slots: [] as const
 	},
 	FollowUp: {
-		description: 'Explicit user-pressed follow-up request. Emits a host callback only; no tool, code, URL or IPC execution.',
-		props: z.object({ label, message: z.string().min(1).max(2000) }).strict()
+		description: 'An explicit user-pressed follow-up request to Fella.',
+		props: z.object({ label, message: z.string().min(1).max(2000) }).strict(), slots: [] as const
 	}
 } as const;
-
-// OpenUI's schema-aware evaluator preserves these state bindings as ReactiveAssign
-// values. Native Fella controls write the resulting value back to the local store.
-markReactive(componentDefinitions.Select.props.shape.value);
-markReactive(componentDefinitions.SegmentedControl.props.shape.value);
-markReactive(componentDefinitions.Checkbox.props.shape.checked);
 
 export type ComponentName = keyof typeof componentDefinitions;

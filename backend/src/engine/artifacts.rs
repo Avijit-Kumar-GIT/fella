@@ -18,19 +18,12 @@ use super::analysis_store;
 use super::error::{EngineError, EngineResult};
 use super::runtime::AnalysisTurn;
 
-/// Version assigned to newly-created or newly-revised presentation artifacts.
-pub const LIBRARY_VERSION: &str = "fella-openui-v2";
-/// Historical version retained on existing revisions and portable snapshots.
-pub const LEGACY_LIBRARY_VERSION: &str = "fella-openui-v1";
-
-/// Whether this build can preserve and load a stored presentation revision.
-/// This does not imply that new revisions may be written using that version.
-pub fn supports_library_version(version: &str) -> bool {
-    matches!(version, LIBRARY_VERSION | LEGACY_LIBRARY_VERSION)
-}
+/// Schema attached to new JSON-render artifacts. Legacy expression-based
+/// artifact rows are removed by the one-time store migration below.
+pub const SCHEMA_VERSION: &str = "fella-json-render-v1";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_PROGRAM_BYTES: usize = 256 * 1024;
+const MAX_SPEC_BYTES: usize = 256 * 1024;
 const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REVISIONS: usize = 256;
 const MAX_PLACEMENTS: usize = 256;
@@ -56,8 +49,8 @@ pub struct ArtifactRevision {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_revision: Option<u64>,
     pub run_id: String,
-    pub program: String,
-    pub library_version: String,
+    pub spec: Json,
+    pub schema_version: String,
     pub change_note: String,
     pub created_at_ms: u64,
 }
@@ -174,12 +167,111 @@ fn validate_title(title: &str) -> EngineResult<String> {
     Ok(title.to_owned())
 }
 
-fn validate_program(program: &str) -> EngineResult<()> {
-    // This is storage validation, not executable-program validation. The
-    // application renderer still validates its component/binding allowlist.
-    if program.len() > MAX_PROGRAM_BYTES || program.contains('\0') {
+pub fn validate_spec(spec: &Json) -> EngineResult<()> {
+    let object = spec
+        .as_object()
+        .ok_or_else(|| EngineError::msg("presentation spec must be a JSON object"))?;
+    if object.len() != 2 || !object.contains_key("root") || !object.contains_key("elements") {
         return Err(EngineError::msg(
-            "presentation program exceeds its storage limit",
+            "presentation spec must contain only root and elements",
+        ));
+    }
+    if serde_json::to_vec(spec).map_or(true, |bytes| bytes.len() > MAX_SPEC_BYTES) {
+        return Err(EngineError::msg(
+            "presentation spec exceeds its storage limit",
+        ));
+    }
+    let root = spec["root"]
+        .as_str()
+        .filter(|root| !root.is_empty())
+        .ok_or_else(|| EngineError::msg("presentation root is missing"))?;
+    let elements = spec["elements"]
+        .as_object()
+        .filter(|elements| !elements.is_empty() && elements.len() <= 240)
+        .ok_or_else(|| {
+            EngineError::msg("presentation elements are missing or exceed their limit")
+        })?;
+    if elements
+        .get(root)
+        .and_then(|element| element.get("type"))
+        .and_then(Json::as_str)
+        != Some("Document")
+    {
+        return Err(EngineError::msg("presentation root must be Document"));
+    }
+    let catalog: Json =
+        serde_json::from_str(include_str!("../../resources/presentation-catalog.json"))?;
+    let components = catalog["componentNames"]
+        .as_array()
+        .ok_or_else(|| EngineError::msg("presentation component catalog is unavailable"))?;
+    let mut parents = HashSet::new();
+    for (key, element) in elements {
+        if key.len() > 80
+            || !key.chars().enumerate().all(|(index, ch)| {
+                ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' && index > 0
+            })
+            || !key
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            return Err(EngineError::msg(
+                "presentation contains an invalid element key",
+            ));
+        }
+        let kind = element
+            .get("type")
+            .and_then(Json::as_str)
+            .ok_or_else(|| EngineError::msg("presentation element is missing a type"))?;
+        if !components.iter().any(|name| name.as_str() == Some(kind))
+            || !element.get("props").is_some_and(Json::is_object)
+        {
+            return Err(EngineError::msg(
+                "presentation uses an unknown component or invalid props",
+            ));
+        }
+        let children = element
+            .get("children")
+            .and_then(Json::as_array)
+            .ok_or_else(|| EngineError::msg("presentation children must be an array"))?;
+        for child in children {
+            let child = child
+                .as_str()
+                .ok_or_else(|| EngineError::msg("presentation child references must be strings"))?;
+            if !elements.contains_key(child) || !parents.insert(child.to_owned()) {
+                return Err(EngineError::msg(
+                    "presentation contains a missing or multiply attached child",
+                ));
+            }
+        }
+        if element
+            .get("repeat")
+            .is_some_and(|repeat| !repeat.is_null())
+        {
+            return Err(EngineError::msg("presentation repetition is not enabled"));
+        }
+    }
+    if parents.contains(root) {
+        return Err(EngineError::msg("presentation root cannot have a parent"));
+    }
+    let mut visited = HashSet::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(key) = pending.pop() {
+        if !visited.insert(key.clone()) {
+            return Err(EngineError::msg("presentation contains a cycle"));
+        }
+        pending.extend(
+            elements[&key]["children"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Json::as_str)
+                .map(str::to_owned),
+        );
+    }
+    if visited.len() != elements.len() {
+        return Err(EngineError::msg(
+            "every presentation element must be reachable from the root",
         ));
     }
     Ok(())
@@ -196,8 +288,50 @@ fn store_unlocked(data_dir: &Path) -> EngineResult<Connection> {
          CREATE INDEX IF NOT EXISTS artifacts_workspace ON artifacts(workspace);
          CREATE TABLE IF NOT EXISTS studio_documents (
            id TEXT PRIMARY KEY, workspace TEXT NOT NULL, body TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS studio_workspace ON studio_documents(workspace);",
+         CREATE INDEX IF NOT EXISTS studio_workspace ON studio_documents(workspace);
+         CREATE TABLE IF NOT EXISTS artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
+    let version = db
+        .query_row(
+            "SELECT value FROM artifact_metadata WHERE key='schema_version'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if version.as_deref() != Some(SCHEMA_VERSION) {
+        let mut statement = db.prepare("SELECT id FROM artifacts")?;
+        let old_ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<HashSet<_>, _>>()?;
+        drop(statement);
+        db.execute("DELETE FROM artifacts", [])?;
+        if !old_ids.is_empty() {
+            let mut query = db.prepare("SELECT id, body FROM studio_documents")?;
+            let documents = query
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(query);
+            for (id, body) in documents {
+                if let Ok(mut document) = serde_json::from_str::<StudioDocument>(&body) {
+                    document
+                        .placements
+                        .retain(|placement| !old_ids.contains(&placement.artifact_id));
+                    for checkpoint in &mut document.checkpoints {
+                        checkpoint
+                            .placements
+                            .retain(|placement| !old_ids.contains(&placement.artifact_id));
+                    }
+                    db.execute(
+                        "UPDATE studio_documents SET body=?2 WHERE id=?1",
+                        params![id, encode(&document)?],
+                    )?;
+                }
+            }
+        }
+        db.execute("INSERT INTO artifact_metadata(key,value) VALUES('schema_version',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION])?;
+    }
     Ok(db)
 }
 
@@ -255,10 +389,10 @@ fn validate_artifact(record: &ArtifactRecord) -> EngineResult<()> {
     let mut previous = 0;
     for revision in &record.revisions {
         validate_id(&revision.run_id)?;
-        validate_program(&revision.program)?;
+        validate_spec(&revision.spec)?;
         if revision.revision <= previous
             || !seen.insert(revision.revision)
-            || !supports_library_version(&revision.library_version)
+            || revision.schema_version != SCHEMA_VERSION
             || revision.change_note.len() > 4096
             || (previous == 0 && (revision.revision != 1 || revision.parent_revision.is_some()))
             || (previous > 0
@@ -368,7 +502,7 @@ pub fn eligible_results(run: &AnalysisTurn) -> EngineResult<Vec<BoundResult>> {
                 Some("artifact_withheld") => {
                     if matches!(
                         disposition.get("artifact").and_then(Json::as_str),
-                        Some("table" | "result_table" | "openui" | "presentation")
+                        Some("table" | "result_table" | "presentation")
                     ) {
                         continue;
                     }
@@ -468,11 +602,11 @@ pub fn create_from_run(
     workspace: &str,
     run_id: &str,
     title: &str,
-    program: &str,
+    spec: &Json,
 ) -> EngineResult<ArtifactRecord> {
     validate_workspace(workspace)?;
     let title = validate_title(title)?;
-    validate_program(program)?;
+    validate_spec(spec)?;
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
     let run = load_run(data_dir, workspace, run_id)?;
     eligible_results(&run)?;
@@ -488,8 +622,8 @@ pub fn create_from_run(
             revision: 1,
             parent_revision: None,
             run_id: run_id.to_owned(),
-            program: program.to_owned(),
-            library_version: LIBRARY_VERSION.to_owned(),
+            spec: spec.clone(),
+            schema_version: SCHEMA_VERSION.to_owned(),
             change_note: "Created from saved analysis".into(),
             created_at_ms: now,
         }],
@@ -570,7 +704,7 @@ pub fn revise(
     artifact_id: &str,
     base_revision: u64,
     run_id: Option<&str>,
-    program: Option<&str>,
+    spec: Option<Json>,
     change_note: &str,
 ) -> EngineResult<ArtifactRecord> {
     validate_workspace(workspace)?;
@@ -590,8 +724,8 @@ pub fn revise(
     }
     let base = revision(&record, base_revision)?;
     let run_id = run_id.unwrap_or(&base.run_id);
-    let program = program.unwrap_or(&base.program);
-    validate_program(program)?;
+    let spec = spec.unwrap_or_else(|| base.spec.clone());
+    validate_spec(&spec)?;
     eligible_results(&load_run(data_dir, workspace, run_id)?)?;
     let next = record
         .revisions
@@ -604,8 +738,8 @@ pub fn revise(
         revision: next,
         parent_revision: Some(base_revision),
         run_id: run_id.to_owned(),
-        program: program.to_owned(),
-        library_version: LIBRARY_VERSION.to_owned(),
+        spec,
+        schema_version: SCHEMA_VERSION.to_owned(),
         change_note: change_note.to_owned(),
         created_at_ms: now_ms(),
     };
@@ -981,7 +1115,80 @@ mod tests {
     }
 
     fn artifact(profile: &Profile, run: &str) -> ArtifactRecord {
-        create_from_run(&profile.0, WORKSPACE, run, "Revenue", "root = Report()").unwrap()
+        create_from_run(&profile.0, WORKSPACE, run, "Revenue", &sample_spec()).unwrap()
+    }
+
+    fn sample_spec() -> Json {
+        serde_json::json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}})
+    }
+
+    #[test]
+    fn first_json_render_open_removes_legacy_artifact_rows_and_their_studio_pins() {
+        let profile = Profile::new();
+        let analysis = profile.0.join("analysis");
+        std::fs::create_dir_all(&analysis).unwrap();
+        let database = analysis.join("artifacts.sqlite");
+        let db = Connection::open(&database).unwrap();
+        db.execute_batch(
+            "CREATE TABLE artifacts (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, body TEXT NOT NULL);
+             CREATE TABLE studio_documents (id TEXT PRIMARY KEY, workspace TEXT NOT NULL, body TEXT NOT NULL);",
+        ).unwrap();
+        db.execute(
+            "INSERT INTO artifacts(id, workspace, body) VALUES(?1, ?2, ?3)",
+            params![
+                "old-format-artifact",
+                WORKSPACE,
+                r#"{"legacy_payload":"discard on schema upgrade"}"#
+            ],
+        )
+        .unwrap();
+        let placement = StudioPlacement {
+            id: "old-pin".into(),
+            artifact_id: "old-format-artifact".into(),
+            revision: 1,
+            view_state: Json::Object(Default::default()),
+        };
+        let document = StudioDocument {
+            id: "saved-notes".into(),
+            workspace: WORKSPACE.into(),
+            title: "Notes".into(),
+            version: 1,
+            body: "Keep user-authored notes.".into(),
+            placements: vec![placement.clone()],
+            checkpoints: vec![StudioCheckpoint {
+                id: "checkpoint".into(),
+                title: "Before".into(),
+                body: "Keep this note too.".into(),
+                placements: vec![placement],
+                created_at_ms: 1,
+            }],
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        db.execute(
+            "INSERT INTO studio_documents(id, workspace, body) VALUES(?1, ?2, ?3)",
+            params![
+                document.id,
+                WORKSPACE,
+                serde_json::to_string(&document).unwrap()
+            ],
+        )
+        .unwrap();
+        drop(db);
+
+        let migrated = store_unlocked(&profile.0).unwrap();
+        let count: i64 = migrated
+            .query_row("SELECT COUNT(*) FROM artifacts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "legacy rendered artifacts are intentionally discarded"
+        );
+        drop(migrated);
+        let retained = studio_load(&profile.0, WORKSPACE, "saved-notes").unwrap();
+        assert_eq!(retained.body, "Keep user-authored notes.");
+        assert!(retained.placements.is_empty());
+        assert!(retained.checkpoints[0].placements.is_empty());
     }
 
     fn placement(artifact: &ArtifactRecord, rev: u64, id: &str) -> StudioPlacement {
@@ -1016,11 +1223,11 @@ mod tests {
             WORKSPACE,
             &source.id,
             " Revenue ",
-            "Metric(999999)",
+            &sample_spec(),
         )
         .unwrap();
         assert!(!item.saved);
-        assert_eq!(item.revisions[0].library_version, "fella-openui-v2");
+        assert_eq!(item.revisions[0].schema_version, SCHEMA_VERSION);
         assert_eq!(item.title, "Revenue");
         let resolved = resolve(&profile.0, WORKSPACE, &item.id, None).unwrap();
         assert_eq!(resolved.run.question, source.question);
@@ -1139,7 +1346,7 @@ mod tests {
         let profile = Profile::new();
         seed(&profile, "run-1");
         let item = artifact(&profile, "run-1");
-        assert!(create_from_run(&profile.0, "/other", "run-1", "Other", "").is_err());
+        assert!(create_from_run(&profile.0, "/other", "run-1", "Other", &sample_spec()).is_err());
         assert!(resolve(&profile.0, "/other", &item.id, None).is_err());
         assert!(list(&profile.0, "/other").unwrap().is_empty());
         assert!(resolve(&profile.0, WORKSPACE, "../escape", None).is_err());
@@ -1154,12 +1361,21 @@ mod tests {
             .unwrap(),
         );
         analysis_store::create(&profile.0, &bad).unwrap();
-        assert!(create_from_run(&profile.0, WORKSPACE, &bad.id, "Bad scope", "").is_err());
+        assert!(
+            create_from_run(&profile.0, WORKSPACE, &bad.id, "Bad scope", &sample_spec()).is_err()
+        );
         bad.id = "bad-revision".into();
         bad.investigation_context = None;
         bad.trace.workspace_revision = Some("different-revision".into());
         analysis_store::create(&profile.0, &bad).unwrap();
-        assert!(create_from_run(&profile.0, WORKSPACE, &bad.id, "Bad revision", "").is_err());
+        assert!(create_from_run(
+            &profile.0,
+            WORKSPACE,
+            &bad.id,
+            "Bad revision",
+            &sample_spec()
+        )
+        .is_err());
     }
 
     #[test]
@@ -1174,14 +1390,14 @@ mod tests {
             &first.id,
             1,
             Some("run-2"),
-            Some("NewView()"),
+            Some(sample_spec()),
             "Exclude refunds",
         )
         .unwrap();
         assert_eq!(candidate.current_revision, 1);
         assert_eq!(candidate.revisions[0], first.revisions[0]);
         assert_eq!(candidate.revisions[1].parent_revision, Some(1));
-        assert_eq!(candidate.revisions[1].library_version, "fella-openui-v2");
+        assert_eq!(candidate.revisions[1].schema_version, SCHEMA_VERSION);
         let adopted = adopt(&profile.0, WORKSPACE, &first.id, 1, 2).unwrap();
         assert_eq!(adopted.current_revision, 2);
         assert!(adopt(&profile.0, WORKSPACE, &first.id, 1, 1).is_err());
@@ -1207,38 +1423,11 @@ mod tests {
     }
 
     #[test]
-    fn legacy_artifact_revisions_load_and_new_revisions_use_current_library_version() {
+    fn unsupported_legacy_presentation_revisions_are_rejected() {
         let profile = Profile::new();
         seed(&profile, "legacy-run");
-        seed(&profile, "next-run");
-        let mut legacy = artifact(&profile, "legacy-run");
-        legacy.revisions[0].library_version = LEGACY_LIBRARY_VERSION.to_owned();
-
-        // Seed a serialized v1 record to exercise the normal load path.
-        let db = store_unlocked(&profile.0).unwrap();
-        put_artifact_unlocked(&db, &legacy).unwrap();
-        drop(db);
-        let loaded = load(&profile.0, WORKSPACE, &legacy.id).unwrap();
-        assert_eq!(loaded.revisions[0].library_version, LEGACY_LIBRARY_VERSION);
-
-        // Preserve the old revision byte-for-byte while ensuring all newly
-        // authored revisions use the current v2 library.
-        let revised = revise(
-            &profile.0,
-            WORKSPACE,
-            &legacy.id,
-            1,
-            Some("next-run"),
-            Some("root = Report()"),
-            "Refresh presentation",
-        )
-        .unwrap();
-        assert_eq!(revised.revisions[0], loaded.revisions[0]);
-        assert_eq!(revised.revisions[1].library_version, LIBRARY_VERSION);
-        assert_eq!(load(&profile.0, WORKSPACE, &legacy.id).unwrap(), revised);
-
-        let mut unsupported = revised;
-        unsupported.revisions[0].library_version = "fella-openui-v3".into();
+        let mut unsupported = artifact(&profile, "legacy-run");
+        unsupported.revisions[0].schema_version = "old-expression-runtime".into();
         assert!(validate_artifact(&unsupported).is_err());
     }
 
@@ -1318,7 +1507,8 @@ mod tests {
         let mut foreign_run = run("foreign");
         foreign_run.workspace = Some("/other".into());
         analysis_store::create(&profile.0, &foreign_run).unwrap();
-        let foreign = create_from_run(&profile.0, "/other", "foreign", "Other", "").unwrap();
+        let foreign =
+            create_from_run(&profile.0, "/other", "foreign", "Other", &sample_spec()).unwrap();
         assert!(studio_save(
             &profile.0,
             WORKSPACE,
@@ -1523,13 +1713,13 @@ mod tests {
     fn oversized_or_invalid_metadata_cannot_change_the_document_or_artifact() {
         let profile = Profile::new();
         seed(&profile, "run-1");
-        assert!(create_from_run(&profile.0, WORKSPACE, "run-1", "", "").is_err());
+        assert!(create_from_run(&profile.0, WORKSPACE, "run-1", "", &sample_spec()).is_err());
         assert!(create_from_run(
             &profile.0,
             WORKSPACE,
             "run-1",
             "Title",
-            &"x".repeat(MAX_PROGRAM_BYTES + 1)
+            &serde_json::json!({"root":"x","elements":{},"padding":"x".repeat(MAX_SPEC_BYTES + 1)})
         )
         .is_err());
         let doc = studio_create(&profile.0, WORKSPACE, "Review").unwrap();

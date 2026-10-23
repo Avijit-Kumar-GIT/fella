@@ -1,11 +1,12 @@
 import type { AnalysisTurn, EvidenceItem } from './types';
 import type { BoundResult, ResolvedArtifact, StudioDocument } from './analytics-artifacts';
+import type { PresentationSpec } from './presentation/types';
 
 /** Keys are placement IDs: the same artifact may be placed at different revisions. */
 export type StudioReportArtifacts = Record<string, ResolvedArtifact | null | undefined>;
 export interface StudioReportOptions {
 	/** An optional deterministic adapter; never a model/provider callback. */
-	presentation?: (input: { program: string; results: BoundResult[]; state: Record<string, unknown> }) => {
+	presentation?: (input: { spec: PresentationSpec; results: BoundResult[]; state: Record<string, unknown> }) => {
 		markdown: string;
 		disclosures?: string[];
 	};
@@ -104,19 +105,19 @@ export function buildStudioReport(document: StudioDocument, artifacts: StudioRep
 		const caveats = artifactCaveats(resolved);
 		if (caveats.length) lines.push('### Caveats', '', ...caveats.map(caveat => `- ${cell(caveat)}`), '');
 		lines.push('### Selected display state', '', fence(stableJson(placement.view_state ?? {}), 'json'), '', 'Selections describe the saved display, not a recomputed population. Exact tables below contain the retained result data.', '');
-		if (resolved.revision.program.trim()) {
+		if (resolved.revision.spec) {
 			let converted = false;
 			if (options.presentation) {
 				try {
-					const presentation = options.presentation({ program: resolved.revision.program, results: resolved.results, state: placement.view_state ?? {} });
+					const presentation = options.presentation({ spec: resolved.revision.spec, results: resolved.results, state: placement.view_state ?? {} });
 					if (presentation.markdown.trim()) {
 						lines.push('### Presentation snapshot', '', presentation.markdown, '', ...(presentation.disclosures ?? []).map(disclosure => `- Export note: ${cell(disclosure)}`), '');
 						converted = true;
 					}
-				} catch { /* The original program, answer and exact values remain exportable. */ }
+				} catch { /* The source spec, answer and exact values remain exportable. */ }
 			}
 			if (!converted) lines.push('### Presentation snapshot', '', 'The generated layout was not converted to Markdown. Unsupported components, visual encodings, annotations, and interactions remain in the presentation source below; this is not a faithful visual reproduction. The saved answer and exact values are preserved.', '');
-			lines.push(`Presentation source · library ${cell(resolved.revision.library_version)}`, '', fence(resolved.revision.program, 'openui'), '');
+			lines.push(`Presentation source · schema ${cell(resolved.revision.schema_version)}`, '', fence(stableJson(resolved.revision.spec), 'json'), '');
 		}
 		lines.push('### Exact saved values', '');
 		if (!resolved.results.length) lines.push('No bound tabular results were saved for this output.', '');

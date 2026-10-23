@@ -1,8 +1,8 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
+	import type { BaseComponentProps } from '@json-render/svelte';
 	import { exactValue, requireResult, type FilterSelection } from '../../presentation/results';
 	import { usePresentation } from './context';
-	let { props }: ComponentRenderProps<{ resultId: string; field: string; name: string; title?: string }> = $props();
+	let { props }: BaseComponentProps<{ resultId: string; field: string; name: string; title?: string }> = $props();
 	const context = usePresentation();
 	let menu: HTMLDetailsElement;
 	let result = $derived(requireResult(context.results, props.resultId));

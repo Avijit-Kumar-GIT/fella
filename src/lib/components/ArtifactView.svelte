@@ -43,7 +43,7 @@
 	let comparisonVersions = $state<ResolvedArtifact[]>([]);
 	let comparisonReport = $state<ArtifactComparison | null>(null);
 	let layoutEditing = $state(false);
-	let programDraft = $state('');
+	let specDraft = $state('');
 	let operation = 0;
 	let comparisonOperation = 0;
 	let autoCompared = '';
@@ -59,7 +59,7 @@
 		++operation; ++comparisonOperation;
 		displayed = next;
 		busy = false; actionError = ''; notice = ''; comparisonVersions = []; comparisonReport = null;
-		compareOpen = false; layoutEditing = false; programDraft = next.revision.program;
+		compareOpen = false; layoutEditing = false; specDraft = JSON.stringify(next.revision.spec, null, 2);
 		instruction = ''; changeOpen = false;
 	});
 	$effect(() => {
@@ -140,14 +140,16 @@
 
 	async function saveLayout(): Promise<void> {
 		const target = displayed;
-		const program = programDraft;
+		let spec: unknown;
 		const request = ++operation;
 		busy = true; actionError = ''; notice = '';
 		try {
+			try { spec = JSON.parse(specDraft); }
+			catch { throw new Error('The presentation must be valid JSON.'); }
 			const { validatePresentation } = await import('$lib/presentation/validate');
-			const validation = validatePresentation(program, target.results);
+			const validation = validatePresentation(spec, target.results);
 			if (!validation.valid) throw new Error(`The layout was not saved: ${validation.issues.map(issue => issue.message).join(' ')}`);
-			const next = await ipc.artifactRevise(target.artifact.workspace, target.artifact.id, target.artifact.current_revision, { run_id: target.run.id, program, change_note: `Presentation edit based on revision ${target.revision.revision}.` });
+			const next = await ipc.artifactRevise(target.artifact.workspace, target.artifact.id, target.artifact.current_revision, { run_id: target.run.id, spec: validation.spec!, change_note: `Presentation edit based on revision ${target.revision.revision}.` });
 			if (request !== operation) return;
 			layoutEditing = false;
 			if (onrevisionchange) onrevisionchange(next.revision.revision);
@@ -232,15 +234,15 @@
 					</section>
 				{/each}
 			</div></details>
-			<details><summary>Presentation changes</summary><div class="comparison-versions">{#each comparisonVersions as version (version.revision.revision)}<pre aria-label={`Revision ${version.revision.revision} presentation`}>{version.revision.program || '(No presentation)'}</pre>{/each}</div></details>
+			<details><summary>Presentation changes</summary><div class="comparison-versions">{#each comparisonVersions as version (version.revision.revision)}<pre aria-label={`Revision ${version.revision.revision} presentation`}>{JSON.stringify(version.revision.spec, null, 2)}</pre>{/each}</div></details>
 		</section>
 	{/if}
 
 	<div class="artifact-presentation" hidden={reviewOnly}>
-		{#if displayed.revision.program.trim() && Presentation && !rendererError}
+		{#if displayed.revision.spec && Presentation && !rendererError}
 			{#key `${displayed.artifact.id}:${displayed.revision.revision}`}
 				<svelte:boundary>
-					<Presentation program={displayed.revision.program} results={displayed.results} {initialState} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
+					<Presentation spec={displayed.revision.spec} results={displayed.results} {initialState} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
 					{#snippet failed()}
 						<p class="quiet-note" role="status">The interactive presentation is unavailable. The saved answer and exact values are unchanged.</p>
 						<MarkdownContent text={displayed.run.result.text} />
@@ -273,11 +275,11 @@
 		<p class="quiet-note">Saved source revisions support historical inspection. Exact recomputation requires the original inputs to remain available.</p>
 	</details>
 	<details class="presentation-source"><summary>Presentation source</summary>
-		<p class="quiet-note">Library {displayed.revision.library_version}. Editing the layout creates a revision; it does not rerun or change the analytical data.</p>
+		<p class="quiet-note">Schema {displayed.revision.schema_version}. Editing the layout creates a revision; it does not rerun or change the analytical data.</p>
 		{#if layoutEditing}
-			<label class="layout-editor">OpenUI program<textarea aria-label="OpenUI presentation program" rows="10" bind:value={programDraft} spellcheck="false"></textarea></label>
-			<div class="form-actions"><Button size="sm" variant="ghost" onclick={() => layoutEditing = false}>Cancel</Button><Button size="sm" disabled={busy || !programDraft.trim() || programDraft === displayed.revision.program} onclick={() => void saveLayout()}>Save layout revision</Button></div>
-		{:else}<pre>{displayed.revision.program || '(No presentation)'}</pre><Button size="sm" variant="ghost" onclick={() => { programDraft = displayed.revision.program; layoutEditing = true; }}>Edit layout</Button>{/if}
+			<label class="layout-editor">JSON presentation<textarea aria-label="JSON presentation spec" rows="10" bind:value={specDraft} spellcheck="false"></textarea></label>
+			<div class="form-actions"><Button size="sm" variant="ghost" onclick={() => layoutEditing = false}>Cancel</Button><Button size="sm" disabled={busy || !specDraft.trim() || specDraft === JSON.stringify(displayed.revision.spec, null, 2)} onclick={() => void saveLayout()}>Save layout revision</Button></div>
+		{:else}<pre>{JSON.stringify(displayed.revision.spec, null, 2)}</pre><Button size="sm" variant="ghost" onclick={() => { specDraft = JSON.stringify(displayed.revision.spec, null, 2); layoutEditing = true; }}>Edit layout</Button>{/if}
 	</details>
 </article>
 

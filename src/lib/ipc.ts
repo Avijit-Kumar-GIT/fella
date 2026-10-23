@@ -136,21 +136,19 @@ function workspaceArgs(workspaceId?: string | null): Record<string, unknown> {
 }
 
 export const ipc = {
-	artifactCreate: (workspaceId: string, turnId: string, title: string, program: string) =>
-		invoke<ArtifactRecord>('artifact_create', { workspaceId, turnId, title, program }),
+	artifactCreate: (workspaceId: string, turnId: string, title: string, spec: unknown) =>
+		invoke<ArtifactRecord>('artifact_create', { workspaceId, turnId, title, spec }),
 	artifactList: (workspaceId: string) => invoke<ArtifactRecord[]>('artifact_list', { workspaceId }),
 	artifactResolve: (workspaceId: string, artifactId: string, revision?: number) =>
 		invoke<ResolvedArtifact>('artifact_resolve', { workspaceId, artifactId, revision }),
-	artifactRevise: (workspaceId: string, artifactId: string, baseRevision: number, update: { run_id?: string; program?: string; change_note: string }) =>
-		invoke<ResolvedArtifact>('artifact_revise', { workspaceId, artifactId, baseRevision, runId: update.run_id, program: update.program, changeNote: update.change_note }),
+	artifactRevise: (workspaceId: string, artifactId: string, baseRevision: number, update: { run_id?: string; spec?: unknown; change_note: string }) =>
+		invoke<ResolvedArtifact>('artifact_revise', { workspaceId, artifactId, baseRevision, runId: update.run_id, spec: update.spec, changeNote: update.change_note }),
 	artifactAdopt: (workspaceId: string, artifactId: string, baseRevision: number, revision: number) =>
 		invoke<ResolvedArtifact>('artifact_adopt', { workspaceId, artifactId, baseRevision, revision }),
 	artifactCompare: (workspaceId: string, artifactId: string, beforeRevision: number, afterRevision: number) =>
 		invoke<ArtifactComparison>('artifact_compare', { workspaceId, artifactId, beforeRevision, afterRevision }),
 	presentationResults: (workspaceId: string, turnId: string) =>
 		invoke<{ run: AnalysisTurn; results: BoundResult[] }>('presentation_results', { workspaceId, turnId }),
-	presentationRepair: (workspaceId: string, turnId: string, program: string, issues: string[], model?: string) =>
-		invoke<{ program: string }>('presentation_repair', { workspaceId, turnId, program, issues, model }),
 	studioList: (workspaceId: string) => invoke<StudioDocument[]>('studio_list', { workspaceId }),
 	studioCreate: (workspaceId: string, title: string) => invoke<StudioDocument>('studio_create', { workspaceId, title }),
 	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),

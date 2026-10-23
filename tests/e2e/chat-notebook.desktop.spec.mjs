@@ -3,7 +3,12 @@ import { test, expect, question, invoke, createArtifact, createDocument, seedRun
 // Chat/Notebook v1: frozen in docs/testing/CHAT-NOTEBOOK-v1.md.
 // Real Electron/Rust records; no model or analytics calls are permitted by the
 // shared harness. These new cases do not alter pre-existing suite expectations.
-const program = 'root = Document([Title("Quarterly revenue"), Metric("sales-result", "revenue", 1, "Q4 revenue", "USD"), Table("sales-result")])';
+const spec = { root: 'doc', elements: {
+ doc: { type: 'Document', props: {}, children: ['title', 'metric', 'table'] },
+ title: { type: 'Title', props: { content: 'Quarterly revenue' }, children: [] },
+ metric: { type: 'Metric', props: { resultId: 'sales-result', field: 'revenue', row: 1, title: 'Q4 revenue', unit: 'USD' }, children: [] },
+ table: { type: 'Table', props: { resultId: 'sales-result' }, children: [] }
+} };
 // v1.1 user-approved setup correction: the archive is a fresh conversation,
 // not a disk replacement for a live one. Behavioral assertions are unchanged.
 const conversationId = 'notebook-fixture-chat';
@@ -18,7 +23,7 @@ async function openSavedAnswer(desktop, output) {
    { id: 'saved-output', role: 'assistant', text: run.result.text, ts: 2,
     answer: { ...run.result, turn_id: run.id, workspace: { path: workspace, revision: run.workspace_revision } },
     artifact_id: output.artifact.id, artifact_revision: output.revision.revision,
-    presentation_snapshot: { workspace, turn_id: run.id, program: output.revision.program, results: output.results }
+    presentation_snapshot: { workspace, turn_id: run.id, spec: output.revision.spec, results: output.results }
    }
   ]
  }) });
@@ -31,7 +36,7 @@ async function openSavedAnswer(desktop, output) {
 test('Chat and Notebook retain the conversation, draft and saved result at wide and narrow widths', async ({ desktop }) => {
  const { page, workspace } = desktop;
  desktop.run = await seedRun(desktop, { id: 'notebook-original-run', conversationId });
- const artifact = await createArtifact(desktop, desktop.run, 'Quarterly revenue', program);
+ const artifact = await createArtifact(desktop, desktop.run, 'Quarterly revenue', spec);
  const output = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifact.id });
  const investigation = await invoke(page, 'investigation_ensure', { workspaceId: workspace, conversationId, initialRequest: question, sourceMessageId: 'notebook-fixture-user' });
  await invoke(page, 'investigation_link_analysis_turns', { investigationId: investigation.id, analysisTurnIds: [desktop.run.id] });
@@ -72,10 +77,10 @@ test('Chat and Notebook retain the conversation, draft and saved result at wide 
 test('a candidate can be reviewed from chat without adopting it or changing a pinned report', async ({ desktop }) => {
  const { page, workspace } = desktop;
  desktop.run = await seedRun(desktop, { id: 'notebook-original-run', conversationId });
- const artifact = await createArtifact(desktop, desktop.run, 'Revenue revision', program);
+ const artifact = await createArtifact(desktop, desktop.run, 'Revenue revision', spec);
  const report = await createDocument(desktop, [artifact], { title: 'Pinned quarterly report' });
  const candidateRun = await seedRun(desktop, { id: 'notebook-candidate-run', conversationId, amounts: [10, 30] });
- const candidate = await invoke(page, 'artifact_revise', { workspaceId: workspace, artifactId: artifact.id, baseRevision: 1, runId: candidateRun.id, program, changeNote: 'Updated revenue calculation.' });
+ const candidate = await invoke(page, 'artifact_revise', { workspaceId: workspace, artifactId: artifact.id, baseRevision: 1, runId: candidateRun.id, spec, changeNote: 'Updated revenue calculation.' });
  expect(candidate.artifact.current_revision).toBe(1);
  await openSavedAnswer(desktop, candidate);
  await page.getByRole('button', { name: 'Review changes', exact: true }).click();
@@ -94,7 +99,7 @@ test('a candidate can be reviewed from chat without adopting it or changing a pi
 test('Notebook naming, files and new reports preserve the linked conversation', async ({ desktop }) => {
  const { page, workspace } = desktop;
  desktop.run = await seedRun(desktop, { id: 'notebook-original-run', conversationId });
- const artifact = await createArtifact(desktop, desktop.run, 'Quarterly revenue', program);
+ const artifact = await createArtifact(desktop, desktop.run, 'Quarterly revenue', spec);
  const output = await invoke(page, 'artifact_resolve', { workspaceId: workspace, artifactId: artifact.id });
  const investigation = await invoke(page, 'investigation_ensure', { workspaceId: workspace, conversationId, initialRequest: question, sourceMessageId: 'notebook-fixture-user' });
  await invoke(page, 'investigation_link_analysis_turns', { investigationId: investigation.id, analysisTurnIds: [desktop.run.id] });

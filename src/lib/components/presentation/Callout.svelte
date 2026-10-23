@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ title?: string; content: string; tone?: 'neutral' | 'info' | 'positive' | 'caution' }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props }: BaseComponentProps<{ title?: string; content: string; tone?: 'neutral' | 'info' | 'positive' | 'caution' }> = $props();
 </script>
 <aside class="presentation-callout" data-tone={props.tone ?? 'neutral'}>{#if props.title}<strong>{props.title}</strong>{/if}<p>{props.content}</p></aside>
 <style>

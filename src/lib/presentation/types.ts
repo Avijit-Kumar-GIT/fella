@@ -1,3 +1,5 @@
+import type { Spec } from '@json-render/core';
+
 /** The host supplies saved analytical results. Presentations never fetch their own data. */
 export interface BoundResult {
 	id: string;
@@ -9,6 +11,7 @@ export interface BoundResult {
 }
 
 export type PresentationState = Record<string, unknown>;
+export type PresentationSpec = Spec;
 export interface PresentationAction {
 	type: 'continue';
 	message: string;
@@ -26,9 +29,9 @@ export interface PresentationExport {
 	resultIds: string[];
 }
 
-export const PRESENTATION_VERSION = 'fella-openui-v2';
+export const PRESENTATION_VERSION = 'fella-json-render-v1';
 export const PRESENTATION_LIMITS = {
-	programBytes: 100_000,
+	specBytes: 256_000,
 	components: 240,
 	depth: 24,
 	results: 32,

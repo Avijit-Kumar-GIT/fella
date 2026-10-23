@@ -4,13 +4,12 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 /**
- * Generative workspace contract v1; executable task set v1.5 (2026-10-22).
+ * Generative workspace contract v2; executable task set v2.0 (2026-10-22).
  * Expected semantics are fixed before candidate execution and come from
- * docs/testing/GENERATIVE-WORKSPACE-v1.md, not observed rendering output.
- * v1.3 makes OpenUI the same-turn primary answer contract and removes the
- * separate presentation-propose request. v1.4 adds the approved local-state
- * interaction and chat persistence path; changing it must make no new model,
- * analytics, or source requests. This suite makes no live-model quality claim.
+ * docs/testing/GENERATIVE-WORKSPACE-v2.md, not observed rendering output.
+ * json-render specs are the same-turn primary answer contract. Local-state
+ * interactions and saved artifact persistence make no extra model, analytics,
+ * or source requests. This suite makes no live-model quality claim.
  *
  * 1. Recorded analysis -> persisted artifact -> Studio; narrative/order survive
  *    restart with exact saved values and no model call or source query.
@@ -23,7 +22,7 @@ import { join, resolve } from 'node:path';
  *    without gaining execution privileges or changing analytical verification.
  * 6. Deterministic export preserves exact values, null/empty/zero, evidence,
  *    caveats, reading order, and selected state without computation.
- * 7. OpenUI controls update only local presentation state, derived content
+ * 7. Presentation controls update only local state, derived content
  *    responds in place, and the selected state survives reopening the chat.
  * 8. A rejected literal Metric receives one finalizer-only correction turn;
  *    the original analysis is not rerun and the corrected artifact is saved.
@@ -42,23 +41,33 @@ const exactRows = [
 	['Q4', '20', '0', '', '9007199254740995']
 ];
 const noExecutionMethods = [
-	'ask', 'analysis_turn_rerun', 'presentation_propose',
+	'ask', 'analysis_turn_rerun',
 	'investigation_propose_questions', 'run_sql_direct', 'reindex',
 	'sample_source', 'preview_file'
 ];
-// Positional syntax confirmed against the Fella OpenUI component schema.
-const comparisonProgram = `root = Document([
-  Text("Presentation begins with the saved comparison."),
-  Section("Quarter comparison", [
-    Metric("sales-result", "revenue", 0, "Q3 revenue", "USD"),
-    Metric("sales-result", "revenue", 1, "Q4 revenue", "USD"),
-    ResultFilter("sales-result", "period", "selected-period", "Period"),
-    Chart("sales-result", {"mark":"bar","encoding":{"x":{"field":"period","type":"nominal"},"y":{"field":"revenue","type":"quantitative"}}}, "Revenue by quarter"),
-    Table("sales-result")
-  ]),
-  Text("Presentation ends after the exact values.")
-])`;
-const secondProgram = 'root = Document([Section("Second saved output", [Text("An independently placed analytical output."), Table("sales-result")])])';
+const comparisonSpec = {
+	root: 'document',
+	elements: {
+		document: { type: 'Document', props: {}, children: ['opening', 'comparison', 'ending'] },
+		opening: { type: 'Text', props: { content: 'Presentation begins with the saved comparison.' }, children: [] },
+		comparison: { type: 'Section', props: { title: 'Quarter comparison' }, children: ['q3', 'q4', 'period-filter', 'chart', 'table'] },
+		q3: { type: 'Metric', props: { resultId: 'sales-result', field: 'revenue', row: 0, title: 'Q3 revenue', unit: 'USD' }, children: [] },
+		q4: { type: 'Metric', props: { resultId: 'sales-result', field: 'revenue', row: 1, title: 'Q4 revenue', unit: 'USD' }, children: [] },
+		'period-filter': { type: 'ResultFilter', props: { resultId: 'sales-result', field: 'period', name: 'selected-period', title: 'Period' }, children: [] },
+		chart: { type: 'Chart', props: { resultId: 'sales-result', spec: { mark: 'bar', encoding: { x: { field: 'period', type: 'nominal' }, y: { field: 'revenue', type: 'quantitative' } } }, title: 'Revenue by quarter' }, children: [] },
+		table: { type: 'Table', props: { resultId: 'sales-result' }, children: [] },
+		ending: { type: 'Text', props: { content: 'Presentation ends after the exact values.' }, children: [] }
+	}
+};
+const secondSpec = {
+	root: 'document',
+	elements: {
+		document: { type: 'Document', props: {}, children: ['section'] },
+		section: { type: 'Section', props: { title: 'Second saved output' }, children: ['text', 'table'] },
+		text: { type: 'Text', props: { content: 'An independently placed analytical output.' }, children: [] },
+		table: { type: 'Table', props: { resultId: 'sales-result' }, children: [] }
+	}
+};
 
 async function invoke(page, command, args = {}) {
 	return page.evaluate(({ command, args }) => window.fella.invoke(command, args), { command, args });
@@ -170,8 +179,8 @@ function placement(artifact, id, revision = artifact.current_revision, viewState
 	return { id, artifact_id: artifact.id, revision, view_state: viewState };
 }
 
-async function createArtifact(harness, run, title, program) {
-	return invoke(harness.page, 'artifact_create', { workspaceId: harness.workspace, turnId: run.id, title, program });
+async function createArtifact(harness, run, title, spec) {
+	return invoke(harness.page, 'artifact_create', { workspaceId: harness.workspace, turnId: run.id, title, spec });
 }
 
 async function createDocument(harness, artifacts, { title = 'Quarterly review', body = 'Independent saved analytical work.' } = {}) {
@@ -298,4 +307,4 @@ const test = base.extend({
 	}
 });
 
-export { test, expect, question, caveat, answer, columns, exactRows, comparisonProgram, secondProgram, invoke, rejected, chooseWorkspace, engineRequests, startBudget, assertNoExecution, launch, seedRun, placement, createArtifact, createDocument, assertCanonicalUnchanged, openStudio, openStudioDocument, addSavedOutput, assertSavedRows, expectMarkdownDownload, expectPackageDownload };
+export { test, expect, question, caveat, answer, columns, exactRows, comparisonSpec, secondSpec, invoke, rejected, chooseWorkspace, engineRequests, startBudget, assertNoExecution, launch, seedRun, placement, createArtifact, createDocument, assertCanonicalUnchanged, openStudio, openStudioDocument, addSavedOutput, assertSavedRows, expectMarkdownDownload, expectPackageDownload };

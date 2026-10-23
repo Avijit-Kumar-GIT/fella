@@ -4,10 +4,8 @@ import type { BoundResult, PresentationAction, PresentationState } from '../../p
 interface PresentationContext {
 	readonly results: BoundResult[];
 	readonly state: PresentationState;
-	readonly variables: Record<string, unknown>;
 	readonly interactive: boolean;
 	update(key: string, value: unknown): void;
-	updateVariable(name: string, value: unknown): void;
 	runAction(action: unknown): void;
 	action(action: PresentationAction): void;
 }

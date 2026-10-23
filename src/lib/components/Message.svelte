@@ -22,7 +22,7 @@
 		onrerun?: () => Promise<void>;
 		onopeninvestigationrun?: (turnId: string) => void;
 	} = $props();
-	let openUiPrimary = $derived(!!message.answer?.workspace && !message.answer?.clarification);
+	let presentationPrimary = $derived(!!message.answer?.workspace && !message.answer?.clarification);
 	let needsAttention = $derived(!!message.answer && answerNeedsReview(message.answer)
 		&& message.answer.status !== 'failed' && message.answer.status !== 'insufficient_data');
 
@@ -101,10 +101,10 @@
 				/>
 			{/if}
 		</div>
-		{#if split.background && !openUiPrimary}
+		{#if split.background && !presentationPrimary}
 			<div class="background">{split.background}</div>
 		{/if}
-		{#if openUiPrimary}
+		{#if presentationPrimary}
 			<AnalyticalAnswer {message} />
 		{:else}
 			<div class="text rich" class:pending={message.pending}>

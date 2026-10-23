@@ -3,7 +3,7 @@
 //! A report package is NOT an AnalysisTurn import. Its result snapshots and
 //! recorded checks are untrusted historical content, never new source authority.
 //! There is deliberately no target-workspace or local-artifact import operation.
-//! Imported programs are opaque text and are never evaluated by this module.
+//! Imported presentation JSON is bounded declarative content, never evidence.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::Write;
@@ -17,10 +17,10 @@ use super::error::{EngineError, EngineResult};
 use super::evidence::{VerificationCheck, VerificationStatus};
 use super::runtime::{AnalysisContract, AnalysisTurn, ContractMeasure, ContractTime, TurnState};
 
-pub const PACKAGE_VERSION: u32 = 1;
+pub const PACKAGE_VERSION: u32 = 2;
 pub const MAX_PACKAGE_BYTES: usize = 10 * 1024 * 1024;
 const MAX_ITEMS: usize = 256;
-const MAX_PROGRAM_BYTES: usize = 256 * 1024;
+const MAX_SPEC_BYTES: usize = 256 * 1024;
 const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_CELLS: usize = 500_000;
 
@@ -421,9 +421,9 @@ fn analytical_diff(
                     .and_then(|c| json_text(&c.derived_metrics)),
             ),
             item(
-                "Presentation program",
-                recorded(before.revision.program.clone()),
-                recorded(after.revision.program.clone()),
+                "Presentation JSON spec",
+                json_text(&before.revision.spec),
+                json_text(&after.revision.spec),
             ),
         ],
         "method fields",
@@ -916,9 +916,9 @@ pub struct PackageArtifact {
     pub origin_revision: u64,
     pub title: String,
     pub run_id: String,
-    /// Always inert on import. This is not executable renderer input.
-    pub program: String,
-    pub library_version: String,
+    /// Declarative view over the accompanying saved result; never evidence.
+    pub spec: Json,
+    pub schema_version: String,
     pub change_note: String,
 }
 
@@ -973,7 +973,6 @@ pub struct ReportPackage {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ReportPreview {
     pub read_only: bool,
-    pub programs_executable: bool,
     pub source_authority: bool,
     pub title: String,
     pub artifact_count: usize,
@@ -1166,8 +1165,8 @@ pub fn export_snapshot(
             origin_revision: value.revision.revision,
             title: value.artifact.title.clone(),
             run_id,
-            program: value.revision.program.clone(),
-            library_version: value.revision.library_version.clone(),
+            spec: value.revision.spec.clone(),
+            schema_version: value.revision.schema_version.clone(),
             change_note: value.revision.change_note.clone(),
         });
     }
@@ -1191,7 +1190,7 @@ pub fn export_snapshot(
         format: "fella-report".into(),
         version: PACKAGE_VERSION,
         manifest: PackageManifest {
-            generator: "fella-report-v1".into(),
+            generator: "fella-report-v2".into(),
             origin_workspace_fingerprint: digest(document.workspace.as_bytes()),
             snapshot_at_ms: document.updated_at_ms,
             artifact_count: artifacts.len(),
@@ -1332,7 +1331,7 @@ pub fn package_validate(json: &str) -> EngineResult<ReportPackage> {
     let package: ReportPackage = serde_json::from_str(json)?;
     if package.version != PACKAGE_VERSION
         || package.format != "fella-report"
-        || package.manifest.generator != "fella-report-v1"
+        || package.manifest.generator != "fella-report-v2"
     {
         return Err(err("unsupported report package format or version"));
     }
@@ -1369,14 +1368,17 @@ pub fn package_validate(json: &str) -> EngineResult<ReportPackage> {
         if artifacts.insert(&artifact.id, artifact).is_some()
             || !origins.insert((&artifact.origin_artifact_id, artifact.origin_revision))
             || artifact.origin_revision == 0
-            || !artifacts::supports_library_version(&artifact.library_version)
+            || artifact.schema_version != artifacts::SCHEMA_VERSION
         {
             return Err(err(
                 "report artifact revisions are duplicated or unsupported",
             ));
         }
         bounded_text(&artifact.title, 1024)?;
-        bounded_text(&artifact.program, MAX_PROGRAM_BYTES)?;
+        artifacts::validate_spec(&artifact.spec)?;
+        if serde_json::to_vec(&artifact.spec).map_or(true, |bytes| bytes.len() > MAX_SPEC_BYTES) {
+            return Err(err("report presentation spec exceeds its size limit"));
+        }
         bounded_text(&artifact.change_note, 4096)?;
     }
     let mut runs = BTreeMap::new();
@@ -1471,11 +1473,11 @@ pub fn package_validate(json: &str) -> EngineResult<ReportPackage> {
 pub fn package_preview(json: &str) -> EngineResult<ReportPreview> {
     let package = package_validate(json)?;
     Ok(ReportPreview {
-        read_only:true,programs_executable:false,source_authority:false,title:package.document.title.clone(),
+        read_only:true,source_authority:false,title:package.document.title.clone(),
         artifact_count:package.artifacts.len(),run_count:package.runs.len(),
         warnings:vec![
             "This is an untrusted, read-only report snapshot. Recorded checks are not independently reverified.".into(),
-            "Imported programs, narrative links, and view state are inert content; do not execute them or fetch remote resources.".into(),
+            "Presentation specs and view state are declarative content; they do not execute SQL, code, or remote requests.".into(),
             "The checksum detects changed content but does not authenticate its author or analytical correctness.".into(),
             "Selected result values, narrative, definitions, and SQL may contain sensitive information. Raw source files and other history are not included.".into(),
         ],package,
@@ -1612,7 +1614,7 @@ pub fn package_list(data_dir: &Path) -> EngineResult<Vec<ImportedReportSummary>>
 #[cfg(test)]
 mod tests {
     use super::super::artifacts::{
-        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioUpdate, LIBRARY_VERSION,
+        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioUpdate, SCHEMA_VERSION,
     };
     use super::*;
     use serde_json::json;
@@ -1653,8 +1655,8 @@ mod tests {
             revision: 1,
             parent_revision: None,
             run_id: run.id.clone(),
-            program: "root = Report()".into(),
-            library_version: LIBRARY_VERSION.into(),
+            spec: json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}}),
+            schema_version: SCHEMA_VERSION.into(),
             change_note: "Initial result".into(),
             created_at_ms: 10,
         };
@@ -1765,7 +1767,7 @@ mod tests {
         let mut b = a.clone();
         b.revision.revision = 2;
         b.revision.parent_revision = Some(1);
-        b.revision.program = "root = Document([Text(\"A clearer layout\")])".into();
+        b.revision.spec = json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"A clearer layout"},"children":[]}}});
         b.artifact.revisions.push(b.revision.clone());
         let report = compare(&a, &b);
         assert!(report.compatible);
@@ -1832,16 +1834,21 @@ mod tests {
         let second = resolved("diff-durable-after", json!([["East", 8]]));
         super::super::analysis_store::create(&profile.0, &first.run).unwrap();
         super::super::analysis_store::create(&profile.0, &second.run).unwrap();
-        let record =
-            artifacts::create_from_run(&profile.0, WORKSPACE, &first.run.id, "Revenue", "")
-                .unwrap();
+        let record = artifacts::create_from_run(
+            &profile.0,
+            WORKSPACE,
+            &first.run.id,
+            "Revenue",
+            &json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":[]}}}),
+        )
+        .unwrap();
         let record = artifacts::revise(
             &profile.0,
             WORKSPACE,
             &record.id,
             1,
             Some(&second.run.id),
-            Some(""),
+            Some(json!({"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":[]}}})),
             "Candidate",
         )
         .unwrap();
@@ -2103,44 +2110,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_openui_revision_version_survives_export_validation_and_import() {
-        let profile = Profile::new();
+    fn outdated_presentation_schemas_are_rejected_by_report_export() {
         let mut item = resolved("legacy-run", json!([["East", 12]]));
-        item.revision.library_version = artifacts::LEGACY_LIBRARY_VERSION.into();
-        item.artifact.revisions[0].library_version = artifacts::LEGACY_LIBRARY_VERSION.into();
-
-        let encoded = export_snapshot(
+        item.revision.schema_version = "fella-json-render-v0".into();
+        item.artifact.revisions[0].schema_version = "fella-json-render-v0".into();
+        assert!(export_snapshot(
             &document(std::slice::from_ref(&item)),
             std::slice::from_ref(&item),
         )
-        .unwrap();
-        let package = package_validate(&encoded).unwrap();
-        assert_eq!(
-            package.artifacts[0].library_version,
-            artifacts::LEGACY_LIBRARY_VERSION
-        );
-
-        // Imported reports remain inert snapshots and retain the source
-        // revision's renderer version instead of being relabeled as v2.
-        let imported = package_import(&profile.0, &encoded).unwrap();
-        assert!(!imported.preview.programs_executable);
-        assert_eq!(
-            imported.preview.package.artifacts[0].library_version,
-            artifacts::LEGACY_LIBRARY_VERSION
-        );
-        assert_eq!(
-            package_load(&profile.0, &imported.id)
-                .unwrap()
-                .preview
-                .package
-                .artifacts[0]
-                .library_version,
-            artifacts::LEGACY_LIBRARY_VERSION
-        );
-
-        let mut unsupported = package;
-        unsupported.artifacts[0].library_version = "fella-openui-v3".into();
-        assert!(package_validate(&rechecksum(&mut unsupported)).is_err());
+        .is_err());
     }
 
     #[test]
@@ -2164,7 +2142,7 @@ mod tests {
     fn package_validation_rejects_unknown_versions_paths_dangling_refs_and_inconsistent_values() {
         let original = package_validate(&package_json()).unwrap();
         let mut version = original.clone();
-        version.version = 2;
+        version.version = 1;
         let mut dangling = original.clone();
         dangling.artifacts[0].run_id = "missing-run".into();
         let mut exact = original.clone();
@@ -2196,7 +2174,6 @@ mod tests {
             .iter()
             .any(|w| w.contains("does not authenticate")));
         assert!(!preview.source_authority);
-        assert!(!preview.programs_executable);
     }
 
     #[test]
@@ -2216,21 +2193,18 @@ mod tests {
     }
 
     #[test]
-    fn offline_import_has_new_report_identity_no_workspace_authority_and_no_run_writes() {
+    fn offline_import_has_new_report_identity_and_no_workspace_or_run_writes() {
         let profile = Profile::new();
-        let mut package = package_validate(&package_json()).unwrap();
-        let hostile = "root = Script(\"fetch('https://example.invalid'); require('fs').writeFileSync('/tmp/owned','bad')\")";
-        package.artifacts[0].program = hostile.into();
-        let json = rechecksum(&mut package);
+        let package = package_validate(&package_json()).unwrap();
+        let json = serde_json::to_string(&package).unwrap();
         let first = package_import(&profile.0, &json).unwrap();
         let second = package_import(&profile.0, &json).unwrap();
         assert_ne!(first.id, second.id);
         assert!(first.preview.read_only);
         assert!(!first.preview.source_authority);
-        assert!(!first.preview.programs_executable);
         assert_eq!(
-            first.preview.package.artifacts[0].program, hostile,
-            "program text is inspectable but never evaluated"
+            first.preview.package.artifacts[0].spec,
+            package.artifacts[0].spec
         );
         assert!(!profile.0.join("analysis").exists());
         assert!(!profile.0.join("conversations").exists());
@@ -2259,7 +2233,7 @@ mod tests {
             WORKSPACE,
             &item.run.id,
             "Revenue",
-            &item.revision.program,
+            &item.revision.spec,
         )
         .unwrap();
         let doc = artifacts::studio_create(&profile.0, WORKSPACE, "Saved report").unwrap();

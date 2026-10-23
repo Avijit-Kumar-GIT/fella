@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	let { props }: ComponentRenderProps<{ label?: string }> = $props();
+	import type { BaseComponentProps } from '@json-render/svelte';
+	let { props }: BaseComponentProps<{ label?: string }> = $props();
 </script>
 <div class="divider" aria-hidden="true">{#if props.label}<span>{props.label}</span>{/if}</div>
 <style>

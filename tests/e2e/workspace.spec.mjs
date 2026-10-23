@@ -4888,19 +4888,28 @@ test('Composer model selection applies to the open conversation and survives its
 	await expect.poll(async () => page.evaluate(async () => (await window.fella.invoke('get_settings')).model)).toBe('gpt-5.1');
 });
 
-test('OpenUI nested grids respond to their actual cell width', async ({ page }) => {
+test('json-render nested grids respond to their actual cell width', async ({ page }) => {
 	const workspace = folders[0].path;
-	const program = 'root = Document([Grid([Grid([Text("Nested content stays readable"), Text("Second nested item")], 4), Text("Outer item 2"), Text("Outer item 3"), Text("Outer item 4")], 4)])';
+	const spec = { root: 'doc', elements: {
+		doc: { type: 'Document', props: {}, children: ['outer'] },
+		outer: { type: 'Grid', props: { columns: 4 }, children: ['inner', 'outer-2', 'outer-3', 'outer-4'] },
+		inner: { type: 'Grid', props: { columns: 4 }, children: ['inner-1', 'inner-2'] },
+		'inner-1': { type: 'Text', props: { content: 'Nested content stays readable' }, children: [] },
+		'inner-2': { type: 'Text', props: { content: 'Second nested item' }, children: [] },
+		'outer-2': { type: 'Text', props: { content: 'Outer item 2' }, children: [] },
+		'outer-3': { type: 'Text', props: { content: 'Outer item 3' }, children: [] },
+		'outer-4': { type: 'Text', props: { content: 'Outer item 4' }, children: [] }
+	} };
 	await installDesktopMock(page, {
 		projectConversationArchives: [{
-			id: 'responsive-openui-conversation',
+			id: 'responsive-json-render-conversation',
 			workspace: null,
 			saved_at_ms: 2,
 			messages: [
-				{ id: 'responsive-openui-user', role: 'user', text: 'Show a nested responsive layout.', ts: 1 },
-				{ id: 'responsive-openui-answer', role: 'assistant', text: 'Nested layout fixture.', ts: 2, answer: {
-					text: 'Nested layout fixture.', status: 'verified', turn_id: 'responsive-openui-run',
-					workspace: { path: workspace, revision: 'sales-r1' }, evidence: [], verification: [], presentation_program: program
+				{ id: 'responsive-json-render-user', role: 'user', text: 'Show a nested responsive layout.', ts: 1 },
+				{ id: 'responsive-json-render-answer', role: 'assistant', text: 'Nested layout fixture.', ts: 2, answer: {
+					text: 'Nested layout fixture.', status: 'verified', turn_id: 'responsive-json-render-run',
+					workspace: { path: workspace, revision: 'sales-r1' }, evidence: [], verification: [], presentation_spec: spec
 				} }
 			]
 		}]

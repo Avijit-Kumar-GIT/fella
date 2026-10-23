@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
+	import type { BaseComponentProps } from '@json-render/svelte';
 	import { usePresentation } from './context';
-	let { props, renderNode }: ComponentRenderProps<{ name: string; labels: string[]; children: unknown[] }> = $props();
+	let { props, children }: BaseComponentProps<{ name: string; labels: string[] }> = $props();
 	const context = usePresentation();
 	const id = $props.id();
 	let selected = $derived(Math.min(Number(context.state[`tab:${props.name}`] ?? 0), props.labels.length - 1));
@@ -20,7 +20,7 @@
 	<div class="tab-list presentation-tab-list" role="tablist" aria-label={props.name}>
 		{#each props.labels as label, index}<button role="tab" id={`${id}-tab-${index}`} aria-selected={selected === index} aria-controls={`${id}-panel-${index}`} tabindex={selected === index ? 0 : -1} onclick={() => select(index)} onkeydown={(event) => keydown(event, index)}>{label}</button>{/each}
 	</div>
-	{#each props.children as child, index}{#if selected === index}<div class="presentation-tab-panel" role="tabpanel" id={`${id}-panel-${index}`} aria-labelledby={`${id}-tab-${index}`} tabindex="0">{@render renderNode(child)}</div>{/if}{/each}
+	<div class="presentation-tab-panels" id={`${id}-panel-${selected}`} role="tabpanel" aria-labelledby={`${id}-tab-${selected}`} tabindex="0">{@render children?.()}</div>
 </div>
 <style>
 	.tabs { min-width: 0; }

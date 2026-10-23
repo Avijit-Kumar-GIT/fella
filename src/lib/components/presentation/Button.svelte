@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
+	import type { BaseComponentProps } from '@json-render/svelte';
 	import { usePresentation } from './context';
-	let { props }: ComponentRenderProps<{ label: string; action?: unknown }> = $props();
+	let { props }: BaseComponentProps<{ label: string; action?: { type: 'follow_up'; message: string } | { type: 'set_state'; stateKey: string; value: string | number | boolean | null } }> = $props();
 	const context = usePresentation();
 </script>
 <button class="presentation-button" type="button" onclick={() => context.runAction(props.action)}>{props.label}<span aria-hidden="true">↗</span></button>

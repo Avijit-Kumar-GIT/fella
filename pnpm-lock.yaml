@@ -8,15 +8,15 @@ importers:
 
   .:
     dependencies:
+      '@json-render/core':
+        specifier: 0.21.1
+        version: 0.21.1(zod@4.4.3)
+      '@json-render/svelte':
+        specifier: 0.21.1
+        version: 0.21.1(svelte@5.57.1)(zod@4.4.3)
       '@lucide/svelte':
         specifier: ^1.53.0
         version: 1.53.0(svelte@5.57.1)
-      '@openuidev/lang-core':
-        specifier: 0.4.1
-        version: 0.4.1(zod@4.4.3)
-      '@openuidev/svelte-lang':
-        specifier: 0.4.2
-        version: 0.4.2(svelte@5.57.1)(zod@4.4.3)
       '@xterm/addon-fit':
         specifier: ^0.11.0
         version: 0.11.0
@@ -184,6 +184,17 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
+  '@json-render/core@0.21.1':
+    resolution: {integrity: sha512-5hUxJTOnNlBhLuSzS/Vs46jjAqQ2TnkGz9n/0RW2djYwxANZKhOTc1QOuL1Cgu+HxtfTPdJjzUs5dOei/Y+aag==}
+    peerDependencies:
+      zod: ^4.0.0
+
+  '@json-render/svelte@0.21.1':
+    resolution: {integrity: sha512-rqqDumsLT4UPTiw6sFE0CMnR6PfWwFiKShmc8ge4UCpE15BdGqFsKm12o0w6aFLHwo6+TiD+ER0gcivigOePaw==}
+    peerDependencies:
+      svelte: ^5.0.0
+      zod: ^4.0.0
+
   '@lucide/svelte@1.53.0':
     resolution: {integrity: sha512-RZTHcLAwwjAz+rO1S4IPQSTzDycGZWhSYa0GS3sXAoJ3GTHdBZyHCXutIxJketIAoaIkcmFK5Ucfo2+WBYpKLA==}
     peerDependencies:
@@ -204,21 +215,6 @@ packages:
   '@noble/hashes@2.4.0':
     resolution: {integrity: sha512-X5XaVWZIBCT7HHZGm5I7ZQXDwLG+bGXuSrMQAW+7Zvl87h1kmc1ZB1VSRJcpUfoUrGQp4Fkoxm5kZ+Ms+aW+eA==}
     engines: {node: '>= 20.19.0'}
-
-  '@openuidev/lang-core@0.4.1':
-    resolution: {integrity: sha512-t9XSiORKTgyn6pWv8qqBkgD45PBhORdGWpQAHo3APvj9SYy7YprKURQgmXNu3z6E/Ds8tsLAI+AZjX3errH+jQ==}
-    peerDependencies:
-      '@modelcontextprotocol/sdk': '>=1.0.0'
-      zod: ^3.25.0 || ^4.0.0
-    peerDependenciesMeta:
-      '@modelcontextprotocol/sdk':
-        optional: true
-
-  '@openuidev/svelte-lang@0.4.2':
-    resolution: {integrity: sha512-qE/2ngFdOIEPb3qVKhPXquwJthJN/ocuRTb59d6QK85VMPfunL79kX2Xqcb3bt3YTSgDz5B/u9oq4T7fQruv2Q==}
-    peerDependencies:
-      svelte: '>=5.0.0'
-      zod: ^3.25.0 || ^4.0.0
 
   '@oxc-project/types@0.149.0':
     resolution: {integrity: sha512-Efcc+iF0j3Bf67YjEqIqWXbX5XddXoK/Mw4K1/JuXwRCZ8N16VR7iT23nlCc9XrveFVh/E5Rqs2StT0V8v9LdA==}
@@ -2275,6 +2271,16 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
+  '@json-render/core@0.21.1(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
+
+  '@json-render/svelte@0.21.1(svelte@5.57.1)(zod@4.4.3)':
+    dependencies:
+      '@json-render/core': 0.21.1(zod@4.4.3)
+      svelte: 5.57.1
+      zod: 4.4.3
+
   '@lucide/svelte@1.53.0(svelte@5.57.1)':
     dependencies:
       svelte: 5.57.1
@@ -2295,19 +2301,6 @@ snapshots:
   '@noble/hashes@1.8.0': {}
 
   '@noble/hashes@2.4.0': {}
-
-  '@openuidev/lang-core@0.4.1(zod@4.4.3)':
-    dependencies:
-      ci-info: 4.4.0
-      zod: 4.4.3
-
-  '@openuidev/svelte-lang@0.4.2(svelte@5.57.1)(zod@4.4.3)':
-    dependencies:
-      '@openuidev/lang-core': 0.4.1(zod@4.4.3)
-      svelte: 5.57.1
-      zod: 4.4.3
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
 
   '@oxc-project/types@0.149.0': {}
 

@@ -1,12 +1,10 @@
 <script lang="ts">
-	import type { ComponentRenderProps } from '@openuidev/svelte-lang';
-	import { isReactiveAssign } from '@openuidev/lang-core';
+	import type { BaseComponentProps } from '@json-render/svelte';
 	import { usePresentation } from './context';
-	let { props }: ComponentRenderProps<{ label: string; checked: unknown }> = $props();
+	let { props }: BaseComponentProps<{ label: string; stateKey: string; defaultChecked?: boolean }> = $props();
 	const context = usePresentation();
-	let binding = $derived(isReactiveAssign(props.checked) ? props.checked : null);
-	let checked = $derived(Boolean(binding ? context.variables[binding.target] : props.checked));
-	function change(value: boolean) { if (binding) context.updateVariable(binding.target, value); }
+	let checked = $derived(Boolean(context.state[`control:${props.stateKey}`] ?? props.defaultChecked ?? false));
+	function change(value: boolean) { context.update(`control:${props.stateKey}`, value); }
 </script>
 <label class="presentation-checkbox"><input type="checkbox" checked={checked} onchange={(event) => change(event.currentTarget.checked)} /><span>{props.label}</span></label>
 <style>

@@ -6,7 +6,8 @@
 // - a real Metric/Grid/Card/Chart/Table presentation has no document-level or
 //   scrollable horizontal overflow at 320px and 1440px;
 // - the metric grid collapses to one column at 320px and expands at desktop;
-// - Vega renders a non-empty canvas at both viewport sizes.
+// - Vega renders a non-empty canvas at both viewport sizes; a real point hover
+//   displays a bounded, Fella-styled tooltip with result-bound values.
 // Screenshots are retained in a unique /tmp directory. Vite uses a separate
 // unique /tmp cache to avoid invalidating another browser script's modules.
 
@@ -17,19 +18,18 @@ import { join } from 'node:path';
 import { createServer } from 'vite';
 import { chromium } from '@playwright/test';
 
-const program = `root = Document([
-	Title("Quarterly sales overview"),
-	Caption("Saved result · four quarters"),
-	Grid([
-		Metric("sales", "revenue", 3, "Q4 revenue", "USD"),
-		Metric("sales", "orders", 3, "Q4 orders", "orders"),
-		Metric("sales", "revenue", 2, "Q3 revenue", "USD")
-	], 3),
-	Card([
-		Chart("sales", {"mark":"line","encoding":{"x":{"field":"period","type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}}, "Revenue by quarter"),
-		Table("sales", ["period", "revenue", "orders"], null, "Quarterly detail", {"revenue":{"label":"Net revenue","format":"currency","unit":"USD","decimals":2},"orders":{"label":"Orders","format":"number","decimals":0}})
-	], "Saved analysis", "Exact values remain attached to the source result", "plain")
-])`;
+const spec = { root: 'document', elements: {
+	document: { type: 'Document', props: {}, children: ['title', 'caption', 'metrics', 'card'] },
+	title: { type: 'Title', props: { content: 'Quarterly sales overview' }, children: [] },
+	caption: { type: 'Caption', props: { content: 'Saved result · four quarters' }, children: [] },
+	metrics: { type: 'Grid', props: { columns: 3 }, children: ['q4-revenue', 'q4-orders', 'q3-revenue'] },
+	'q4-revenue': { type: 'Metric', props: { resultId: 'sales', field: 'revenue', row: 3, title: 'Q4 revenue', unit: 'USD' }, children: [] },
+	'q4-orders': { type: 'Metric', props: { resultId: 'sales', field: 'orders', row: 3, title: 'Q4 orders', unit: 'orders' }, children: [] },
+	'q3-revenue': { type: 'Metric', props: { resultId: 'sales', field: 'revenue', row: 2, title: 'Q3 revenue', unit: 'USD' }, children: [] },
+	card: { type: 'Card', props: { title: 'Saved analysis', detail: 'Exact values remain attached to the source result', tone: 'plain' }, children: ['chart', 'table'] },
+	chart: { type: 'Chart', props: { resultId: 'sales', title: 'Revenue by quarter', spec: { mark: { type: 'line', point: true }, encoding: { x: { field: 'period', type: 'ordinal' }, y: { field: 'revenue', type: 'quantitative' }, tooltip: [{ field: 'period', type: 'ordinal' }, { field: 'revenue', type: 'quantitative' }] } } }, children: [] },
+	table: { type: 'Table', props: { resultId: 'sales', title: 'Quarterly detail', fields: ['period', 'revenue', 'orders'], columnFormats: { revenue: { label: 'Net revenue', format: 'currency', unit: 'USD', decimals: 2 }, orders: { label: 'Orders', format: 'number', decimals: 0 } } }, children: [] }
+} };
 
 const result = {
 	id: 'sales',
@@ -67,7 +67,7 @@ const message = {
 		evidence: [],
 		verification: []
 	},
-	presentation_snapshot: { workspace, turn_id: turnId, program, results: [result] }
+	presentation_snapshot: { workspace, turn_id: turnId, spec, results: [result] }
 };
 
 const entry = `
@@ -161,7 +161,7 @@ try {
 	await page.waitForFunction(() => !document.querySelector('.presentation-chart [role="status"]')?.textContent?.trim(), null, { timeout: 30_000 });
 
 	assert.equal(navigations, 1, 'fixture should have only its initial navigation');
-	assert.equal(await page.locator('.analytical-presentation').count(), 1, 'cached answer should mount as an OpenUI presentation');
+	assert.equal(await page.locator('.analytical-presentation').count(), 1, 'cached answer should mount through the json-render catalog');
 	assert.equal(await page.locator('.presentation-metric').count(), 3, 'all three metric cards should render');
 	assert.equal(await page.locator('.presentation-card').count(), 1, 'the composed card should render');
 	assert.equal(await page.getByRole('heading', { name: 'Quarterly detail' }).count(), 1, 'the requested Table component should render');
@@ -170,6 +170,40 @@ try {
 	assert.deepEqual(await page.evaluate(() => window.__fellaInvocations), [], 'cached artifact should not invoke IPC, including artifact_resolve');
 	assert.equal(await page.evaluate(() => window.__mountCount), 1);
 	assert.equal(await page.evaluate(() => window.__immediatePresentation), true, 'presentation must exist immediately after mount');
+
+	const chartCanvas = page.locator('.presentation-chart-target canvas');
+	await chartCanvas.scrollIntoViewIfNeeded();
+	const chartBounds = await chartCanvas.boundingBox();
+	assert.ok(chartBounds, 'the chart canvas should be available for an interactive hover');
+	const plottedPixel = await chartCanvas.evaluate(canvas => {
+		const context = canvas.getContext('2d');
+		if (!context) return null;
+		const chart = canvas.closest('.analytical-document');
+		const color = getComputedStyle(chart).getPropertyValue('--chart-violet').trim();
+		const channels = color.match(/[\da-f]{2}/gi)?.map(channel => parseInt(channel, 16));
+		if (!channels || channels.length < 3) return null;
+		const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+		for (let y = 0; y < canvas.height; y++) {
+			for (let x = 0; x < canvas.width; x++) {
+				const offset = (y * canvas.width + x) * 4;
+				if (pixels[offset + 3] > 180 && channels.every((channel, index) => Math.abs(channel - pixels[offset + index]) < 24)) return { x, y };
+			}
+		}
+		return null;
+	});
+	assert.ok(plottedPixel, 'the chart should paint its first Fella series color for hover targeting');
+	await page.mouse.move(chartBounds.x + plottedPixel.x + 0.5, chartBounds.y + plottedPixel.y + 0.5);
+	let chartTooltip = page.locator('.fella-chart-tooltip');
+	assert.equal(await chartTooltip.isVisible(), true, 'hovering a plotted result point should show a data tooltip');
+	assert.ok(await chartTooltip.locator('.fella-chart-tooltip-row').count() >= 1, 'tooltip should contain result-bound field/value rows');
+	const tooltipStyle = await chartTooltip.evaluate(element => ({
+		borderRadius: getComputedStyle(element).borderRadius,
+		maxWidth: getComputedStyle(element).maxWidth,
+		right: element.getBoundingClientRect().right,
+		chartRight: element.parentElement.getBoundingClientRect().right
+	}));
+	assert.notEqual(tooltipStyle.borderRadius, '0px', 'tooltip should use Fella surface curvature');
+	assert.ok(tooltipStyle.right <= tooltipStyle.chartRight + 1, 'tooltip should stay within the chart bounds');
 
 	async function inspectViewport(width, height, label) {
 		await page.setViewportSize({ width, height });

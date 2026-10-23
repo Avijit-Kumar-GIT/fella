@@ -1,32 +1,33 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
+	import { CatalogRenderer } from '@json-render/svelte';
 	import { validatePresentation } from '../../presentation/validate';
-	import { createPresentationStore, evaluatePresentationAction } from '../../presentation/runtime';
+	import { evaluatePresentationAction } from '../../presentation/runtime';
 	import { resolvePresentationState, sanitizeState, validateResults } from '../../presentation/results';
-	import type { BoundResult, PresentationAction, PresentationState } from '../../presentation/types';
+	import type { BoundResult, PresentationAction, PresentationSpec, PresentationState } from '../../presentation/types';
+	import { presentationRegistry } from '../../presentation/library';
 	import { providePresentation } from './context';
-	import PresentationNode from './PresentationNode.svelte';
 	import ResultTable from './ResultTable.svelte';
-	let { program, results, initialState = {}, onstatechange, onaction }: {
-		program: string;
+	let { spec, results, initialState = {}, onstatechange, onaction }: {
+		spec: PresentationSpec;
 		results: BoundResult[];
 		initialState?: PresentationState;
 		onstatechange?: (state: PresentationState) => void;
 		onaction?: (action: PresentationAction) => void;
 	} = $props();
-	let presentationState: PresentationState = $state({});
+	let presentationState = $state<PresentationState>({});
 	presentationState = untrack(() => sanitizeState(initialState));
 	let actionError = $state('');
-	let previousProgram = untrack(() => program);
+	let previousSpec = untrack(() => JSON.stringify(spec));
 	let safeResults = $derived.by(() => { try { validateResults(results); return results; } catch { return []; } });
-	let validation = $derived(validatePresentation(program, safeResults, presentationState));
-	let effectiveState = $derived(validation.root ? resolvePresentationState(validation.root, presentationState, safeResults, validation.stateDefaults) : sanitizeState(presentationState));
+	let validation = $derived(validatePresentation(spec, safeResults));
+	let effectiveState = $derived(validation.valid && validation.spec ? resolvePresentationState(validation.spec, presentationState, safeResults) : sanitizeState(presentationState));
 
 	$effect(() => {
-		const nextProgram = program;
-		const incoming = sanitizeState(initialState);
-		if (nextProgram !== previousProgram) {
-			previousProgram = nextProgram;
+		const next = JSON.stringify(spec);
+		const incoming = resolvePresentationState(spec, sanitizeState(initialState), safeResults);
+		if (next !== previousSpec) {
+			previousSpec = next;
 			presentationState = incoming;
 		} else if (JSON.stringify(incoming) !== JSON.stringify(presentationState)) presentationState = incoming;
 	});
@@ -38,45 +39,34 @@
 	}
 
 	function update(key: string, value: unknown): void {
-		commit({ ...presentationState, [key]: value });
-	}
-
-	function updateVariable(name: string, value: unknown): void {
-		const defaults = validation.stateDefaults;
-		if (!Object.hasOwn(defaults, name)) return;
-		const fallback = defaults[name];
-		if (!(typeof value === typeof fallback || value === null && fallback === null)) return;
-		if (typeof value === 'string' && value.length > 256 || typeof value === 'number' && (!Number.isFinite(value) || Math.abs(value) > 1e12) || value !== null && !['string', 'number', 'boolean'].includes(typeof value)) return;
-		commit({ ...presentationState, [name]: value });
+		commit({ ...effectiveState, [key]: value });
 	}
 
 	function runAction(action: unknown): void {
-		const defaults = validation.stateDefaults;
-		const store = createPresentationStore(defaults, presentationState);
-		try {
-			const outcome = evaluatePresentationAction(action, defaults, store);
-			const next = sanitizeState(store.getSnapshot());
-			if (outcome.error) { actionError = outcome.error; return; }
-			if (JSON.stringify(next) !== JSON.stringify(presentationState)) commit(next);
-			if (outcome.followUp) onaction?.({ type: 'continue', message: outcome.followUp, state: next });
-		} finally { store.dispose(); }
+		const safe = evaluatePresentationAction(action);
+		if (!safe) { actionError = 'This presentation action is unavailable.'; return; }
+		if (safe.type === 'follow_up') {
+			onaction?.({ type: 'continue', message: safe.message, state: effectiveState });
+			return;
+		}
+		const canSet = Object.values(spec.elements).some((element) => ['Select', 'SegmentedControl', 'Checkbox'].includes(element.type) && element.props.stateKey === safe.stateKey);
+		if (!canSet) { actionError = 'This action can only update a control in this presentation.'; return; }
+		commit({ ...effectiveState, [`control:${safe.stateKey}`]: safe.value });
 	}
 
 	providePresentation({
 		get results() { return safeResults; },
 		get state() { return effectiveState; },
-		get variables() { return effectiveState; },
 		get interactive() { return !!onaction; },
 		update,
-		updateVariable,
 		runAction,
 		action(action) { onaction?.({ ...action, state: sanitizeState({ ...effectiveState, ...action.state }) }); }
 	});
 </script>
 
-<div class="analytical-presentation" data-presentation-version="fella-openui-v2">
-	{#if validation.valid && validation.root}
-		<PresentationNode node={validation.root} />
+<div class="analytical-presentation" data-presentation-version="fella-json-render-v1">
+	{#if validation.valid && validation.spec}
+		<CatalogRenderer spec={validation.spec} registry={presentationRegistry} state={effectiveState} />
 		{#if actionError}<p class="action-error" role="status">{actionError}</p>{/if}
 	{:else}
 		<div class="fallback" role="status"><p>This presentation could not be displayed. The saved analysis has not changed.</p>

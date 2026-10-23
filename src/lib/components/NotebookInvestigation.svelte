@@ -29,7 +29,7 @@
 		error: string;
 	}
 
-	// Deliberately no presentationRepair, ask, rerun, SQL, or suggestion API.
+	// Deliberately no ask, rerun, SQL, or suggestion API.
 	// The shared resolver may persist the existing output link/cache, but can
 	// neither call a model nor rerun analysis through this bridge.
 	const savedOutputBridge = {
@@ -134,7 +134,7 @@
 			id: `notebook_${run.id}`, role: 'assistant', text: run.result.text, ts: 0,
 			answer: {
 				turn_id: run.id, trace: run.trace, plan: run.plan, contract: run.contract, provenance: run.provenance,
-				text: run.result.text, presentation_program: run.result.presentation_program,
+				text: run.result.text, presentation_spec: run.result.presentation_spec,
 				evidence: run.result.evidence.filter(persistedEvidence),
 				verification: run.verification?.checks ?? run.result.verification ?? [],
 				status: run.result.status, usage: run.result.usage,

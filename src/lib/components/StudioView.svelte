@@ -351,11 +351,11 @@
 			let presentation: import('$lib/studio-report').StudioReportOptions['presentation'];
 			try {
 				const { exportPresentation } = await import('$lib/presentation/export');
-				presentation = ({ program, results, state }) => {
-					const snapshot = exportPresentation(program, results, { state });
+				presentation = ({ spec, results, state }) => {
+					const snapshot = exportPresentation(spec, results, { state });
 					return { markdown: snapshot.markdown, disclosures: snapshot.warnings };
 				};
-			} catch { /* The original program, answer and exact values remain exportable. */ }
+			} catch { /* The original presentation, answer and exact values remain exportable. */ }
 			const markdown = buildStudioReport(document, outputs, { presentation });
 			const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
 			const link = window.document.createElement('a');
@@ -502,7 +502,7 @@
 <Dialog.Root bind:open={reportManagerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content report-manager">
 	<div class="picker-heading"><div><Dialog.Title class="dialog-title">Report snapshots</Dialog.Title><Dialog.Description class="dialog-description">Portable, read-only copies of a report and its saved analysis.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close report snapshots"><Icon name="x" size={16} /></Dialog.Close></div>
 	{#if reportPreview}
-		<div class="report-preview-summary"><h3>{reportPreview.title}</h3><p>{reportPreview.artifact_count} saved outputs · {reportPreview.run_count} analysis runs</p><p>Fella will retain this as a read-only snapshot. It cannot query original files; imported presentation programs stay inactive.</p><ul>{#each reportPreview.warnings as warning}<li>{warning}</li>{/each}</ul><div class="dialog-actions"><Button variant="ghost" size="sm" disabled={reportBusy} onclick={() => { reportPreview = null; reportJson = ''; }}>Cancel</Button><Button size="sm" disabled={reportBusy} onclick={() => void importReport()}>{reportBusy ? 'Importing…' : 'Import read-only snapshot'}</Button></div></div>
+		<div class="report-preview-summary"><h3>{reportPreview.title}</h3><p>{reportPreview.artifact_count} saved outputs · {reportPreview.run_count} analysis runs</p><p>Fella will retain this as a read-only snapshot. It cannot query original files; imported presentations do not execute code.</p><ul>{#each reportPreview.warnings as warning}<li>{warning}</li>{/each}</ul><div class="dialog-actions"><Button variant="ghost" size="sm" disabled={reportBusy} onclick={() => { reportPreview = null; reportJson = ''; }}>Cancel</Button><Button size="sm" disabled={reportBusy} onclick={() => void importReport()}>{reportBusy ? 'Importing…' : 'Import read-only snapshot'}</Button></div></div>
 	{:else}
 		<div class="report-manager-actions"><Button size="sm" variant="outline" disabled={reportBusy} onclick={() => reportFileInput?.click()}><Icon name="plus" size={14} />Import snapshot…</Button><Button size="sm" variant="ghost" disabled={reportBusy} onclick={() => void refreshReportList()}>Refresh</Button></div>
 		{#if reportFiles.length}<ul class="report-file-list">{#each reportFiles as report (report.id)}<li><button disabled={reportBusy} onclick={() => void openImportedReport(report.id)}><span><strong>{report.title}</strong><small>{report.artifact_count} outputs · {report.run_count} runs · {new Date(report.modified_at_ms).toLocaleDateString()}</small></span><span>Open</span></button></li>{/each}</ul>

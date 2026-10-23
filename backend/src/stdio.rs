@@ -462,32 +462,19 @@ async fn dispatch(
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let turn_id: String = required(&request.params, "turnId")?;
                 let title: String = required(&request.params, "title")?;
-                let program: String = required(&request.params, "program")?;
+                let spec: Value = required(&request.params, "spec")?;
                 value_result(crate::engine::artifacts::create_from_run(
                     engine.analytical_data_dir(),
                     &workspace,
                     &turn_id,
                     &title,
-                    &program,
+                    &spec,
                 ))
             }
             "presentation_results" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let turn_id: String = required(&request.params, "turnId")?;
                 engine.presentation_results(&workspace, &turn_id)
-            }
-            "presentation_repair" => {
-                let workspace: String = required(&request.params, "workspaceId")?;
-                let turn_id: String = required(&request.params, "turnId")?;
-                let program: String = required(&request.params, "program")?;
-                let issues: Vec<String> = required(&request.params, "issues")?;
-                let model = request.params.get("model").and_then(Value::as_str);
-                // This intentionally uses the app runtime: saved answers can
-                // reopen with their workspace unmounted, and every repair must
-                // share the same per-turn retry budget. No source tools exist.
-                engine
-                    .repair_presentation(&workspace, &turn_id, &program, &issues, model)
-                    .await
             }
             "artifact_list" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
@@ -517,7 +504,7 @@ async fn dispatch(
                     &artifact_id,
                     base,
                     request.params.get("runId").and_then(Value::as_str),
-                    request.params.get("program").and_then(Value::as_str),
+                    request.params.get("spec").cloned(),
                     &note,
                 )?;
                 let revision = artifact.revisions.last().map(|revision| revision.revision);

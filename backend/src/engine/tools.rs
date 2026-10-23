@@ -2606,7 +2606,7 @@ mod tests {
 
         assert!(
             !Registry::standard().has_tool("make_chart"),
-            "new workspace answers compose OpenUI from saved results; legacy chart evidence is read-only"
+            "new workspace answers compose json-render presentations from saved results; legacy chart evidence is read-only"
         );
 
         let python_disabled = AnalysisCapabilities {

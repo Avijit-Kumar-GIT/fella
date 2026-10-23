@@ -1,4 +1,5 @@
 import type { AnalysisTurn } from './types';
+import type { PresentationSpec } from './presentation/types';
 
 export interface BoundResult {
 	id: string;
@@ -12,8 +13,8 @@ export interface ArtifactRevision {
 	revision: number;
 	parent_revision?: number | null;
 	run_id: string;
-	program: string;
-	library_version: string;
+	spec: PresentationSpec;
+	schema_version: string;
 	change_note: string;
 	created_at_ms: number;
 }
@@ -133,12 +134,11 @@ export interface ImportedReportPackage {
 	version: number;
 	manifest: { generator: string; origin_workspace_fingerprint: string; snapshot_at_ms: number; artifact_count: number; run_count: number; content_sha256: string; exclusions: string[] };
 	document: { origin_document_id: string; origin_version: number; title: string; body: string; placements: Array<{ id: string; artifact_id: string; view_state: Record<string, unknown> }> };
-	artifacts: Array<{ id: string; origin_artifact_id: string; origin_revision: number; title: string; run_id: string; program: string; library_version: string; change_note: string }>;
+	artifacts: Array<{ id: string; origin_artifact_id: string; origin_revision: number; title: string; run_id: string; spec: PresentationSpec; schema_version: string; change_note: string }>;
 	runs: Array<{ id: string; origin_run_id: string; original_question: string; answer: string; state: string; result_status: string; verification_status: string | null; checks: unknown[]; result_checks: unknown[]; source_revision: string | null; semantics: unknown; definitions: string[]; source_labels: string[]; methods: Array<{ evidence_id: string; tool: string; sql: string | null }>; results: BoundResult[] }>;
 }
 export interface ReportPackagePreview {
 	read_only: boolean;
-	programs_executable: boolean;
 	source_authority: boolean;
 	title: string;
 	artifact_count: number;
