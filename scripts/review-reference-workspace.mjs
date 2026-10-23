@@ -58,7 +58,7 @@ try {
  check(Math.abs(sidebar.width-268)<1,'Sidebar is not 268px');check(Math.abs(chip.cx-primary.cx)<1,'Workspace chip is not centered in Chat');check(Math.abs(pane.width-380)<1,'Investigation pane is not 380px');check(Math.abs(mark.cx-pane.cx)<1,'Investigation mark is not centered');
  const fonts=await page.evaluate(()=>({body:getComputedStyle(document.body).fontFamily,data:getComputedStyle(document.querySelector('.analytical-answer table')).fontFamily}));check(fonts.body.startsWith('Inter'),'Inter is not active');check(fonts.data.includes('JetBrains'),'Data font is not JetBrains Mono');measurements.push({fonts});
  await noOverflow('wide Chat');await capture('01-chat-sources-wide');
- await page.getByRole('tab',{name:/^Brief/}).click();await capture('02-brief');
+ await page.getByRole('tab',{name:/^Brief/}).click();check((await page.locator('.brief-objective').innerText()).includes(q),'Brief does not show the saved Investigation objective');await capture('02-brief');
  await page.getByRole('tab',{name:/^Questions/}).click();
  const field=page.getByRole('textbox',{name:'New investigation question',exact:true});await field.fill('Which sources need reconciliation before a final decision?');await page.getByRole('button',{name:'Add question',exact:true}).click();
  await page.locator('.question-row-summary').filter({hasText:'Which sources need reconciliation before a final decision?'}).waitFor();
@@ -67,8 +67,10 @@ try {
  const tabsAfter=await rect('.investigation-nav');check(Math.abs(tabsBefore.y-tabsAfter.y)<1,'Investigation section scroll moves its navigation');
  await page.locator('.investigation-section-scroll').evaluate(element=>{element.scrollTop=0;});
  await capture('03-questions');
- await page.getByRole('tab',{name:/^Analysis/}).click();await page.locator('.run-overview .steps li').first().waitFor();await capture('04-analysis');
- await page.getByRole('tab',{name:/^Results/}).click();await capture('05-results');
+ await page.getByRole('tab',{name:/^Sources/}).click();check(await page.locator('.source-list li').count()===5,'Sources should show the five-file preview before expansion');await page.getByRole('button',{name:'Show all 6 matching sources'}).click();await page.locator('.source-list').getByText('sales.csv',{exact:true}).waitFor();check(await page.locator('.source-list li').count()===6,'Sources does not reveal the complete catalog when expanded');
+ await page.getByRole('tab',{name:/^Questions/}).click();check(await page.locator('.question-row-summary').count()===5,'Questions does not show the four saved questions and the newly added question');
+ await page.getByRole('tab',{name:/^Analysis/}).click();await page.locator('.run-overview .steps li').first().waitFor();check(await page.locator('.run-overview .steps li').count()===2,'Analysis does not show the saved run steps');await capture('04-analysis');
+ await page.getByRole('tab',{name:/^Results/}).click();await page.locator('.results-summary .headline').waitFor();check((await page.locator('.results-summary').innerText()).includes('Packs fell'),'Results does not show the saved Investigation findings');await capture('05-results');
  await page.getByRole('button',{name:'Files',exact:true}).click();await page.locator('.file-row').filter({hasText:'sales.csv'}).click();await page.locator('.source-view .table-scroll table').waitFor();await capture('06-files');
  await page.getByRole('button',{name:'Reports',exact:true}).click();await page.locator('.report-row').filter({hasText:doc.title}).click();await page.locator('.studio-document h1').waitFor();await capture('07-report');
  await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('tab',{name:/^Sources/}).click();

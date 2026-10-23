@@ -5,7 +5,7 @@
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import EvidenceSummary, { answerNeedsReview, answerSemanticGaps } from './EvidenceSummary.svelte';
 	import Icon from './Icon.svelte';
-	import FellaMark from './FellaMark.svelte';
+	import Logo from './Logo.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalAnswer from './AnalyticalAnswer.svelte';
 	import { enterUp } from '$lib/motion';
@@ -80,7 +80,7 @@
 		<span class="sr-only">Fella replied: </span>
 		<div class="assistant-heading">
 			<div class="assistant-identity">
-				<FellaMark size={16} fontSize={8} active={message.pending} />
+				<Logo size={16} active={message.pending} />
 				{#if needsAttention}
 					<Badge
 						variant="default"

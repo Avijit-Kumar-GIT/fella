@@ -61,8 +61,11 @@ unrelated model, backend, packaging, or broad application suites for this redesi
   four-question plan survives navigation, section scrolling leaves navigation
   stationary, and the chat draft survives Files / Chat navigation.
 - Eleven screenshots cover Chat, all Investigation sections, Files, Reports,
-  narrow layouts and the model picker. Successful capture artifacts are local:
-  `/tmp/fella-reference-redesign-skErZU/`. Screenshots are deliberately untracked.
+  narrow layouts and the model picker. The review also checks that Brief shows
+  its saved objective, Sources lists cataloged files, Questions retains all four
+  saved questions, Analysis displays the saved steps, and Results displays saved
+  findings. Successful capture artifacts are local:
+  `/tmp/fella-reference-redesign-cCVOL3/`. Screenshots are deliberately untracked.
 - Reproduce the focused review with `node scripts/review-reference-workspace.mjs`
   after building the frontend and preparing the Electron engine. It uses a new
   disposable local profile and prints its capture directory and measurements.
@@ -91,5 +94,7 @@ now use the catalog unit.
 
 This validates rendered layout and deterministic saved-work interactions on
 Linux Electron, not live model quality or native Windows/macOS behavior. The
+window now uses OS-native title bars and controls; that native appearance still
+needs a visual check on Windows and macOS. The
 fixture has no model credentials, so its genuine connection notice is visible.
 No broad app suites, live-model benchmarks or unrelated backend tests were run.

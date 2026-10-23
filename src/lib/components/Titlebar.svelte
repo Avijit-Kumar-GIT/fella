@@ -9,7 +9,7 @@
 	} = $props();
 </script>
 
-<header class="titlebar" class:with-window-controls={session.sidebarCollapsed || session.focus} aria-label="Workspace navigation">
+<header class="titlebar" aria-label="Workspace navigation">
 	<div class="titlebar-workspace"><WorkspaceSwitcher compact onselect={onworkspaceselect} /></div>
 	<div class="titlebar-actions">
 		{#if session.activeChat.workspaceScope}
@@ -38,5 +38,4 @@
 	.titlebar-actions { position:absolute; top:14px; right:12px; display:flex; gap:2px; pointer-events:auto; -webkit-app-region:no-drag; }
 	:global(.chrome-action) { display:grid; width:28px; height:28px; place-items:center; padding:0; border:0; border-radius:50%; background:transparent; color:var(--text-faint); cursor:pointer; }
 	:global(.chrome-action:hover), :global(.chrome-action[data-state='open']) { background:var(--bg-raised); color:var(--text); }
-	.with-window-controls .titlebar-workspace { max-width:calc(100% - 240px); }
 </style>

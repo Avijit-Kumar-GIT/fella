@@ -2,7 +2,7 @@
 	import { session, GENERAL_WORKSPACE_ID } from '$lib/session.svelte';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
-	import FellaMark from './FellaMark.svelte';
+	import Logo from './Logo.svelte';
 	import { openFolder } from '$lib/commands';
 
 	let {
@@ -78,10 +78,10 @@
 			title={`Switch workspace (${shortcutModifier}+1–9)`}
 		>
 			{#if identity}
-				<FellaMark size={36} fontSize={15} active={session.busy} />
+				<Logo size={36} active={session.busy} />
 				<span class="workspace-identity-copy"><strong>Fella</strong><small>{activeLabel.replace(/^Fella\s+/i, '')}</small></span>
 			{:else}
-				<FellaMark size={20} fontSize={10} active={session.busy} />
+				<Logo size={20} active={session.busy} />
 				<span class="workspace-switcher-label">{activeLabel}</span>
 			{/if}
 			<Icon name="chevron-down" size={12} />

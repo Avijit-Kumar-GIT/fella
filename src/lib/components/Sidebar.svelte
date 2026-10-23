@@ -10,7 +10,6 @@
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
-	import WindowControls from './WindowControls.svelte';
 
 	let {
 		onsearch,
@@ -294,7 +293,6 @@
 
 	<aside class="sidebar">
 			<div class="header">
-				<WindowControls />
 				<div class="header-actions">
 					<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={14} /></Button>
 					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="Search" title={`Search (${shortcutModifier}+K)`} aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog" onclick={() => onsearch?.()}><Icon name="search" size={14} /></Button>

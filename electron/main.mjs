@@ -188,7 +188,6 @@ async function waitForDevServer(url, timeoutMs = 15000) {
 }
 
 async function createWindow() {
-	const mac = process.platform === 'darwin';
 	const savedState = await readWindowState();
 	const win = new BrowserWindow({
 		...(savedState?.bounds ?? { width: 1280, height: 800 }),
@@ -196,11 +195,9 @@ async function createWindow() {
 		minHeight: 640,
 		resizable: true,
 		show: false,
-		// macOS supplies its traffic lights; Windows and Linux use the same
-		// functional controls in Fella’s sidebar header.
-		frame: mac,
-		titleBarStyle: mac ? 'hiddenInset' : undefined,
-		trafficLightPosition: mac ? { x:16, y:26 } : undefined,
+		// Let each operating system draw and position its native title bar and
+		// window controls.
+		frame: true,
 		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,
 		autoHideMenuBar: false,
 		title: 'Fella',

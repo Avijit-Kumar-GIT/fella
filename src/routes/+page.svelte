@@ -8,7 +8,6 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
-	import WindowControls from '$lib/components/WindowControls.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
@@ -424,7 +423,7 @@
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		{#if session.sidebarCollapsed || session.focus}
-			<div class="collapsed-navigation"><WindowControls /><button aria-label="Expand sidebar" title="Expand sidebar" onclick={() => { session.focus = false; if (session.sidebarCollapsed) session.toggleSidebar(); }}><Icon name="panel" size={14} /></button></div>
+			<div class="collapsed-navigation"><button aria-label="Expand sidebar" title="Expand sidebar" onclick={() => { session.focus = false; if (session.sidebarCollapsed) session.toggleSidebar(); }}><Icon name="panel" size={14} /></button></div>
 		{/if}
 		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
@@ -598,7 +597,7 @@
 	.primary-workspace { position:relative; display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; overflow:hidden; container-name:primary-pane; container-type:inline-size; }
 	.primary-workspace.reports.navigation-collapsed { padding-top:52px; }
 	.settings-workspace { display:flex; flex:1; min-height:0; padding-top:56px; }
-	.collapsed-navigation { position:absolute; top:16px; left:16px; z-index:25; display:flex; align-items:center; gap:12px; -webkit-app-region:drag; }
+	.collapsed-navigation { position:absolute; top:16px; left:16px; z-index:25; display:flex; align-items:center; -webkit-app-region:drag; }
 	.collapsed-navigation > button { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; color:var(--text-dim); background:var(--bg-raised); -webkit-app-region:no-drag; }
 	.conversation-workspace[hidden] { display:none; }
 	.conversation-workspace {
