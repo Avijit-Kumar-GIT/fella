@@ -43,7 +43,7 @@
 		</div>
 		<div class="workspace-context-actions">
 			{#if session.workspacePaneOpen && !compact}
-				<Button variant="ghost" size="icon" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand panel'} title={expanded ? 'Restore split view' : 'Expand panel'} onclick={ontoggleexpand}><Icon name={expanded ? 'panel' : 'arrow-up-right'} size={14} /></Button>
+				<Button variant="ghost" size="icon" class="workspace-pane-toggle" aria-label={expanded ? 'Restore split view' : 'Expand panel'} title={expanded ? 'Restore split view' : 'Expand panel'} onclick={ontoggleexpand}><Icon name={expanded ? 'columns-2' : 'arrow-up-right'} size={14} /></Button>
 			{/if}
 			{#if workspaceAvailable}
 				<Button
@@ -57,7 +57,7 @@
 					title={panelActionLabel}
 					onclick={() => session.contentLayout === 'notebook' ? session.openWorkspaceToolChooser() : session.toggleWorkspacePane()}
 				>
-					<Icon name="panel" size={16} />
+					<Icon name="panel-right" size={16} />
 				</Button>
 			{:else if historyOnly}
 				<Button
