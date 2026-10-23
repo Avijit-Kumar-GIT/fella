@@ -66,6 +66,31 @@ progress and Questions without repeating answer bodies or evidence already
 shown in chat. Selecting an answered Question navigates to its matching chat
 answer. Low-frequency analytical actions live in the answer actions menu.
 
+When a Question has a saved linked analysis but no latest-run pointer, opening
+it uses the newest linked run while preserving the recorded Question status.
+
 The deterministic desktop cases now assert this revised product behavior. The
 prior v1.1 setup correction and its original results above are retained as
-historical evidence; the v1.2 run has not yet been recorded.
+historical evidence.
+
+### Validation record
+
+- `pnpm check`: passed with zero errors or warnings.
+- `pnpm build`: passed. Vite still reports the existing client chunk-size
+  warning for bundles over 500 kB.
+- The Notebook config ran three cases successfully; the fourth first failed
+  because its final selector treated the Chat tab as a button. After correcting
+  that role-based locator, the focused case passed. Together, all four Notebook
+  cases passed against the rebuilt app. Coverage includes the wide/right-pane
+  layout, compact pane tabs, retained chat draft, answer navigation, saved
+  result review, report creation, and no model or analytics execution.
+- An initial run without the Notebook config used the previous static app build
+  and failed on stale controls; it is retained as a setup failure, not product
+  evidence.
+- One related legacy workspace test was also attempted for the moved “Open in
+  Investigation” action. It stopped before the action because its setup still
+  expects the removed “Workspaces / Add repository” UI. The current start screen
+  shows General, “Choose a folder,” and “Try sample data.” The test assertion
+  was updated for the action menu, but this legacy flow remains unverified.
+- These are Linux desktop results, not Windows/macOS coverage. No live model or
+  analytics run was used.

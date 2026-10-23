@@ -48,9 +48,10 @@ test('Chat and Notebook retain the conversation, draft and saved result at wide 
  await composer.fill('Keep this draft while changing layout');
  const transcript = await page.getByRole('log', { name: 'conversation', exact: true }).elementHandle();
  const marker = await page.evaluate(() => { document.__notebookMarker = crypto.randomUUID(); return document.__notebookMarker; });
- await page.getByRole('button', { name: 'Notebook', exact: true }).click();
+ await page.getByRole('button', { name: 'Notebook view', exact: true }).click();
  await expect(page.locator('.workspace-chat-layout')).toHaveAttribute('data-notebook', 'true');
- await expect(page.locator('.workspace-tools-pane')).toContainText('Quarterly revenue');
+ await expect(page.locator('.workspace-tools-pane')).toContainText(question);
+ await expect(page.locator('.workspace-conversation-pane')).toContainText('Quarterly revenue');
  await expect(composer).toHaveValue('Keep this draft while changing layout');
  const rectangles = await page.locator('.workspace-chat-layout').evaluate(host => ({
   investigation: host.querySelector('.workspace-tools-pane').getBoundingClientRect().x,
@@ -68,7 +69,7 @@ test('Chat and Notebook retain the conversation, draft and saved result at wide 
  await expect(page.locator('.workspace-tools-pane')).toBeVisible();
  await page.screenshot({ path: test.info().outputPath('compact-notebook.png') });
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
- await page.getByRole('button', { name: 'Chat', exact: true }).click();
+ await page.getByRole('tab', { name: 'Chat', exact: true }).click();
  await expect(composer).toBeVisible();
  await expect(composer).toHaveValue('Keep this draft while changing layout');
  expect(await transcript.evaluate(element => element.isConnected)).toBe(true);
@@ -110,7 +111,7 @@ test('Notebook naming, files and new reports preserve the linked conversation', 
  await openSavedAnswer(desktop, output);
  const composer = page.getByRole('combobox', { name: /Ask about/ });
  await composer.fill('Follow-up draft');
- await page.getByRole('button', { name: 'Notebook', exact: true }).click();
+ await page.getByRole('button', { name: 'Notebook view', exact: true }).click();
  await page.getByRole('button', { name: 'Rename Investigation', exact: true }).click();
  await page.getByRole('textbox', { name: 'Investigation name', exact: true }).fill('Revenue review');
  await page.getByRole('button', { name: 'Save name', exact: true }).click();
@@ -173,7 +174,7 @@ test('Notebook titles legacy runs with the captured Question instead of repeated
  await page.reload();
  await chooseWorkspace(page, 'commerce');
  await page.getByRole('button', { name: `Open conversation: ${conversationTitle}`, exact: true }).click();
- await page.getByRole('button', { name: 'Notebook', exact: true }).click();
+ await page.getByRole('button', { name: 'Notebook view', exact: true }).click();
 
  const questionIndex = page.getByRole('region', { name: 'Investigation Questions', exact: true });
  const questionLink = questionIndex.getByRole('button', { name: `Open answer for ${selectedQuestion}`, exact: true });

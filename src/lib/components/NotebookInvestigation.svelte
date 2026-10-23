@@ -98,8 +98,11 @@
 		if (onopenconversation) onopenconversation();
 		else document.querySelector<HTMLElement>('[role="combobox"][aria-label^="Ask"]')?.focus();
 	}
+	function linkedTurnId(question: InvestigationQuestion): string | undefined {
+		return question.latest_analysis_turn_id ?? question.analysis_turn_ids?.at(-1);
+	}
 	function openQuestion(question: InvestigationQuestion): void {
-		const turnId = question.latest_analysis_turn_id;
+		const turnId = linkedTurnId(question);
 		if (onopenquestion) { onopenquestion(question.id, turnId); return; }
 		if (turnId && ownerConversation) {
 			session.focusConversationAnalysis(ownerConversation, turnId);
@@ -163,7 +166,7 @@
 				<ol class="question-list">
 					{#each questions as question (question.id)}
 						<li class:subquestion={!!question.parent_id} data-question-id={question.id}>
-							<Button variant="ghost" class="question-link" aria-label={question.latest_analysis_turn_id ? `Open answer for ${question.text}` : `Open Question settings for ${question.text}`} onclick={() => openQuestion(question)}>
+							<Button variant="ghost" class="question-link" aria-label={linkedTurnId(question) ? `Open answer for ${question.text}` : `Open Question settings for ${question.text}`} onclick={() => openQuestion(question)}>
 								<span class="question-copy">{question.text}</span>
 								<Badge variant={questionStatusVariant(question)}>{questionStatus(question)}</Badge>
 							</Button>
