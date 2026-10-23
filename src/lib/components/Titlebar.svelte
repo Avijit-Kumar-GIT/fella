@@ -62,25 +62,26 @@
 		<span class="folder faint" title={displayTitle}>{displayTitle}</span>
 		<span class="spacer"></span>
 	{:else}
-		<div class="titlebar-context">
+		<div class="titlebar-workspace">
 			<WorkspaceSwitcher
 				compact
 				onselect={onworkspaceselect}
 			/>
-			<WorkspaceContextBar {expanded} {compact} {ontoggleexpand} />
 		</div>
 		<span class="spacer"></span>
-		<span class="id"><span class="folder" title={displayTitle}>{displayTitle}</span></span>
-		<Button
-			variant="ghost"
-			size="icon"
-			class="hint"
-			onclick={onpalette}
-			aria-label="Search Fella"
-			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
-		>
-			<Icon name="search" size={16} /><span><kbd>{shortcutModifier}</kbd><kbd>K</kbd></span>
-		</Button>
+		<div class="titlebar-actions" role="group" aria-label="Workspace controls">
+			<Button
+				variant="ghost"
+				size="icon"
+				class="toolbar-icon"
+				onclick={onpalette}
+				aria-label="Search Fella"
+				title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
+			>
+				<Icon name="search" size={16} />
+			</Button>
+			<WorkspaceContextBar {expanded} {compact} {ontoggleexpand} />
+		</div>
 	{/if}
 
 	{#if isWindows && isDesktop()}
@@ -122,8 +123,9 @@
 	.titlebar.collapsed {
 		padding-left: var(--space-2);
 	}
-	.titlebar-context { display:flex; flex:none; align-items:center; gap:8px; min-width:0; }
-	.titlebar-context :global(.workspace-switcher.compact) { width:clamp(116px, 15vw, 190px); }
+	.titlebar-workspace { display:flex; flex:none; align-items:center; min-width:0; }
+	.titlebar-workspace :global(.workspace-switcher.compact) { width:clamp(132px, 19vw, 240px); }
+	.titlebar-actions { display:flex; flex:none; align-items:center; gap:4px; }
 	.lights {
 		flex: none;
 		width: 78px;
@@ -158,13 +160,6 @@
 		color: var(--border-strong);
 		cursor: default;
 	}
-	.id {
-		display: flex;
-		align-items: baseline;
-		gap: var(--space-2);
-		min-width: 0;
-		max-width: min(22vw, 240px);
-	}
 	.folder {
 		font-family: var(--sans);
 		font-size: var(--fs-sm);
@@ -174,7 +169,6 @@
 		text-overflow: ellipsis;
 		min-width: 0;
 	}
-	.titlebar:not(.focus) .id { flex: 0 1 auto; min-width: 0; }
 	.folder.faint {
 		color: var(--text-faint);
 	}
@@ -182,20 +176,20 @@
 		flex: 1;
 		align-self: stretch;
 	}
-	:global(.titlebar .hint) {
-		display: inline-flex;
-		align-items: center;
-		gap: 2px;
-		height: auto;
-		min-height: 0;
-		padding: 2px 6px;
+	:global(.titlebar .toolbar-icon) {
+		display: grid;
+		place-items: center;
+		width: 30px;
+		min-width: 30px;
+		height: 30px;
+		min-height: 30px;
+		padding: 0;
 		border-radius: var(--radius-chip);
 		background: transparent;
 		color: var(--text-faint);
-		font-size: var(--fs-sm);
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	:global(.titlebar .hint:hover) {
+	:global(.titlebar .toolbar-icon:hover) {
 		background: var(--bg-inset);
 		color: var(--text-dim);
 	}
@@ -219,14 +213,11 @@
 		color: var(--bg-raised);
 	}
 	@media (max-width: 900px) {
-		.titlebar-context { gap:4px; }
-		.titlebar-context :global(.workspace-switcher.compact) { width:130px; }
-		.id { max-width:18vw; }
+		.titlebar-workspace :global(.workspace-switcher.compact) { width:clamp(120px, 24vw, 190px); }
 	}
 	@media (max-width: 700px) {
 		.titlebar { gap:4px; }
-		.titlebar-context :global(.workspace-switcher.compact) { width:112px; }
-		.id, :global(.titlebar .hint > span) { display:none; }
-		:global(.titlebar .hint) { width:28px; min-width:28px; padding:0; justify-content:center; }
+		.titlebar-workspace :global(.workspace-switcher.compact) { width:clamp(112px, 32vw, 150px); }
+		.titlebar-actions { gap:1px; }
 	}
 </style>

@@ -5,12 +5,10 @@
 		completionsFor,
 		dispatch,
 		openRepository,
-		selectModel,
 		steerRun,
 		stop
 	} from '$lib/commands';
 	import { Button } from '$lib/components/ui/button';
-	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { session } from '$lib/session.svelte';
@@ -18,14 +16,12 @@
 	import type { ContextReference, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
-	import ProviderIcon from './ProviderIcon.svelte';
 
 	let { onafterrun }: { onafterrun?: () => void } = $props();
 
 	let value = $state('');
 	let ta = $state<HTMLTextAreaElement>();
 	let contextInput = $state<HTMLInputElement>();
-	let modelInput = $state<HTMLInputElement>();
 	let wrapEl = $state<HTMLDivElement>();
 	// ↑-recall history belongs to the active conversation.
 	let history = $derived(session.activeChat?.history ?? []);
@@ -44,11 +40,6 @@
 	let unavailableWorkspaceName = $derived(
 		unavailableWorkspacePath?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
-	let composerScopeTarget = $derived(
-		unavailableWorkspacePath
-			? `${unavailableWorkspaceName} (unavailable)`
-			: folderName || 'No folder selected'
-	);
 	let placeholder = $derived(
 		session.pendingKey
 			? `Paste your ${session.pendingKey.display} API key…`
@@ -64,25 +55,8 @@
 	let menuSel = $state(-1); // -1 = nothing highlighted; Enter still submits
 	let menuOff = $state(false); // dismissed with Esc until the text changes
 	let contextOpen = $state(false);
-	let modeOpen = $state(false);
-	let modelOpen = $state(false);
 	let contextQuery = $state('');
-	let modelQuery = $state('');
-	let mode = $derived(session.activeChat?.mode ?? 'ask');
 	let contextRefs = $derived(session.activeChat?.contextRefs ?? []);
-	let providerId = $derived(session.settings?.provider ?? '');
-	let providerName = $derived(
-		(session.providers.find((provider) => provider.id === providerId)?.display ?? providerId) || 'Provider'
-	);
-	let currentModel = $derived(session.model.trim());
-	let modelOptions = $derived.by(() => {
-		const available = new Set(session.health?.models ?? []);
-		if (currentModel) available.add(currentModel);
-		const query = modelQuery.trim().toLowerCase();
-		return [...available]
-			.filter((model) => !query || model.toLowerCase().includes(query))
-			.sort((a, b) => a.localeCompare(b));
-	});
 	let pendingClarification = $derived.by(() => {
 		const latest = session.activeChat?.messages.at(-1);
 		if (latest?.role !== 'assistant' || latest.pending) return null;
@@ -109,7 +83,6 @@
 	});
 	$effect(() => {
 		if (contextOpen) queueMicrotask(() => contextInput?.focus());
-		if (modelOpen) queueMicrotask(() => modelInput?.focus());
 	});
 
 	let pendingInput = $derived(!!session.pendingKey);
@@ -134,10 +107,9 @@
 	}
 
 	function onInput() {
-		if (!pendingInput && value.endsWith('@')) {
+		if (!pendingInput && session.catalog.sources.length > 0 && value.endsWith('@')) {
 			value = value.slice(0, -1);
 			contextOpen = true;
-			modeOpen = false;
 			contextQuery = '';
 		}
 		grow();
@@ -165,7 +137,6 @@
 		// Do not start or steer an analysis across a workspace snapshot change.
 		if (session.mountProgress) return;
 		contextOpen = false;
-		modeOpen = false;
 		// Mid-run: a plain line (not a command, not a key paste) steers the live
 		// answer — cancel and re-ask with it appended. A command or key still
 		// waits for the run to end.
@@ -215,13 +186,6 @@
 		if (contextOpen && e.key === 'Escape') {
 			contextOpen = false;
 			contextQuery = '';
-			e.preventDefault();
-			e.stopPropagation();
-			return;
-		}
-		if (modelOpen && e.key === 'Escape') {
-			modelOpen = false;
-			modelQuery = '';
 			e.preventDefault();
 			e.stopPropagation();
 			return;
@@ -333,35 +297,9 @@
 		session.removeContextReference(ref.kind, ref.key);
 	}
 
-	function chooseMode(next: 'ask' | 'inspect'): void {
-		session.setAskMode(next);
-		modeOpen = false;
-	}
-
-	function setModeMenuOpen(open: boolean): void {
-		modeOpen = open;
-		if (!open) return;
-		contextOpen = false;
-		modelOpen = false;
-		modelQuery = '';
-	}
-
-	function selectMode(value: string): void {
-		if (value === 'ask' || value === 'inspect') chooseMode(value);
-	}
-
-	async function chooseModel(next: string): Promise<void> {
-		if (!(await selectModel(next))) return;
-		modelOpen = false;
-		modelQuery = '';
-		ta?.focus();
-	}
-
 	function onWindowClick(e: MouseEvent): void {
 		if (!wrapEl?.contains(e.target as Node)) {
 			contextOpen = false;
-			modelOpen = false;
-			modelQuery = '';
 		}
 	}
 </script>
@@ -370,7 +308,7 @@
 
 <div class="wrap" bind:this={wrapEl}>
 	{#if contextOpen}
-		<div class="context-menu" transition:enterUp>
+		<div class="context-menu" id="composer-context-menu" role="dialog" aria-label="Add a source or field" transition:enterUp>
 			<div class="context-search">
 				<Icon name="search" size={16} />
 				<Input
@@ -415,7 +353,7 @@
 			<p class="context-hint">Add a source or field to guide your next question.</p>
 		</div>
 	{/if}
-	{#if menuOpen && !contextOpen && !modeOpen && !modelOpen}
+	{#if menuOpen && !contextOpen}
 		<ul
 			class="menu"
 			id="composer-completions"
@@ -510,33 +448,17 @@
 				<Button variant="ghost" size="sm" class="workspace-reopen" onclick={() => void openRepository(unavailableWorkspacePath!, { reportFailure: true })}>Open workspace</Button>
 			</div>
 		{/if}
-		{#if !pendingInput}
+		{#if !pendingInput && contextRefs.length}
 			<div class="context-row">
-				{#if session.workspaceView === 'ask' || session.workspaceView === 'workspace'}
-					<div class="composer-scope-note" data-testid="composer-scope-target" aria-label={`Message target: ${composerScopeTarget}`}>
-						<strong>{composerScopeTarget}</strong>
-					</div>
-				{/if}
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
-							<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
+						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
 						<span>{ref.label}</span>
 						<Button variant="ghost" size="icon" class="remove-ref" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}>
 							<Icon name="x" size={12} />
 						</Button>
 					</span>
 				{/each}
-				<Button
-					variant="ghost"
-					size="sm"
-					class="context-add"
-					aria-label="Add a source or field to this question"
-					title="Add a source or field to this question"
-					aria-expanded={contextOpen}
-					onclick={() => { contextOpen = !contextOpen; modeOpen = false; modelOpen = false; modelQuery = ''; }}
-				>
-					<Icon name="plus" size={16} /> Add source{#if contextRefs.length} · {contextRefs.length}{/if}
-				</Button>
 			</div>
 		{/if}
 		<Textarea
@@ -548,10 +470,10 @@
 			autocapitalize="off"
 			autocomplete="off"
 			role="combobox"
-			aria-expanded={menuOpen && !contextOpen && !modeOpen && !modelOpen}
+			aria-expanded={menuOpen && !contextOpen}
 			aria-controls="composer-completions"
 			aria-autocomplete="list"
-			aria-activedescendant={menuOpen && !contextOpen && !modeOpen && !modelOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
+			aria-activedescendant={menuOpen && !contextOpen && menuSel >= 0 ? 'composer-opt-' + menuSel : undefined}
 			aria-label={
 				unavailableWorkspacePath
 					? `Workspace unavailable: ${unavailableWorkspaceName}`
@@ -566,100 +488,20 @@
 			onfocus={() => (menuOff = false)}
 		></Textarea>
 		<div class="bottom-row">
-			{#if !session.focus}
-				<div class="mode-wrap">
-					<DropdownMenu.Root open={modeOpen} onOpenChange={setModeMenuOpen}>
-						<DropdownMenu.Trigger class="mode-trigger" type="button">
-							<span class="mode-mark" class:inspect={mode === 'inspect'}></span>
-							{mode === 'inspect' ? 'Check data' : 'Ask'}
-							<Icon name="chevron-right" size={12} />
-						</DropdownMenu.Trigger>
-						<DropdownMenu.Portal>
-							<DropdownMenu.Content class="fella-ui-menu-content mode-menu" side="top" align="start" sideOffset={8}>
-								<DropdownMenu.RadioGroup value={mode} onValueChange={selectMode}>
-									<DropdownMenu.RadioItem class="fella-ui-menu-item mode-option" value="ask">
-										<span class="mode-mark"></span>
-										<span class="mode-copy"><strong>Ask</strong><small>Answer from the workspace.</small></span>
-									</DropdownMenu.RadioItem>
-									<DropdownMenu.RadioItem class="fella-ui-menu-item mode-option" value="inspect">
-										<span class="mode-mark inspect"></span>
-										<span class="mode-copy"><strong>Check data</strong><small>Start with the files and show the checks.</small></span>
-									</DropdownMenu.RadioItem>
-								</DropdownMenu.RadioGroup>
-							</DropdownMenu.Content>
-						</DropdownMenu.Portal>
-					</DropdownMenu.Root>
-				</div>
-				{#if !pendingInput}
-					<div class="model-wrap">
-						<Button
-							variant="ghost"
-							size="sm"
-							class="model-trigger"
-							aria-expanded={modelOpen}
-							aria-haspopup="dialog"
-							title={currentModel ? `Model: ${currentModel}` : 'Choose a model'}
-							onclick={() => { modelOpen = !modelOpen; contextOpen = false; modeOpen = false; if (!modelOpen) modelQuery = ''; }}
-						>
-							{#if providerId}<ProviderIcon providerId={providerId} size={14} />{/if}
-							<span class="model-name" class:empty={!currentModel}>{currentModel || 'Choose model'}</span>
-							<Icon name="chevron-right" size={12} />
-						</Button>
-						{#if modelOpen}
-							<div class="model-menu" role="dialog" aria-label="Choose a model" transition:enterUp>
-								<div class="model-menu-head">
-									<strong>Model</strong>
-									<small>{providerName}</small>
-								</div>
-								<label class="model-search">
-									<Icon name="search" size={14} />
-									<span class="sr-only">Find a model</span>
-									<Input
-										class="model-search-input"
-										bind:ref={modelInput}
-										bind:value={modelQuery}
-										placeholder="Find a model…"
-										spellcheck="false"
-										onkeydown={(event) => {
-											if (event.key === 'Escape') {
-												modelOpen = false;
-												modelQuery = '';
-												event.preventDefault();
-											}
-										}}
-									/>
-								</label>
-								{#if modelOptions.length}
-									<div class="model-list" role="listbox" aria-label="Available models">
-										{#each modelOptions as modelOption (modelOption)}
-											<Button
-												variant="ghost"
-												size="sm"
-												class={`model-option${modelOption === currentModel ? ' selected' : ''}`}
-												role="option"
-												aria-selected={modelOption === currentModel}
-												onclick={() => void chooseModel(modelOption)}
-											>
-												<span>{modelOption}</span>
-												{#if modelOption === currentModel}<Icon name="check" size={14} />{/if}
-											</Button>
-										{/each}
-									</div>
-								{:else}
-									<p class="model-empty">No models available from {providerName}. Refresh the connection in Settings.</p>
-								{/if}
-									<Button
-										variant="ghost"
-										size="sm"
-										class="model-settings"
-										onclick={() => { modelOpen = false; session.setWorkspaceView('settings'); }}
-									>
-										<Icon name="settings" size={14} /> Provider settings
-								</Button>
-							</div>
-						{/if}
-					</div>
-				{/if}
+			{#if !pendingInput && session.catalog.sources.length}
+				<Button
+					variant="ghost"
+					size="icon"
+					class="context-add"
+					aria-label="Add a source or field"
+					title="Add a source or field"
+					aria-haspopup="dialog"
+					aria-expanded={contextOpen}
+					aria-controls="composer-context-menu"
+					onclick={() => (contextOpen = !contextOpen)}
+				>
+					<Icon name="plus" size={16} />
+				</Button>
 			{/if}
 			{#if answering && value.trim() && !pendingInput && !value.startsWith('/') && !session.mountProgress}
 				<Button
@@ -734,23 +576,6 @@
 		overflow-x: auto;
 		scrollbar-width: none;
 	}
-	.composer-scope-note {
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		min-width: 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		line-height: 1.35;
-	}
-	.composer-scope-note strong {
-		min-width: 0;
-		overflow: hidden;
-		color: var(--text-dim);
-		font-weight: 600;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
 	.context-row::-webkit-scrollbar {
 		display: none;
 	}
@@ -794,244 +619,19 @@
 		height: 12px;
 	}
 	:global(.context-add) {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
+		display: grid;
+		place-items: center;
 		flex: none;
-		height: auto;
-		min-height: 0;
-		padding: 3px 6px;
+		width: 28px;
+		min-width: 28px;
+		height: 28px;
+		min-height: 28px;
+		padding: 0;
 		border-radius: var(--radius-chip);
 		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		white-space: nowrap;
 	}
 	:global(.context-add:hover),
 	:global(.context-add[aria-expanded='true']) {
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
-	.mode-wrap {
-		position: relative;
-		flex: none;
-	}
-	:global(.mode-trigger) {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 4px 6px;
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
-		font-weight: 600;
-		white-space: nowrap;
-	}
-	:global(.mode-trigger:hover),
-	:global(.mode-trigger[aria-expanded='true']) {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	:global(.mode-trigger svg) {
-		transform: rotate(90deg);
-		color: var(--text-faint);
-	}
-	.mode-mark {
-		width: 6px;
-		height: 6px;
-		border-radius: 50%;
-		background: var(--text-faint);
-	}
-	.mode-mark.inspect {
-		background: var(--brand);
-	}
-	:global(.mode-menu) { width: 224px; }
-	:global(.mode-option) {
-		align-items: flex-start;
-		gap: 9px;
-		min-height: 0;
-		padding: 8px;
-		border-radius: var(--radius-chip);
-		text-align: left;
-	}
-	:global(.mode-option[data-state='checked']) {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	:global(.mode-option) .mode-copy {
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-	}
-	:global(.mode-option) strong {
-		font-size: var(--fs-xs);
-		font-weight: 600;
-	}
-	:global(.mode-option) small {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.model-wrap {
-		position: relative;
-		min-width: 0;
-		flex: none;
-	}
-	:global(.model-trigger) {
-		display: inline-flex;
-		align-items: center;
-		justify-content: flex-start;
-		gap: 6px;
-		min-width: 0;
-		min-height: 0;
-		height: auto;
-		max-width: min(260px, 32vw);
-		padding: 4px 6px;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-dim);
-		font-size: var(--fs-xs);
-		font-weight: 500;
-		white-space: nowrap;
-	}
-	:global(.model-trigger:hover),
-	:global(.model-trigger[aria-expanded='true']) {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	:global(.model-trigger) > :global(svg) {
-		transform: rotate(90deg);
-		color: var(--text-faint);
-	}
-	.model-name {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-	}
-	.model-name.empty {
-		color: var(--text-faint);
-	}
-	.model-menu {
-		position: absolute;
-		bottom: calc(100% + 8px);
-		left: -6px;
-		z-index: 22;
-		width: min(300px, calc(100vw - 48px));
-		padding: var(--space-2);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		background: var(--bg-raised);
-		box-shadow: var(--shadow-pop);
-	}
-	.model-menu-head {
-		display: flex;
-		align-items: baseline;
-		justify-content: space-between;
-		gap: var(--space-2);
-		padding: 2px var(--space-2) var(--space-2);
-	}
-	.model-menu-head strong {
-		font-size: var(--fs-sm);
-		font-weight: 600;
-	}
-	.model-menu-head small {
-		max-width: 16ch;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.model-search {
-		display: flex;
-		align-items: center;
-		gap: 7px;
-		margin-bottom: var(--space-2);
-		padding: 6px 8px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--text-faint);
-	}
-	.model-search:focus-within {
-		border-color: var(--link);
-		box-shadow: var(--focus-ring);
-	}
-	.model-search :global(.model-search-input) {
-		min-width: 0;
-		width: 100%;
-		min-height: 0;
-		border: 0;
-		border-radius: 0;
-		outline: 0;
-		padding: 0;
-		background: transparent;
-		color: var(--text);
-		font: inherit;
-		font-size: var(--fs-sm);
-	}
-	.model-search :global(.model-search-input:focus-visible) {
-		border-color: transparent;
-		outline: 0;
-		box-shadow: none;
-	}
-	.model-search :global(.model-search-input::placeholder) {
-		color: var(--text-faint);
-	}
-	.model-list {
-		max-height: min(280px, 38vh);
-		overflow: auto;
-	}
-	:global(.model-list) :global(.model-option) {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: var(--space-2);
-		width: 100%;
-		min-height: 0;
-		height: auto;
-		padding: 7px 8px;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-dim);
-		text-align: left;
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-	}
-	:global(.model-list) :global(.model-option:hover),
-	:global(.model-list) :global(.model-option.selected) {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	:global(.model-option) span {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	:global(.model-option) :global(svg) {
-		flex: none;
-		color: var(--brand);
-	}
-	.model-empty {
-		margin: var(--space-3) var(--space-2);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	:global(.model-settings) {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		height: auto;
-		min-height: 0;
-		margin-top: var(--space-2);
-		padding: var(--space-2);
-		border-radius: 0;
-		border-top: 1px solid var(--border);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 500;
-		text-align: left;
-	}
-	:global(.model-settings:hover) {
 		background: var(--bg-inset);
 		color: var(--text);
 	}

@@ -1532,10 +1532,6 @@ class Session {
 	}
 
 
-	setAskMode(mode: AskMode): void {
-		this.ensureChat().setMode(mode);
-	}
-
 	addContextReference(ref: ContextReference): void {
 		this.ensureChat().addContext(ref);
 	}

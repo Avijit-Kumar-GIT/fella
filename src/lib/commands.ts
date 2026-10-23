@@ -51,9 +51,7 @@ async function ensureWorkspaceInvestigation(conv: Conversation): Promise<Investi
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
 
-  Ask / Inspect     choose the normal answer flow or a stricter source-first,
-                   read-only inspection flow from the composer
-  + Add source / @  attach a source or field to your next question
+  @                attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -442,28 +440,6 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 	conv.bindWorkspaceScope(session.activeRepositoryPath);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
-}
-
-/** Change the active conversation's model from a UI picker without writing a
- * slash command into the transcript. The selected model is also remembered as
- * the default for new conversations, matching `/model <name>`. */
-export async function selectModel(model: string): Promise<boolean> {
-	const next = model.trim();
-	if (!next) return false;
-
-	const conv = session.ensureChat();
-	const previous = conv.model;
-	conv.model = next;
-	if (!isDesktop()) return true;
-
-	try {
-		session.settings = await ipc.setSettings({ model: next });
-		return true;
-	} catch (e) {
-		conv.model = previous;
-		session.addSystem(`Couldn't choose ${next}: ${errMsg(e)}`);
-		return false;
-	}
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint

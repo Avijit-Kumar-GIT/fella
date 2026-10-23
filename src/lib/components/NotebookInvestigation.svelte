@@ -290,7 +290,7 @@
 
 <style>
 	.notebook-actions { display: flex; justify-content: flex-end; margin-bottom: 8px; }
-	.notebook { width: 100%; max-width: 1040px; margin-inline: auto; min-width: 0; padding: clamp(20px, 4vw, 52px); color: var(--text); }
+	.notebook { display:flex; flex:1; flex-direction:column; width:100%; max-width:1040px; min-width:0; min-height:0; margin-inline:auto; padding:clamp(20px, 4vw, 52px); overflow-y:auto; overscroll-behavior-y:contain; scrollbar-width:thin; color:var(--text); }
 	.notebook-header { margin-bottom: 44px; }
 	.eyebrow { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 500; }
 	.title-row { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }

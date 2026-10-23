@@ -231,7 +231,7 @@
 		<div class="section-head">
 			<h2>Conversations</h2>
 			<div class="section-actions">
-				<Button variant="ghost" size="sm" class="section-action new-conversation-action" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={14} /><span>New</span></Button>
+				<Button variant="ghost" size="icon" class="section-action new-conversation-action" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={16} /></Button>
 			{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
 				{#if repo.path}
 					<DropdownMenu.Root>
@@ -367,7 +367,7 @@
 	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; }
 	.section-head { display:flex; align-items:center; justify-content:space-between; min-height:36px; padding:0 4px; }
 	.section-actions { display:flex; align-items:center; gap:2px; }
-	.sidebar :global(.new-conversation-action) { width:auto; min-height:28px; height:28px; gap:4px; padding:0 8px; border-radius:var(--radius-chip); color:var(--text-dim); font-size:var(--fs-xs); }
+	.sidebar :global(.new-conversation-action) { width:28px; min-width:28px; min-height:28px; height:28px; padding:0; border-radius:var(--radius-chip); color:var(--text-dim); }
 	.section-head h2 { margin:0; color:var(--text-faint); font-size:var(--fs-xs); font-weight:550; }
 	.repositories { flex:1; min-height:0; overflow-y:auto; padding-top:4px; }
 	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }
