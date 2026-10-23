@@ -6,6 +6,7 @@ declare global {
 	interface Window {
 		/** Secure Electron preload bridge. It is absent in a normal browser. */
 		fella?: {
+			platform: 'win32' | 'darwin' | 'linux' | string;
 			invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 			openWorkspace(
 				path: string,
@@ -57,6 +58,7 @@ declare global {
 			setWindowAppearance(dark: boolean): Promise<void>;
 			pathForFile(file: File): string;
 			windowAction(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
+			popupMenu(name: 'file' | 'edit' | 'view' | 'help', x: number, y: number): Promise<boolean>;
 			onAppCommand(callback: (command: string) => void): void;
 		};
 	}

@@ -409,7 +409,8 @@
 
 <svelte:window bind:innerWidth={windowWidth} onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
 
-	<div class="shell" class:narrow-navigation={narrowNavigation}>
+	<div class="shell" class:narrow-navigation={narrowNavigation} class:native-titlebar={isDesktop()}>
+		{#if isDesktop()}<Titlebar nativeOverlay onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
 		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
 			<Sidebar
@@ -457,7 +458,7 @@
 						>
 							{#snippet conversation()}
 								<div class="primary-workspace" class:reports={session.workspaceSection === 'reports'} class:navigation-collapsed={session.sidebarCollapsed}>
-								{#if session.workspaceSection !== 'reports'}<Titlebar onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
+								{#if !isDesktop() && session.workspaceSection !== 'reports'}<Titlebar onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
 								<div class="conversation-workspace" hidden={session.workspaceSection !== 'chat'}>
 										<Transcript bind:this={transcript} />
 										<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
@@ -512,8 +513,9 @@
 		position: relative;
 		display: flex;
 		height: 100%;
-		min-width:0; overflow:hidden; border:1px solid var(--border-strong); border-radius:22px;
+		min-width:0; overflow:hidden; border:1px solid var(--border-strong); border-radius:8px;
 	}
+	.shell.native-titlebar { padding-top:32px; border:0; border-radius:0; }
 	.app {
 		position:relative;
 		display: flex;

@@ -8,11 +8,16 @@ workspace, conversations, sources, findings, evidence, reports and native action
 
 - Inter for UI and conversation text; JetBrains Mono for data, source paths, SQL,
   and the model selector. Both fonts load locally, without a network request.
-- Sidebar: 268px; traffic lights and header controls on one row; 36px workspace
+- Sidebar: 268px; 36px workspace
   mark; 14px Fella label; 12px workspace label; Chat / Files / Reports pills;
   32px conversation icons, 13px titles, 12px previews, 12px footer padding.
-- Conversation: workspace chip centered in the conversation pane, 12px from its
-  top; reading width at most 520px; 20px horizontal insets; 13px / 21px body;
+- Desktop titlebar: a 32px OS control overlay with File / Edit / View / Help, a
+  centered workspace chip, and the existing window controls kept native. Its
+  content is clamped to the window width and reserves the native controls area
+  during resize; at compact widths the chip truncates before overlapping menus
+  and hides at 640px, including the 560px minimum window size. The native system clips the outer
+  window corners; the app adds no rounded frame.
+- Conversation reading width is at most 520px; 20px horizontal insets; 13px / 21px body;
   user bubble at most 420px; 16px answer radius, 16px horizontal answer padding.
   The composer spans its pane with 20px horizontal and 16px bottom insets and
   contains context, text, current model, and send/stop. It reflows at narrow widths.
@@ -53,9 +58,12 @@ unrelated model, backend, packaging, or broad application suites for this redesi
 - `pnpm build`: passed; the existing large-chunk advisory remains.
 - `node --check electron/main.mjs` and `git diff --check`: passed.
 - Focused Linux Electron review: passed at 1440×960, 1024×768 and 680×800.
-  The measured sidebar is 268px, Investigation pane 380px, identity mark 48px;
-  the workspace chip and identity mark centers differ from their pane centers
-  by less than 1px. All five Investigation tabs fit at 1024px. No document-level
+  The measured sidebar is 268px, Investigation pane 380px, identity mark 48px, and titlebar 32px;
+  the workspace chip is centered within the native titlebar safe area, stays
+  inside the viewport and does not overlap the app menus at 1024px or 680px.
+  The four integrated menu entries open the existing native Electron menus.
+  The identity mark is centered in its pane within 1px. All five Investigation
+  tabs fit at 1024px. No document-level
   horizontal overflow or browser errors were recorded. Local Inter and JetBrains
   Mono are active. A question added through the UI is persisted, the initial
   four-question plan survives navigation, section scrolling leaves navigation
@@ -89,6 +97,14 @@ fixture, persistence assertions and geometry criteria then passed unchanged.
 The file captures also exposed source modification times interpreted as
 milliseconds even though the catalog supplies seconds. Both file-date displays
 now use the catalog unit.
+
+The titlebar review initially found that the rendered titlebar safe-area width
+could remain at its startup value while narrowing the Electron window. At 680px,
+the workspace chip clipped; after clamping its width, a follow-up capture showed
+the chip crowding the Help menu. The titlebar now reserves the native control
+area against the viewport width and reduces or hides the workspace chip at
+compact widths. The final focused review checks its bounds and menu spacing at
+1024px and 680px; its captures are at `/tmp/fella-reference-redesign-72XXbK/`.
 
 ### Limits
 

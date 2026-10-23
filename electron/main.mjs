@@ -133,6 +133,7 @@ function installApplicationMenu() {
 		});
 	}
 	menus.push({
+		id: 'fella-menu-file',
 		label: 'File',
 		submenu: [
 			item('New conversation', 'new-conversation', 'CmdOrCtrl+N'),
@@ -143,6 +144,7 @@ function installApplicationMenu() {
 		]
 	});
 	menus.push({
+		id: 'fella-menu-edit',
 		label: 'Edit',
 		submenu: [
 			{ role: 'undo' }, { role: 'redo' }, { type: 'separator' },
@@ -150,6 +152,7 @@ function installApplicationMenu() {
 		]
 	});
 	menus.push({
+		id: 'fella-menu-view',
 		label: 'View',
 		submenu: [
 			item('Search', 'search', 'CmdOrCtrl+K'),
@@ -161,6 +164,7 @@ function installApplicationMenu() {
 	});
 	if (mac) menus.push({ label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }] });
 	menus.push({
+		id: 'fella-menu-help',
 		role: 'help',
 		submenu: [{ label: 'Fella on GitHub', click: () => void openExternal('https://github.com/Avijit-Kumar-GIT/fella') }]
 	});
@@ -169,6 +173,13 @@ function installApplicationMenu() {
 
 function setWindowAppearance(win, dark) {
 	win.setBackgroundColor(dark ? DARK_WINDOW : LIGHT_WINDOW);
+	if (process.platform !== 'darwin') {
+		win.setTitleBarOverlay({
+			color: dark ? DARK_WINDOW : LIGHT_WINDOW,
+			symbolColor: dark ? '#a1a1aa' : '#71717a',
+			height: 32
+		});
+	}
 }
 
 async function waitForDevServer(url, timeoutMs = 15000) {
@@ -195,11 +206,15 @@ async function createWindow() {
 		minHeight: 640,
 		resizable: true,
 		show: false,
-		// Let each operating system draw and position its native title bar and
-		// window controls.
+		// Keep the native resize frame and native system controls while allowing
+		// Fella's compact menu/workspace row to share the title bar area.
 		frame: true,
+		titleBarStyle: 'hidden',
+		titleBarOverlay: process.platform === 'darwin'
+			? true
+			: { color: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW, symbolColor: nativeTheme.shouldUseDarkColors ? '#a1a1aa' : '#71717a', height: 32 },
 		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,
-		autoHideMenuBar: false,
+		autoHideMenuBar: process.platform !== 'darwin',
 		title: 'Fella',
 		webPreferences: {
 			// Sandboxed preloads cannot use ESM imports. Keep this bridge CommonJS
@@ -210,6 +225,7 @@ async function createWindow() {
 			sandbox: true
 		}
 	});
+	if (process.platform !== 'darwin') win.setMenuBarVisibility(false);
 	if (savedState?.maximized) win.maximize();
 	let windowStateTimer;
 	const saveWindowState = () => {
@@ -372,6 +388,15 @@ app.whenReady().then(() => {
 		ipcMain.handle('fella:set-window-appearance', (event, dark) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			if (owner) setWindowAppearance(owner, Boolean(dark));
+		});
+		ipcMain.handle('fella:popup-menu', (event, request) => {
+			if (!isTrustedAppFrame(event)) return false;
+			const owner = BrowserWindow.fromWebContents(event.sender);
+			const name = ['file', 'edit', 'view', 'help'].includes(request?.name) ? request.name : null;
+			const menu = name ? Menu.getApplicationMenu()?.getMenuItemById(`fella-menu-${name}`)?.submenu : null;
+			if (!owner || !menu) return false;
+			menu.popup({ window: owner, x: Math.round(request.x), y: Math.round(request.y) });
+			return true;
 		});
 		ipcMain.handle('fella:ask', (event, request) =>
 			engine.request('ask', request.params ?? {}, (item) => {

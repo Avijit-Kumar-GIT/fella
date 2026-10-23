@@ -25,6 +25,8 @@ ipcRenderer.on('fella:app-command', (_event, command) => {
 });
 
 contextBridge.exposeInMainWorld('fella', {
+	platform: process.platform,
+
 	invoke(command, args) {
 		return ipcRenderer.invoke('fella:invoke', { command, args });
 	},
@@ -101,6 +103,10 @@ contextBridge.exposeInMainWorld('fella', {
 
 	windowAction(action) {
 		return ipcRenderer.invoke('fella:window-action', action);
+	},
+
+	popupMenu(name, x, y) {
+		return ipcRenderer.invoke('fella:popup-menu', { name, x, y });
 	},
 
 	onAppCommand(callback) {
