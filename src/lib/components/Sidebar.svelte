@@ -330,7 +330,6 @@
 									<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
 								{:else}
 									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c)} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
-										<span class="conversation-mark" class:investigation={group.label === 'Investigations'}><Icon name={group.label === 'Investigations' ? (session.conversationId === c.id ? 'flask' : 'notebook-pen') : 'database'} size={14} /></span>
 										<span class="conversation-copy"><span class="conversation-title-line"><strong>{title(c)}</strong>{#if session.conversationId === c.id}<Icon name="pencil" size={11} />{/if}</span><small>{subtitle(c)}</small></span>
 									</Button>
 									<div class="row-actions">
@@ -350,9 +349,9 @@
 				<section class="repository-section file-folders" aria-label="Workspace folders">
 					<div class="section-head"><h2>Folders</h2><span class="group-count">{catalogFileCount}</span></div>
 					<div class="folder-list">
-						<button class="folder-row" class:active={selectedFolder === 'all'} type="button" aria-pressed={selectedFolder === 'all'} onclick={() => onselectfolder?.('all')}><span class="folder-mark"><Icon name="file" size={14} /></span><strong>All files</strong><small>{catalogFileCount}</small></button>
+						<button class="folder-row" class:active={selectedFolder === 'all'} type="button" aria-pressed={selectedFolder === 'all'} onclick={() => onselectfolder?.('all')}><strong>All files</strong><small>{catalogFileCount}</small></button>
 						{#each folders as folder (folder.id)}
-							<button class="folder-row" class:active={selectedFolder === folder.id} type="button" aria-pressed={selectedFolder === folder.id} onclick={() => onselectfolder?.(folder.id)}><span class="folder-mark"><Icon name={folder.id === '__root' ? 'file' : 'folder'} size={14} /></span><strong title={folder.label}>{folder.label}</strong><small>{folder.count}</small></button>
+							<button class="folder-row" class:active={selectedFolder === folder.id} type="button" aria-pressed={selectedFolder === folder.id} onclick={() => onselectfolder?.(folder.id)}><strong title={folder.label}>{folder.label}</strong><small>{folder.count}</small></button>
 						{/each}
 					</div>
 					{#if session.catalog.skipped?.length}
@@ -370,7 +369,7 @@
 						<div class="report-list">
 							{#each workspaceReports as report (report.id)}
 								<Button variant="ghost" class={`report-row${session.activeWorkspaceToolTab?.kind === 'studio' && session.activeWorkspaceToolTab.documentId === report.id ? ' active' : ''}`} title={report.title} onclick={() => openReport(report.id)}>
-									<span class="report-mark"><Icon name="file" size={14} /></span><span class="report-copy"><strong>{report.title}</strong><small>Updated {relativeUpdated(report.updated_at_ms)}</small></span>
+									<span class="report-copy"><strong>{report.title}</strong><small>Updated {relativeUpdated(report.updated_at_ms)}</small></span>
 								</Button>
 							{:else}<p class="sidebar-empty">No reports yet.</p>{/each}
 						</div>
@@ -446,11 +445,9 @@
 	:global(.investigation-actions) { background:transparent; width:20px; height:20px; min-height:20px; }
 	.folder-list, .report-list { display:grid; gap:2px; }
 	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }
-	.sidebar :global(.conversation-row), :global(.report-row) { display:flex; justify-content:flex-start; width:100%; min-width:0; min-height:54px; gap:12px; padding:8px; border-radius:12px; color:var(--text-dim); text-align:left; }
+	.sidebar :global(.conversation-row), :global(.report-row) { display:flex; justify-content:flex-start; width:100%; min-width:0; min-height:54px; gap:0; padding:8px; border-radius:12px; color:var(--text-dim); text-align:left; }
 	.sidebar :global(.conversation-row:hover), :global(.report-row:hover), .folder-row:hover { background:var(--bg-raised); color:var(--text); }
 	.sidebar :global(.conversation-row.active), :global(.report-row.active) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
-	.conversation-mark, .folder-mark, .report-mark { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:var(--bg-raised-2, var(--bg-inset)); color:var(--text-dim); }
-	:global(.conversation-row.active) .conversation-mark { background:color-mix(in srgb, var(--brand) 20%, var(--bg-raised-2, var(--bg-inset))); color:var(--brand-icon); }
 	.conversation-copy, .report-copy { display:grid; min-width:0; flex:1; gap:0; text-align:left; }
 	.conversation-title-line { display:flex; min-width:0; align-items:center; gap:6px; }
 	.conversation-copy strong, .report-copy strong { overflow:hidden; color:var(--text); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
@@ -461,10 +458,8 @@
 	.row-actions :global(button) { width:26px; min-height:26px; height:26px; padding:0; color:var(--text-faint); }
 	.sidebar :global(.rename-input) { min-height:36px; height:36px; font-size:var(--fs-sm); }
 	.sidebar-empty { margin:10px 8px; color:var(--text-faint); font-size:var(--fs-xs); line-height:1.5; }
-	.folder-row { display:flex; width:100%; min-width:0; align-items:center; gap:10px; min-height:39px; padding:5px 9px; border:0; border-radius:10px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
+	.folder-row { display:flex; width:100%; min-width:0; align-items:center; gap:0; min-height:39px; padding:5px 9px; border:0; border-radius:10px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
 	.folder-row.active { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
-	.folder-row .folder-mark { width:23px; height:23px; background:transparent; color:var(--text-faint); }
-	.folder-row.active .folder-mark { color:var(--brand-icon); }
 	.folder-row strong { flex:1; min-width:0; overflow:hidden; font-size:var(--fs-sm); font-weight:450; text-overflow:ellipsis; white-space:nowrap; }
 	.folder-row small { color:var(--text-faint); font-size:11px; }
 	.catalog-warning { display:flex; gap:9px; padding:14px 8px 0; margin:14px 7px 0; border-top:1px solid var(--border); }
@@ -472,19 +467,16 @@
 	.catalog-warning span:last-child { display:grid; gap:3px; }
 	.catalog-warning strong { color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
 	.catalog-warning small { color:var(--text-faint); font-size:11px; line-height:1.45; }
-	.report-mark { border-radius:9px; }
-	:global(.report-row) { min-height:50px; gap:10px; }
+	:global(.report-row) { min-height:50px; }
 	.sidebar-footer { display:flex; align-items:center; gap:12px; padding:12px; margin-top:auto; }
 	:global(.add-folder-button) { display:flex; flex:1; justify-content:center; min-width:0; min-height:38px; gap:8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); }
 	:global(.add-folder-button:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
 	:global(.settings-button) { display:grid; width:15px; min-width:15px; height:32px; flex:none; place-items:center; border-radius:999px; color:var(--text-faint); }
 	:global(.settings-button:hover), :global(.settings-button.active) { background:var(--bg-raised); color:var(--text); }
 	:global(.collapse-btn) { background:transparent !important; width:14px !important; min-width:14px !important; padding:0 !important; }
-	.conversation-mark.investigation { background:#fbbf24; color:#18181b; }
-	:global(.conversation-row.active) .conversation-mark.investigation { background:var(--brand); color:white; }
 	.conversation-title-line :global(svg) { flex:none; color:var(--text-faint); }
 	.item-wrap:hover .conversation-title-line > :global(svg), .item-wrap:focus-within .conversation-title-line > :global(svg) { opacity:0; }
-	.local-profile { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:#b45309; color:white; }
+	.local-profile { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:var(--brand); color:var(--on-brand); }
 
 	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
 	:global(.conversation-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }

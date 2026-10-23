@@ -23,7 +23,7 @@
 	{:else}
 		<section><header><h3>Answers</h3><span>{answered.length}</span></header><ul>{#each answered as question (question.id)}<li><button class="finding" onclick={() => onreview(question.id)}>{question.text}<Icon name="chevron-right" size={12} /></button>{#if savedAnswer(question)}<p>{savedAnswer(question)}</p>{/if}<small class:attention={question.answer_status !== 'answered'}>{question.answer_status === 'answered' ? 'Answered' : question.answer_status.replaceAll('_',' ')}</small></li>{/each}</ul>{#if !answered.length}<p class="empty">Saved answers will appear here.</p>{/if}</section>
 	{/if}
-	<section class="report-action"><Button disabled={busy || !!disabledReason} title={disabledReason || undefined} onclick={onreport}><Icon name="file" size={14} />{busy ? 'Preparing report…' : 'Create report'}</Button>{#if openCount}<p>{openCount} {openCount === 1 ? 'question is' : 'questions are'} still open. The report will include these gaps.</p>{/if}</section>
+	<section class="report-action"><Button disabled={busy || !!disabledReason} title={disabledReason || undefined} onclick={onreport}>{busy ? 'Preparing report…' : 'Create report'}</Button>{#if openCount}<p>{openCount} {openCount === 1 ? 'question is' : 'questions are'} still open. The report will include these gaps.</p>{/if}</section>
 </div>
 
 <style>

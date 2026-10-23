@@ -63,7 +63,6 @@
 
 	{#if !session.catalog.workspace}
 		<div class="files-empty">
-			<span><Icon name="folder" size={20} /></span>
 			<h2>Choose a folder to get started</h2>
 			<p>Fella will catalog supported files and show you what can be analyzed.</p>
 			<Button onclick={() => void openFolder()}>Open folder</Button>
@@ -89,7 +88,6 @@
 				{@const active = selected?.path === source.path && selected?.name === source.name}
 				<button class="file-row" class:selected={active} type="button" role="row" aria-selected={active} onclick={() => onselect(source)}>
 					<span class="file-name-cell" role="cell">
-						<span class="file-type-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 						<span class="file-name-copy"><strong>{source.name}</strong><small title={relativePath(source.path)}>{source.kind.toUpperCase()} · {relativePath(source.path)}{#if source.synopsis}<span> · {source.synopsis}</span>{/if}</small></span>
 					</span>
 					<span class="file-row-count" role="cell">{source.view && source.row_count != null ? new Intl.NumberFormat().format(source.row_count) : '—'}</span>
@@ -128,9 +126,7 @@
 	.file-row { width:100%; min-width:0; min-height:58px; padding:10px 12px; border:0; border-radius:12px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
 	.file-row:hover { background:var(--bg-raised); }
 	.file-row.selected { background:var(--bg-raised-2); }
-	.file-name-cell { display:flex; min-width:0; align-items:center; gap:11px; }
-	.file-type-icon { display:grid; width:15px; height:20px; flex:none; place-items:center; border-radius:0; background:transparent; color:var(--text-faint); }
-	.file-row.selected .file-type-icon { color:var(--brand-icon); }
+	.file-name-cell { display:flex; min-width:0; align-items:center; }
 	.file-name-copy { display:grid; min-width:0; gap:2px; }
 	.file-name-copy strong { overflow:hidden; color:var(--text); font-size:13px; font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
 	.file-name-copy small { overflow:hidden; color:var(--text-faint); font-size:11px; text-overflow:ellipsis; white-space:nowrap; }
@@ -144,8 +140,7 @@
 	.files-skipped li { display:grid; gap:2px; }
 	.files-skipped strong { color:var(--text-dim); font-weight:550; }
 	.files-empty { display:grid; justify-items:center; align-content:center; flex:1; gap:10px; text-align:center; }
-	.files-empty > span { display:grid; width:40px; height:40px; place-items:center; border-radius:14px; background:var(--bg-raised); color:var(--text-dim); }
-	.files-empty h2 { margin:4px 0 0; font-size:var(--fs-md); }
+	.files-empty h2 { margin:0; font-size:var(--fs-md); }
 	.files-empty p { max-width:42ch; margin:0 0 6px; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.5; }
 	@container primary-pane (max-width:600px) {
 		.files-page { padding-inline:20px; }

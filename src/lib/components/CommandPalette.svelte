@@ -215,19 +215,6 @@
 		return current ? resultKey(current) === resultKey(result) : false;
 	}
 
-	function icon(result: SearchResult): 'repository' | 'ask' | 'file' | 'asterisk' {
-		switch (result.kind) {
-			case 'repository':
-				return 'repository';
-			case 'conversation':
-				return 'ask';
-			case 'source':
-				return 'file';
-			case 'command':
-				return 'asterisk';
-		}
-	}
-
 	async function select(result: SearchResult): Promise<void> {
 		close();
 		switch (result.kind) {
@@ -295,9 +282,6 @@
 						{#each group.items as result (resultKey(result))}
 							<li class:sel={isSelected(result)}>
 								<Button variant="ghost" class="search-result" onclick={() => void select(result)}>
-									<span class="result-icon">
-										<Icon name={icon(result)} size={16} />
-									</span>
 									<span class="result-copy">
 										<strong>{label(result)}</strong>
 										{#if detail(result)}<small>{detail(result)}</small>{/if}
@@ -418,7 +402,7 @@
 		display: flex;
 		align-items: center;
 		justify-content: flex-start;
-		gap: 10px;
+		gap: 0;
 		min-height: 42px;
 		height: auto;
 		white-space: normal;
@@ -431,16 +415,6 @@
 	}
 	ul li :global(.search-result:hover) {
 		background: var(--bg-inset);
-	}
-	.result-icon {
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 24px;
-		flex: none;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-faint);
 	}
 	.result-copy {
 		min-width: 0;

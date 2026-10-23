@@ -479,7 +479,7 @@
 									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
 								{/if}
 								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && session.workspaceSection === 'chat'}
-									<div class="notebook-empty"><Icon name="folder" size={20} /><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
+									<div class="notebook-empty"><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
 								{:else if session.workspaceSection === 'chat' && showRightPane && !session.workspacePaneOpen}
 									<CompanionPane />
 								{/if}
@@ -496,7 +496,7 @@
 
 {#if dragging}
 	<div class="dropzone" transition:fadeQuick aria-hidden="true">
-		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder or workspace to open it</div>
+		<div class="dropcard">Drop a folder or workspace to open it</div>
 	</div>
 {/if}
 
@@ -633,7 +633,6 @@
 	.dropcard {
 		display: inline-flex;
 		align-items: center;
-		gap: var(--space-2);
 		padding: var(--space-3) var(--space-4);
 		background: var(--bg-raised);
 		border: 1px solid var(--border);

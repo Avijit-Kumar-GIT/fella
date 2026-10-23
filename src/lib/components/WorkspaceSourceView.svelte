@@ -137,7 +137,7 @@
 			<div class="source-toolbar-actions">
 				<DropdownMenu.Root>
 					<DropdownMenu.Trigger class="source-more-button" aria-label="More file actions" title="More file actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
-					<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end"><DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void copySourcePath()}><Icon name="file" size={14} />Copy file path</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
+					<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end"><DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void copySourcePath()}>Copy file path</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal>
 				</DropdownMenu.Root>
 				<Button variant="ghost" size="icon" aria-label="Close file details" title="Close file details" onclick={() => onclose?.()}><Icon name="x" size={14} /></Button>
 			</div>
@@ -145,7 +145,6 @@
 		<div class="source-scroll">
 		<header class="source-head">
 			<div class="source-title-row">
-				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={19} /></span>
 				<div class="source-title-copy">
 					<h1>{source.name}</h1>
 					<p title={source.path}>{relativePath(source.path)}</p>
@@ -226,7 +225,7 @@
 		{/if}
 		<details class="source-usage" ontoggle={(event) => { if (event.currentTarget.open) void loadUsages(); }}>
 			<summary>Used in</summary>
-			{#if usageLoading}<p role="status">Checking saved runs…</p>{:else if usages?.length}{#each usages as item (item.id)}<button onclick={() => void openUsage(item)}><Icon name="flask" size={13} /><span>{item.title}</span></button>{/each}{:else if usages}<p>No recorded Investigation uses this file yet.</p>{/if}
+			{#if usageLoading}<p role="status">Checking saved runs…</p>{:else if usages?.length}{#each usages as item (item.id)}<button onclick={() => void openUsage(item)}><span>{item.title}</span></button>{/each}{:else if usages}<p>No recorded Investigation uses this file yet.</p>{/if}
 			{#if usageError}<p role="status">{usageError}</p>{/if}
 		</details>
 		</div>
@@ -250,8 +249,7 @@
 	.source-toolbar-actions :global(button:hover), :global(.source-more-button:hover) { background:var(--bg-raised-2); color:var(--text); }
 	.source-scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0 20px 20px; }
 	.source-head { display: grid; gap:12px; padding:20px 0 0; }
-	.source-title-row { display:flex; min-width:0; flex-direction:column; align-items:flex-start; gap:12px; }
-	.source-icon { display: grid; width: 44px; height: 44px; flex: none; place-items: center; border-radius: 12px; background:var(--bg-raised-2); color:var(--brand-icon); }
+	.source-title-row { display:flex; min-width:0; flex-direction:column; align-items:flex-start; }
 	.source-title-copy { min-width: 0; }
 	.source-title-copy h1 { margin: 0; font-size:16px; font-weight:500; overflow-wrap: anywhere; }
 	.source-title-copy p { margin:2px 0 0; color:var(--text-faint); font:11.5px/18px var(--mono); overflow-wrap: anywhere; }

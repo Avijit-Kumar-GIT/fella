@@ -107,7 +107,7 @@
 	{/if}
 	</div>
 	<div class="answer-actions">
-		<Button variant="ghost" size="sm" class="save-report" disabled={saving} onclick={() => void save()}><Icon name="file" size={12} />{saving ? 'Saving…' : 'Create report'}</Button>
+		<Button variant="ghost" size="sm" class="save-report" disabled={saving} onclick={() => void save()}>{saving ? 'Saving…' : 'Create report'}</Button>
 		<Button variant="ghost" size="icon" class="answer-copy" aria-label={copied ? 'Answer copied' : 'Copy answer'} title={copied ? 'Copied' : 'Copy answer'} onclick={() => void copyAnswer()}><Icon name={copied ? 'check' : 'copy'} size={12} /></Button>
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger class="answer-more" aria-label="Answer actions" title="Answer actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>

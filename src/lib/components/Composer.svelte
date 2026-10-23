@@ -371,7 +371,6 @@
 					{#each contextSources as source (source.path)}
 						<div class="context-item">
 							<Button variant="ghost" class="context-main" type="button" onclick={() => addSource(source)}>
-								<span class="context-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
 								<span class="context-copy"><strong>{source.name}</strong><small>{sourceDetail(source)}</small></span>
 							</Button>
 						</div>
@@ -383,7 +382,6 @@
 				<div class="context-list compact-list">
 					{#each contextColumns as item (item.source.path + ':' + item.column.name)}
 						<Button variant="ghost" class="context-field" type="button" onclick={() => addColumn(item.source, item.column.name, item.column.type)}>
-							<span class="context-icon"><Icon name="table" size={16} /></span>
 							<span class="context-copy"><strong>{item.source.name}.{item.column.name}</strong><small>{item.column.type}</small></span>
 						</Button>
 					{/each}
@@ -494,7 +492,6 @@
 			<div class="context-row">
 				{#each contextRefs as ref (ref.kind + ':' + ref.key)}
 					<span class="ref-pill" title={ref.detail ?? ref.label}>
-						<Icon name={ref.kind === 'source' ? 'file' : 'table'} size={12} />
 						<span>{ref.label}</span>
 						<Button variant="ghost" size="icon" class="remove-ref" aria-label={`Remove ${ref.label} from this question`} onclick={() => removeReference(ref)}>
 							<Icon name="x" size={12} />
@@ -856,16 +853,6 @@
 	:global(.context-field:hover) {
 		background: var(--bg-inset);
 		color: var(--text);
-	}
-	.context-icon {
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 24px;
-		flex: none;
-		border-radius: var(--radius-chip);
-		background: var(--bg-inset);
-		color: var(--text-faint);
 	}
 	.context-copy {
 		min-width: 0;

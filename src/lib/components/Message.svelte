@@ -145,7 +145,7 @@
 		/>
 		{#if !presentationPrimary && message.answer.turn_id && onopeninvestigationrun}
 			<Button type="button" variant="ghost" size="sm" class="investigation-run-link" onclick={() => onopeninvestigationrun?.(message.answer!.turn_id!)}>
-				<Icon name="bookmark" size={14} />Open in Investigation
+				Open in Investigation
 			</Button>
 		{/if}
 	{/if}

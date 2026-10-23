@@ -37,8 +37,8 @@
 			<DropdownMenu.Trigger class="chrome-action" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
 			<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end" sideOffset={6}>
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onpalette}><Icon name="search" size={14} />Search Fella</DropdownMenu.Item>
-				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { session.setContentLayout('chat'); if (expanded) ontoggleexpand?.(); }}><Icon name="ask" size={14} />Chat view</DropdownMenu.Item>
-				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.setContentLayout('notebook')}><Icon name="notebook-pen" size={14} />Notebook view</DropdownMenu.Item>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { session.setContentLayout('chat'); if (expanded) ontoggleexpand?.(); }}>Chat view</DropdownMenu.Item>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.setContentLayout('notebook')}>Notebook view</DropdownMenu.Item>
 				{#if session.catalog.workspace}
 					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.openWorkspaceToolChooser()}><Icon name="plus" size={14} />Open another tool</DropdownMenu.Item>
 				{/if}

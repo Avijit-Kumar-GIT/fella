@@ -285,7 +285,6 @@
 
 	{#if !session.catalog.workspace}
 		<div class="empty-state">
-			<div class="empty-icon"><Icon name="folder" size={20} /></div>
 			<h2>Connect a folder to add workspace context</h2>
 			<p>Choose a folder to add a short guide that helps Fella interpret its files.</p>
 			<Button type="button" onclick={() => void openFolder()}>Choose a folder</Button>
@@ -500,16 +499,6 @@
 		background: var(--panel);
 	}
 	.load-error p { margin: 0; color: var(--danger, #b42318); overflow-wrap: anywhere; }
-	.empty-icon {
-		display: grid;
-		place-items: center;
-		width: 42px;
-		height: 42px;
-		margin: 0 auto var(--space-3);
-		border-radius: 50%;
-		background: var(--bg-inset);
-		color: var(--text-faint);
-	}
 	.empty-state h2 {
 		margin: 0;
 		font-size: var(--fs-lg);

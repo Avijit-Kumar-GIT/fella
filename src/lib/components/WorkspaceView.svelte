@@ -299,15 +299,6 @@
 							title={tabLabel(tab)}
 							onclick={() => void activateTab(tab)}
 						>
-							{#if tab.kind === 'context'}
-								<Icon name="table" size={14} />
-							{:else if tab.kind === 'source' || tab.kind === 'studio' || tab.kind === 'result'}
-								<Icon name="file" size={14} />
-							{:else if tab.kind === 'terminal'}
-								<span class="workspace-terminal-tab-icon" aria-hidden="true">›_</span>
-							{:else}
-								<Icon name="bookmark" size={14} />
-							{/if}
 							<span>{tabLabel(tab)}</span>
 						</button>
 						<button
@@ -383,7 +374,6 @@
 						aria-label={`Investigations${investigations.length ? `, ${investigations.length} available` : ''}`}
 						aria-controls="workspace-investigations-menu"
 					>
-						<span class="workspace-tool-option-icon"><Icon name="bookmark" size={16} /></span>
 						<span class="workspace-tool-option-copy"><strong>Investigations</strong></span>
 						{#if investigations.length}
 							<span class="workspace-tool-dropdown-count" aria-hidden="true">{investigations.length}</span>
@@ -404,7 +394,6 @@
 									data-testid="workspace-tool-current-conversation"
 									onSelect={openCurrentInvestigation}
 								>
-									<Icon name="ask" size={14} />
 									<span class="workspace-investigation-menu-copy">
 										<strong>Current conversation</strong>
 										<small>Open its Investigation workspace</small>
@@ -427,7 +416,6 @@
 											data-testid={`workspace-investigation-option-${item.id}`}
 											disabled={investigationBusy}
 										>
-											<Icon name="bookmark" size={14} />
 											<span class="workspace-investigation-menu-copy">
 												<strong>{item.title || 'Untitled Investigation'}</strong>
 												<small>{investigationCoverage(item)}</small>
@@ -456,7 +444,6 @@
 				</DropdownMenu.Root>
 				<div class="workspace-tool-group-label workspace-tool-group-secondary">Workspace</div>
 				<button class="workspace-tool-option" type="button" data-testid="workspace-tool-studio" onclick={() => session.openStudioToolTab()}>
-					<span class="workspace-tool-option-icon"><Icon name="file" size={16} /></span>
 					<span class="workspace-tool-option-copy"><strong>Reports</strong><small>Arrange results and narrative</small></span>
 					<Icon name="chevron-right" size={16} />
 				</button>
@@ -466,10 +453,9 @@
 					data-testid="workspace-tool-context"
 					onclick={() => session.openWorkspaceToolTab('context', null, null, true)}
 				>
-					<span class="workspace-tool-option-icon"><Icon name="table" size={16} /></span>
 					<span class="workspace-tool-option-copy">
 						<strong>Workspace context</strong>
-								<small>Guidance and reusable knowledge</small>
+						<small>Guidance and reusable knowledge</small>
 					</span>
 					<Icon name="chevron-right" size={16} />
 				</button>
@@ -479,7 +465,6 @@
 					data-testid="workspace-tool-terminal"
 					onclick={() => session.openWorkspaceToolTab('terminal', null, null, true)}
 				>
-					<span class="workspace-tool-option-icon workspace-terminal-icon" aria-hidden="true">›_</span>
 					<span class="workspace-tool-option-copy">
 						<strong>Shell</strong>
 						<small>Interactive shell at this workspace</small>
@@ -521,7 +506,6 @@
 				<div class="workspace-opening" role="status">Loading Investigation…</div>
 			{:else if activeTab.kind === 'investigation' && defaultInspector}
 				<div class="workspace-investigation-empty">
-					<span class="workspace-investigation-empty-icon"><Icon name="bookmark" size={16} /></span>
 					<h2>This conversation has no Investigation</h2>
 					<p>Start one when you’re ready. It opens its own conversation and keeps the analysis organized here.</p>
 					<div class="workspace-investigation-empty-actions">
@@ -564,8 +548,7 @@
 	}
 	.workspace-opening { display: grid; flex: 1; place-content: center; color: var(--text-faint); font-size: var(--fs-sm); }
 	.workspace-investigation-empty { display:grid; flex:1; align-content:center; justify-items:start; gap:10px; width:min(100%, 420px); margin-inline:auto; padding:clamp(20px, 5vw, 40px); }
-	.workspace-investigation-empty-icon { display:grid; width:38px; height:38px; place-items:center; border-radius:13px; background:var(--bg-inset); color:var(--brand); }
-	.workspace-investigation-empty h2 { margin:6px 0 0; color:var(--text); font-size:var(--fs-md); font-weight:600; letter-spacing:-.015em; }
+	.workspace-investigation-empty h2 { margin:0; color:var(--text); font-size:var(--fs-md); font-weight:600; letter-spacing:-.015em; }
 	.workspace-investigation-empty p { max-width:40ch; margin:0; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.55; }
 	.workspace-investigation-empty-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
 	.workspace-tool-chooser {
@@ -649,13 +632,6 @@
 		outline-offset: 2px;
 		box-shadow: none;
 	}
-	:global(.workspace-tool-dropdown-trigger .workspace-tool-option-icon) {
-		width: 16px;
-		height: 16px;
-		border-radius: 0;
-		background: transparent;
-		color: inherit;
-	}
 	:global(.workspace-tool-dropdown-trigger .workspace-tool-option-copy) {
 		display: block;
 		flex: 1;
@@ -676,16 +652,6 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		font-variant-numeric: tabular-nums;
-	}
-	.workspace-tool-option-icon {
-		display: grid;
-		width: 30px;
-		height: 30px;
-		flex: none;
-		place-items: center;
-		border-radius: var(--radius-sm);
-		background: var(--bg-inset);
-		color: var(--text-dim);
 	}
 	.workspace-tool-option-copy { display: grid; min-width: 0; gap: 2px; }
 	.workspace-tool-option-copy strong {
@@ -756,7 +722,6 @@
 	:global(.tool-overview-item > span) { display: grid; min-width: 0; gap: 3px; }
 	:global(.tool-overview-item strong) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 	:global(.tool-overview-item small) { color: var(--text-faint); font-size: var(--fs-xs); }
-	.workspace-terminal-icon { font-family: var(--mono); font-size: 15px; font-weight: 600; }
 	.workspace-tabs-bar {
 		display: flex;
 		flex: none;
@@ -798,7 +763,7 @@
 		cursor: pointer;
 	}
 	.workspace-tool-tab {
-		gap: 7px;
+		gap: 0;
 		max-width: min(240px, 32vw);
 		min-height: 30px;
 		padding: 0 9px;
@@ -808,8 +773,6 @@
 	}
 	.workspace-tool-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.workspace-tool-tab.active { color: var(--text); font-weight: 550; }
-	.workspace-tool-tab :global(svg) { flex: none; color: var(--text-faint); }
-	.workspace-terminal-tab-icon { color: var(--text-faint); font-family: var(--mono); font-size: 11px; font-weight: 650; }
 	.workspace-tool-tab:hover,
 	.workspace-tool-tab-close:hover,
 	.workspace-tool-add:hover { background: var(--sidebar-hover); color: var(--text); }

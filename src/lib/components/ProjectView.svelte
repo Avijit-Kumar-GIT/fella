@@ -113,7 +113,7 @@
 					<Icon name="ask" size={16} /> Ask repository
 				</Button>
 				<Button variant="outline" class="project-button" onclick={() => void openInvestigations()}>
-					<Icon name="bookmark" size={16} /> Investigations
+					Investigations
 				</Button>
 				<Button
 					variant="ghost"
@@ -129,7 +129,6 @@
 		</header>
 
 		<div class="project-location" title={project.workspace}>
-			<Icon name="folder" size={12} />
 			<span>{project.workspace}</span>
 		</div>
 

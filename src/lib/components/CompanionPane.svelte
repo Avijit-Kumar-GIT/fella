@@ -223,7 +223,7 @@
 	.snapshot-note {
 		margin: 0 0 var(--space-3);
 		padding: var(--space-3);
-		border-left: 2px solid var(--chart-gold);
+		border-left: 2px solid var(--brand);
 		background: var(--bg-inset);
 		color: var(--text-dim);
 		font-size: var(--fs-sm);

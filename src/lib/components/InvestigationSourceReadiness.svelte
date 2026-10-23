@@ -373,7 +373,6 @@
 							aria-controls={selectedKey === sourceKey(source) ? 'investigation-source-detail' : undefined}
 							onclick={() => toggleSource(source)}
 						>
-							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={12} /></span>
 							<span class="source-main">
 								<strong>{source.name}</strong>
 								<small class="source-relative-path" title={source.path}>{relativePath(source.path)} · {kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
@@ -571,7 +570,6 @@
 	.source-option { display: flex; flex: 1; width: 100%; min-width: 0; align-items: center; gap: 8px; padding: 8px 2px; border: 0; border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; cursor: pointer; }
 	.source-option:hover, .source-option.selected { background: var(--bg-raised-2); }
 	.source-option.disabled { opacity: .72; }
-	.source-mark { display: inline-flex; flex: none; color: var(--text-dim); }
 	.source-main { display: grid; min-width: 0; flex: 1; gap: 2px; overflow:hidden; }
 	.source-main strong { overflow:hidden; font-size:var(--fs-xs); font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
 	.source-main small { overflow:hidden; color: var(--text-faint); font-size: 11px; text-overflow:ellipsis; white-space:nowrap; }

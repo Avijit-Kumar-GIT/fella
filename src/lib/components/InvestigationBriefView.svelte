@@ -1843,7 +1843,6 @@
 				</div>
 			</div>
 			<div class="investigation-identity">
-				<span class="investigation-mark"><Icon name="notebook-pen" size={20} /></span>
 				<div class="investigation-title-row">
 					<h1 id="investigation-title">{selected.title || 'Untitled Investigation'}</h1>
 				<Button variant="ghost" size="icon" aria-label="Rename Investigation" title="Rename Investigation" onclick={() => { nameDraft = selected!.title; nameError = ''; nameOpen = true; }}><Icon name="pencil" size={14} /></Button>
@@ -1869,7 +1868,6 @@
 
 	{#if !workspacePath}
 		<div class="empty-state">
-			<Icon name="folder" size={20} />
 			<h2>Open a workspace to start an Investigation</h2>
 			<p>Investigations are scoped to a folder so their intent stays alongside the data being analyzed.</p>
 		</div>
@@ -1884,7 +1882,6 @@
 		</div>
 	{:else if !investigations.length}
 		<div class="empty-state">
-			<Icon name="bookmark" size={20} />
 			<h2>No investigations yet</h2>
 			<p>Choose “New Investigation” from the workspace menu above to start one. Each Investigation opens its own conversation.</p>
 		</div>
@@ -2974,7 +2971,7 @@
 								title={reportExportDisabledReason || undefined}
 								onclick={() => void reviewInvestigationHandoff()}
 							>
-								<Icon name="file" size={16} />{exportingReport ? 'Preparing preview…' : 'Review report'}
+								{exportingReport ? 'Preparing preview…' : 'Review report'}
 							</Button>
 						</header>
 						{#if reportExportDisabledReason}<p class="report-export-disabled-reason">{reportExportDisabledReason}</p>{/if}
@@ -2988,7 +2985,6 @@
 			</div>
 		{:else}
 			<div class="empty-state" data-testid="investigation-not-selected">
-				<Icon name="bookmark" size={20} />
 				<h2>Choose an Investigation</h2>
 				<p>Select one from the workspace menu above to open its conversation and analysis.</p>
 			</div>
@@ -3559,8 +3555,7 @@
 	:global(.notebook-share) { display:inline-flex; min-height:36px; align-items:center; gap:8px; padding:8px 16px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:13px; font-weight:400; }
 	:global(.notebook-close) { width:36px; height:36px; min-height:36px; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); }
 	.investigation-identity { display:flex; flex-direction:column; align-items:center; padding:20px 0 0; text-align:center; }
-	.investigation-mark { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:#fbbf24; color:#18181b; }
-	.investigation-title-row { position:relative; display:flex; width:100%; min-height:23px; align-items:center; justify-content:center; margin-top:12px; }
+	.investigation-title-row { position:relative; display:flex; width:100%; min-height:23px; align-items:center; justify-content:center; margin-top:0; }
 	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 64px); margin:0; color:var(--text); font-size:15px; font-weight:400; letter-spacing:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.investigation-title-row :global(button) { position:absolute; right:4px; width:25px; height:25px; min-height:25px; color:var(--text-faint); opacity:0; }
 	.investigation-title-row:hover :global(button), .investigation-title-row :global(button:focus-visible) { opacity:1; }

@@ -474,7 +474,7 @@
 	<div class="studio-scroll">
 		{#if loading}<div class="empty-state" role="status"><Spinner size={16} /><p>Opening report…</p></div>
 		{:else if loadError}<div class="empty-state"><h1>Couldn’t open report</h1><p role="alert">{loadError}</p><Button size="sm" variant="outline" onclick={() => void open(workspace, documentId, initialArtifactId)}>Retry</Button></div>
-		{:else if !current}<div class="empty-state"><Icon name="file" size={20} /><h1>Keep useful analysis together.</h1><p>Add saved outputs and your own notes. Arrange them here without rerunning the analysis.</p><Button size="sm" onclick={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</Button></div>
+		{:else if !current}<div class="empty-state"><h1>Keep useful analysis together.</h1><p>Add saved outputs and your own notes. Arrange them here without rerunning the analysis.</p><Button size="sm" onclick={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</Button></div>
 		{:else}
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>

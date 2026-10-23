@@ -247,7 +247,6 @@
 	</header>
 	{#if !workspacePath}
 		<div class="environment-empty">
-		<Icon name="folder" size={20} />
 			<p>Select a workspace to browse its files.</p>
 			<Button type="button" variant="outline" size="sm" onclick={() => void openFolder()}>Choose a folder</Button>
 		</div>
@@ -259,19 +258,19 @@
 				{#if !parentCollapsed}
 					{#if node.kind === 'folder'}
 						<button class="tree-row tree-folder" type="button" aria-expanded={expandedFolders[node.id] === true} style={`--tree-depth:${row.depth}`} onclick={() => toggleFolder(node.id)}>
-							<Icon name={expandedFolders[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="folder" size={14} /><span>{node.name}</span>
+							<Icon name={expandedFolders[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><span>{node.name}</span>
 						</button>
 					{:else if node.kind === 'file' && node.children.length}
 						<button class="tree-row tree-file tree-workbook" type="button" aria-expanded={expandedWorkbooks[node.id] === true} style={`--tree-depth:${row.depth}`} onclick={() => toggleWorkbook(node.id)}>
-							<Icon name={expandedWorkbooks[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="file" size={14} /><span>{node.name}</span><small>{node.children.length} sheets</small>
+							<Icon name={expandedWorkbooks[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><span>{node.name}</span><small>{node.children.length} sheets</small>
 						</button>
 					{:else if node.kind === 'file' && node.sources[0]}
 						<button class="tree-row tree-file" type="button" aria-current={sourceIsSelected(node.sources[0]) ? 'page' : undefined} class:selected={sourceIsSelected(node.sources[0])} style={`--tree-depth:${row.depth}`} title={relativePath(node.sources[0].path, workspacePath)} onclick={() => onopen?.(node.sources[0])}>
-							<Icon name="file" size={14} /><span>{node.name}</span>
+							<span class="tree-disclosure-spacer" aria-hidden="true"></span><span>{node.name}</span>
 						</button>
 					{:else if node.kind === 'sheet' && node.source}
 						<button class="tree-row tree-sheet" type="button" aria-current={sourceIsSelected(node.source) ? 'page' : undefined} class:selected={sourceIsSelected(node.source)} style={`--tree-depth:${row.depth}`} title={node.source.name} onclick={() => onopen?.(node.source!)}>
-							<Icon name="table" size={14} /><span>{node.name}</span>
+							<span class="tree-disclosure-spacer" aria-hidden="true"></span><span>{node.name}</span>
 						</button>
 					{/if}
 				{/if}
@@ -309,9 +308,9 @@
 	.tree-row.selected, .tree-row[aria-current='page'] { background: var(--sidebar-selected); color: var(--text); }
 	.tree-row > :global(svg) { flex: none; color: var(--text-faint); }
 	.tree-row > :global(svg:first-child) { margin-left: -2px; }
+	.tree-disclosure-spacer { width:12px; height:12px; flex:none; margin-left:-2px; }
 	.tree-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.tree-folder > span { font-weight: 550; }
-	.tree-workbook > :global(svg:nth-child(2)) { margin-left: -3px; }
 	.tree-row small { flex: none; color: var(--text-faint); font-size: 10px; }
 	.environment-empty { display: grid; align-content: start; justify-items: start; gap: var(--space-3); padding: var(--space-4) var(--space-3); color: var(--text-dim); font-size: var(--fs-xs); }
 	.environment-empty p, .environment-note { margin: 0; color: var(--text-faint); line-height: 1.45; }

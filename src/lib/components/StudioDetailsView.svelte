@@ -108,7 +108,7 @@
 			<section class="details-section">
 				<div class="section-heading"><h3>Sources cited</h3><span>{citedSources.length}</span></div>
 				{#if citedSources.length}
-					<ul class="source-list">{#each citedSources as source (source)}<li><Icon name={/\.(md|txt|pdf)$/i.test(source) ? 'file' : 'table'} size={12} /><span title={source}>{source}</span></li>{/each}</ul>
+					<ul class="source-list">{#each citedSources as source (source)}<li><span title={source}>{source}</span></li>{/each}</ul>
 				{:else}
 					<p class="section-empty">No source references are available.</p>
 				{/if}
@@ -147,9 +147,8 @@
 	.review-card { padding:12px 14px; border-radius:16px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); line-height:1.5; }
 	.review-card p { margin:0; }
 	.source-list { display:grid; gap:4px; margin:9px 0 0; padding:0; list-style:none; }
-	.source-list li { display:flex; min-width:0; align-items:center; gap:9px; padding:6px 4px; color:var(--text-dim); font:12px var(--mono); }
-	.source-list li > :global(svg) { flex:none; color:var(--text-faint); }
-	.source-list li > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.source-list li { display:flex; min-width:0; align-items:center; gap:0; padding:6px 4px; color:var(--text-dim); font:12px var(--mono); }
+	.source-list li > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.history-list strong { overflow:hidden; color:var(--text-dim); font-size:var(--fs-sm); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 	.history-list small { color:var(--text-faint); font-size:11px; }
 	.history-list { gap:10px; }
