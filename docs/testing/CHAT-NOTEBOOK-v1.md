@@ -55,3 +55,17 @@ Screenshots remain under `/tmp/fella-chat-notebook-v1-results`, not in Git.
 This is Linux Electron coverage, not packaged Windows/macOS coverage. The old
 Studio-oriented desktop suites retain their original assertions and were not
 run or rewritten for the newly approved report terminology and controls.
+
+## UX contract revision v1.2
+
+The approved Chat/Notebook redesign changes the previous pane-order expectation:
+Chat stays on the left and remains the primary surface; the Investigation or
+selected tool appears on the right. At compact widths, the pane selector is
+named Chat and Tools. The Investigation companion shows its name, objective,
+progress and Questions without repeating answer bodies or evidence already
+shown in chat. Selecting an answered Question navigates to its matching chat
+answer. Low-frequency analytical actions live in the answer actions menu.
+
+The deterministic desktop cases now assert this revised product behavior. The
+prior v1.1 setup correction and its original results above are retained as
+historical evidence; the v1.2 run has not yet been recorded.

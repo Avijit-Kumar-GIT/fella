@@ -1851,7 +1851,8 @@ test('a saved answer opens its canonical run and returns to the same conversatio
 	await page.getByRole('region', { name: 'Review this run' }).getByRole('button', { name: 'Run this Question' }).click();
 	const answer = page.locator('.msg.assistant[data-analysis-turn-id="fixture-question-turn-1"]');
 	await expect(answer).toContainText('Weekly sales rose 12% in the saved analysis.');
-	await answer.getByRole('button', { name: 'Open in Investigation' }).click();
+	await answer.getByRole('button', { name: 'Answer actions', exact: true }).click();
+	await page.getByRole('menuitem', { name: 'Open in Investigation', exact: true }).click();
 	await expect(page.getByRole('region', { name: 'Saved analysis run' })).toBeVisible();
 	await expect(page.getByText('Question at run')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Go to Question' })).toBeVisible();

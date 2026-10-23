@@ -1,8 +1,9 @@
 <script lang="ts">
 	import type { Message } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import EvidenceBlock from './EvidenceBlock.svelte';
-	import EvidenceSummary, { answerNeedsReview } from './EvidenceSummary.svelte';
+	import EvidenceSummary, { answerNeedsReview, answerSemanticGaps } from './EvidenceSummary.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
@@ -56,12 +57,12 @@
 			case 'insufficient_data':
 				return {
 					title: 'Evidence is incomplete',
-					body: 'There is not enough accepted evidence to verify this result. The answer remains available, but treat it as incomplete.'
+					body: 'The available evidence is not enough to verify this answer.'
 				};
 			case 'failed':
 				return {
 					title: 'Verification failed',
-					body: 'A blocking verification check failed. The answer remains available, but it is not verified; review the details before relying on it.'
+					body: 'Review the recorded checks before relying on this answer.'
 				};
 			default:
 				return null;
@@ -80,17 +81,17 @@
 		<div class="assistant-heading">
 			<div class="assistant-identity">
 				<Logo size={18} active={message.pending} />
-				<strong>Fella</strong>
 				{#if needsAttention}
-					<span
-						class="review-status"
+					<Badge
+						variant="default"
 						role="status"
 						aria-label="Answer status"
 						data-testid="answer-review-status"
 						data-answer-status="needs_review"
-					>Needs review</span>
+						title={answerSemanticGaps(message.answer!).at(0) ?? 'Open How this was analyzed to review the recorded checks.'}
+					>Needs review</Badge>
 				{/if}
-				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
+				{#if message.pending}<span class="status">Working…</span>{/if}
 			</div>
 			{#if message.answer}
 				<EvidenceSummary
@@ -105,7 +106,7 @@
 			<div class="background">{split.background}</div>
 		{/if}
 		{#if presentationPrimary}
-			<AnalyticalAnswer {message} />
+			<AnalyticalAnswer {message} {onopeninvestigationrun} />
 		{:else}
 			<div class="text rich" class:pending={message.pending}>
 				{#if message.answer?.clarification}
@@ -141,7 +142,7 @@
 			suppressReviewStatus={needsAttention}
 			onrerun={message.answer.turn_id ? onrerun : undefined}
 		/>
-		{#if message.answer.turn_id && onopeninvestigationrun}
+		{#if !presentationPrimary && message.answer.turn_id && onopeninvestigationrun}
 			<Button type="button" variant="ghost" size="sm" class="investigation-run-link" onclick={() => onopeninvestigationrun?.(message.answer!.turn_id!)}>
 				<Icon name="bookmark" size={14} />Open in Investigation
 			</Button>
@@ -191,26 +192,9 @@
 		gap: var(--space-2);
 		min-width: 0;
 	}
-	.assistant-heading strong {
-		color: var(--chat-meta);
-		font-weight: 600;
-	}
 	.assistant-heading .status {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
-	}
-	.review-status {
-		display: inline-flex;
-		align-items: center;
-		padding: 2px 7px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-chip);
-		background: var(--bg-inset);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 500;
-		line-height: 1.35;
-		white-space: nowrap;
 	}
 	.text {
 		word-break: break-word;

@@ -7,23 +7,23 @@
 	let host = $state<HTMLDivElement>();
 	let width = $state(0);
 	let toolWidth = $state(480);
-	let notebookDocumentWidth = $state<number | null>(null);
-	let mobilePane = $state<'document' | 'conversation'>('document');
+	let notebookToolsWidth = $state<number | null>(null);
+	let mobilePane = $state<'tools' | 'conversation'>('conversation');
 	let dragging = $state(false);
 	const storageKey = 'fella:tools-width';
-	const notebookStorageKey = 'fella:notebook-document-width';
+	const notebookStorageKey = 'fella:notebook-tools-width';
 	let narrow = $derived(width > 0 && width < 760);
 	let solo = $derived(open && (expanded || (!notebook && compact)));
 	let mobileTabs = $derived(open && notebook && narrow && !expanded);
-	let notebookMaximum = $derived(Math.max(400, width - 321));
-	let notebookDefaultWidth = $derived(Math.round(width * 0.62));
-	let notebookActualWidth = $derived(Math.min(notebookMaximum, Math.max(400, notebookDocumentWidth ?? notebookDefaultWidth)));
+	let notebookMaximum = $derived(Math.max(320, width - 400));
+	let notebookDefaultWidth = $derived(Math.min(520, Math.max(320, Math.round(width * 0.36))));
+	let notebookActualWidth = $derived(Math.min(notebookMaximum, Math.max(320, notebookToolsWidth ?? notebookDefaultWidth)));
 	let maximum = $derived(Math.max(400, width - 380));
 	let actualWidth = $derived(Math.min(maximum, Math.max(400, toolWidth)));
 	let activeWidth = $derived(notebook ? notebookActualWidth : actualWidth);
 	let activeMaximum = $derived(notebook ? notebookMaximum : maximum);
 	let conversationVisible = $derived(!solo && (!mobileTabs || mobilePane === 'conversation'));
-	let toolsVisible = $derived(open && (!mobileTabs || mobilePane === 'document'));
+	let toolsVisible = $derived(open && (!mobileTabs || mobilePane === 'tools'));
 	let mode = $derived(mobileTabs ? 'mobile' : solo ? 'expanded' : open ? 'split' : 'conversation');
 
 	onMount(() => {
@@ -31,7 +31,7 @@
 			const saved = Number(localStorage.getItem(storageKey));
 			if (Number.isFinite(saved) && saved >= 400) toolWidth = Math.min(saved, 1200);
 			const savedNotebook = Number(localStorage.getItem(notebookStorageKey));
-			if (Number.isFinite(savedNotebook) && savedNotebook >= 400) notebookDocumentWidth = Math.min(savedNotebook, 1200);
+			if (Number.isFinite(savedNotebook) && savedNotebook >= 320) notebookToolsWidth = Math.min(savedNotebook, 1200);
 		} catch { /* Optional local preference. */ }
 		const observer = new ResizeObserver(([entry]) => {
 			width = entry.contentRect.width;
@@ -48,17 +48,17 @@
 	}
 
 	function setActiveWidth(value: number): void {
-		const minimum = notebook ? 400 : 400;
+		const minimum = notebook ? 320 : 400;
 		const upper = notebook ? notebookMaximum : maximum;
 		const next = Math.max(minimum, Math.min(upper, value));
-		if (notebook) notebookDocumentWidth = next;
+		if (notebook) notebookToolsWidth = next;
 		else toolWidth = next;
 	}
 
 	function move(event: PointerEvent): void {
 		if (!dragging || !host) return;
 		const rect = host.getBoundingClientRect();
-		setActiveWidth(notebook ? event.clientX - rect.left : rect.right - event.clientX);
+		setActiveWidth(rect.right - event.clientX);
 	}
 
 	function finish(): void { if (dragging) { dragging = false; rememberWidth(); } }
@@ -66,28 +66,27 @@
 	function resizeKey(event: KeyboardEvent): void {
 		if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
 		event.preventDefault();
-		const delta = notebook
-			? (event.key === 'ArrowRight' ? 32 : -32)
-			: (event.key === 'ArrowLeft' ? 32 : -32);
-		setActiveWidth(event.key === 'Home' ? 400 : event.key === 'End' ? activeMaximum : activeWidth + delta);
+		const delta = event.key === 'ArrowLeft' ? 32 : -32;
+		const minimum = notebook ? 320 : 400;
+		setActiveWidth(event.key === 'Home' ? minimum : event.key === 'End' ? activeMaximum : activeWidth + delta);
 		rememberWidth();
 	}
 
-	function selectMobilePane(pane: 'document' | 'conversation', focus = false): void {
+	function selectMobilePane(pane: 'tools' | 'conversation', focus = false): void {
 		mobilePane = pane;
-		if (focus) document.getElementById(pane === 'document' ? 'workspace-document-tab' : 'workspace-conversation-tab')?.focus();
+		if (focus) document.getElementById(pane === 'tools' ? 'workspace-tools-tab' : 'workspace-conversation-tab')?.focus();
 	}
 
 	function tabKeydown(event: KeyboardEvent): void {
 		if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
 			event.preventDefault();
-			selectMobilePane(mobilePane === 'document' ? 'conversation' : 'document', true);
+			selectMobilePane(mobilePane === 'conversation' ? 'tools' : 'conversation', true);
 		} else if (event.key === 'Home') {
 			event.preventDefault();
-			selectMobilePane('document', true);
+			selectMobilePane('conversation', true);
 		} else if (event.key === 'End') {
 			event.preventDefault();
-			selectMobilePane('conversation', true);
+			selectMobilePane('tools', true);
 		}
 	}
 </script>
@@ -102,21 +101,9 @@
 	data-notebook={notebook}
 	data-panel-mode={mode}
 	data-mobile-pane={mobilePane}
-	style={`--tools-width:${actualWidth}px;--document-width:${notebookActualWidth}px`}
+	style={`--tools-width:${actualWidth}px;--notebook-tools-width:${notebookActualWidth}px`}
 >
 	<div class="workspace-mobile-tabs fella-pill-nav" role="tablist" aria-label="Workspace panes" hidden={!mobileTabs}>
-		<button
-			id="workspace-document-tab"
-			class="workspace-mobile-tab fella-pill-nav-item"
-			class:active={mobilePane === 'document'}
-			type="button"
-			role="tab"
-			aria-selected={mobilePane === 'document'}
-			aria-controls="workspace-tools-pane"
-			tabindex={mobilePane === 'document' ? 0 : -1}
-			onclick={() => selectMobilePane('document')}
-			onkeydown={tabKeydown}
-		>Document</button>
 		<button
 			id="workspace-conversation-tab"
 			class="workspace-mobile-tab fella-pill-nav-item"
@@ -129,6 +116,18 @@
 			onclick={() => selectMobilePane('conversation')}
 			onkeydown={tabKeydown}
 		>Chat</button>
+		<button
+			id="workspace-tools-tab"
+			class="workspace-mobile-tab fella-pill-nav-item"
+			class:active={mobilePane === 'tools'}
+			type="button"
+			role="tab"
+			aria-selected={mobilePane === 'tools'}
+			aria-controls="workspace-tools-pane"
+			tabindex={mobilePane === 'tools' ? 0 : -1}
+			onclick={() => selectMobilePane('tools')}
+			onkeydown={tabKeydown}
+		>Tools</button>
 	</div>
 
 	<section
@@ -147,15 +146,15 @@
 		<div
 			class="workspace-divider"
 			role="separator"
-			aria-label={notebook ? 'Resize document pane' : 'Resize workspace tools'}
+			aria-label={notebook ? 'Resize Investigation pane' : 'Resize workspace tools'}
 			aria-orientation="vertical"
-			aria-valuemin={400}
+			aria-valuemin={notebook ? 320 : 400}
 			aria-valuemax={Math.round(activeMaximum)}
 			aria-valuenow={Math.round(activeWidth)}
 			tabindex="0"
 			onkeydown={resizeKey}
 			onpointerdown={(event) => { event.preventDefault(); dragging = true; }}
-			ondblclick={() => { if (notebook) notebookDocumentWidth = notebookDefaultWidth; else toolWidth = 480; rememberWidth(); }}
+			ondblclick={() => { if (notebook) notebookToolsWidth = notebookDefaultWidth; else toolWidth = 480; rememberWidth(); }}
 		></div>
 	{/if}
 	<aside
@@ -163,7 +162,7 @@
 		id="workspace-tools-pane"
 		aria-label="Workspace tools"
 		role={mobileTabs ? 'tabpanel' : undefined}
-		aria-labelledby={mobileTabs ? 'workspace-document-tab' : undefined}
+		aria-labelledby={mobileTabs ? 'workspace-tools-tab' : undefined}
 		hidden={!toolsVisible}
 	>
 		{@render tools()}
@@ -173,10 +172,10 @@
 <style>
 	.workspace-chat-layout { position: relative; display: grid; flex: 1; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; background: var(--workspace-canvas); }
 	.workspace-chat-layout[data-panel-mode='split'] { grid-template-columns: minmax(0, 1fr) 1px var(--tools-width); }
-	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] { grid-template-columns: minmax(400px, var(--document-width)) 1px minmax(320px, 1fr); }
-	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-tools-pane { grid-column: 1; grid-row: 1; }
+	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] { grid-template-columns: minmax(400px, 1fr) 1px minmax(320px, var(--notebook-tools-width)); }
+	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-tools-pane { grid-column: 3; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-divider { grid-column: 2; grid-row: 1; }
-	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-conversation-pane { grid-column: 3; grid-row: 1; }
+	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-conversation-pane { grid-column: 1; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='mobile'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
 	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-mobile-tabs { grid-column: 1; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-conversation-pane,

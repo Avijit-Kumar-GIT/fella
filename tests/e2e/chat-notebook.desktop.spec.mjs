@@ -1,8 +1,11 @@
 import { test, expect, question, invoke, createArtifact, createDocument, seedRun, chooseWorkspace, assertNoExecution, assertCanonicalUnchanged } from './generative-workspace-harness.mjs';
 
-// Chat/Notebook v1: frozen in docs/testing/CHAT-NOTEBOOK-v1.md.
+// Chat/Notebook v1.2: expected pane order and answer navigation are recorded
+// in docs/testing/CHAT-NOTEBOOK-v1.md. These deterministic cases do not alter
+// the existing persistence, draft, diff, or report assertions.
 // Real Electron/Rust records; no model or analytics calls are permitted by the
-// shared harness. These new cases do not alter pre-existing suite expectations.
+// shared harness. The right-pane navigation assertions follow the approved
+// v1.2 UX contract instead of the previous document-before-chat layout.
 const spec = { root: 'doc', elements: {
  doc: { type: 'Document', props: {}, children: ['title', 'metric', 'table'] },
  title: { type: 'Title', props: { content: 'Quarterly revenue' }, children: [] },
@@ -50,18 +53,18 @@ test('Chat and Notebook retain the conversation, draft and saved result at wide 
  await expect(page.locator('.workspace-tools-pane')).toContainText('Quarterly revenue');
  await expect(composer).toHaveValue('Keep this draft while changing layout');
  const rectangles = await page.locator('.workspace-chat-layout').evaluate(host => ({
-  document: host.querySelector('.workspace-tools-pane').getBoundingClientRect().x,
+  investigation: host.querySelector('.workspace-tools-pane').getBoundingClientRect().x,
   chat: host.querySelector('.workspace-conversation-pane').getBoundingClientRect().x
  }));
- expect(rectangles.document).toBeLessThan(rectangles.chat);
+ expect(rectangles.chat).toBeLessThan(rectangles.investigation);
  await page.screenshot({ path: test.info().outputPath('wide-notebook.png') });
  await page.setViewportSize({ width: 600, height: 720 });
- await expect(page.getByRole('tab', { name: 'Document', exact: true })).toBeVisible();
+ await expect(page.getByRole('tab', { name: 'Tools', exact: true })).toBeVisible();
  await page.getByRole('tab', { name: 'Chat', exact: true }).click();
  await expect(composer).toBeVisible();
  await expect(composer).toHaveValue('Keep this draft while changing layout');
  expect(await transcript.evaluate(element => element.isConnected)).toBe(true);
- await page.getByRole('tab', { name: 'Document', exact: true }).click();
+ await page.getByRole('tab', { name: 'Tools', exact: true }).click();
  await expect(page.locator('.workspace-tools-pane')).toBeVisible();
  await page.screenshot({ path: test.info().outputPath('compact-notebook.png') });
  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1)).toBe(true);
@@ -83,7 +86,8 @@ test('a candidate can be reviewed from chat without adopting it or changing a pi
  const candidate = await invoke(page, 'artifact_revise', { workspaceId: workspace, artifactId: artifact.id, baseRevision: 1, runId: candidateRun.id, spec, changeNote: 'Updated revenue calculation.' });
  expect(candidate.artifact.current_revision).toBe(1);
  await openSavedAnswer(desktop, candidate);
- await page.getByRole('button', { name: 'Review changes', exact: true }).click();
+ await page.getByRole('button', { name: 'Answer actions', exact: true }).click();
+ await page.getByRole('menuitem', { name: 'Review changes · revision 2', exact: true }).click();
  const diff = page.getByRole('region', { name: 'Analytical comparison', exact: true });
  await expect(diff).toBeVisible();
  for (const name of ['Meaning', 'Inputs', 'Method', 'Results', 'Impact']) await expect(diff.getByRole('heading', { name, exact: true })).toBeVisible();
@@ -171,8 +175,13 @@ test('Notebook titles legacy runs with the captured Question instead of repeated
  await page.getByRole('button', { name: `Open conversation: ${conversationTitle}`, exact: true }).click();
  await page.getByRole('button', { name: 'Notebook', exact: true }).click();
 
- const output = page.locator(`.notebook-output[data-analysis-turn-id="${desktop.run.id}"]`);
- await expect(output.getByRole('heading', { name: selectedQuestion, exact: true })).toBeVisible();
- await expect(output).not.toContainText('Use this current analyst-edited Question plan as context');
+ const questionIndex = page.getByRole('region', { name: 'Investigation Questions', exact: true });
+ const questionLink = questionIndex.getByRole('button', { name: `Open answer for ${selectedQuestion}`, exact: true });
+ await expect(questionLink).toBeVisible();
+ await expect(page.locator('.notebook')).not.toContainText('Use this current analyst-edited Question plan as context');
+ await questionLink.click();
+ const answerMessage = page.locator(`.msg.assistant[data-analysis-turn-id="${desktop.run.id}"]`);
+ await expect(answerMessage).toBeVisible();
+ await expect(answerMessage).not.toContainText('Use this current analyst-edited Question plan as context');
  await assertCanonicalUnchanged(desktop.run);
 });
