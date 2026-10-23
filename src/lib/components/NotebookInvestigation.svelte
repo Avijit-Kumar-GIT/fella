@@ -143,8 +143,15 @@
 		};
 	}
 	function titleForRun(id: string, run?: AnalysisTurn): string {
-		if (run?.question.trim()) return run.question;
-		return questions.find(question => question.latest_analysis_turn_id === id || question.analysis_turn_ids?.includes(id))?.text ?? 'Saved analysis';
+		const capturedQuestion = run?.investigation_context?.question_text?.trim();
+		if (capturedQuestion) return capturedQuestion;
+		const linkedQuestion = (run?.investigation_context?.question_id
+			? questions.find(question => question.id === run.investigation_context?.question_id)
+			: undefined)
+			?? questions.find(question => question.latest_analysis_turn_id === id || question.analysis_turn_ids?.includes(id));
+		if (linkedQuestion) return linkedQuestion.text;
+		if (run?.question.trim()) return run.question.trim();
+		return 'Saved analysis';
 	}
 
 	async function loadOutput(id: string, key: string, live?: Message): Promise<void> {
@@ -170,7 +177,7 @@
 					if (live && key === identity && generation === outputRequest) session.persist();
 				});
 				if (key !== identity || generation !== outputRequest) return;
-				outputs = { ...outputs, [id]: { id, message, question: resolved?.run.question || question, loading: false, ready: !!resolved,
+				outputs = { ...outputs, [id]: { id, message, question: resolved ? titleForRun(id, resolved.run) : question, loading: false, ready: !!resolved,
 					error: resolved ? '' : 'The saved layout is unavailable. The answer and its recorded evidence remain below.' } };
 			} catch (cause) {
 				if (key !== identity || generation !== outputRequest) return;

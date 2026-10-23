@@ -120,3 +120,54 @@ test('Notebook naming, files and new reports preserve the linked conversation', 
  await expect(page.locator('.workspace-conversation-pane .analytical-answer')).toContainText('Quarterly revenue');
  await assertNoExecution(desktop); await assertCanonicalUnchanged(desktop.run);
 });
+
+test('Notebook titles legacy runs with the captured Question instead of repeated plan scaffolding', async ({ desktop }) => {
+ const { page, workspace } = desktop;
+ const conversationId = 'notebook-legacy-question-chat';
+ const conversationTitle = 'Legacy Question title fixture';
+ const mainQuestion = 'Why did Northstar Outfitters’ net merchandise revenue change between Q3 and Q4 2025?';
+ const selectedQuestion = 'Which product categories saw the largest increases or decreases in revenue between Q3 and Q4 2025?';
+ const legacyPrompt = `Use this current analyst-edited Question plan as context for the request below. Keep the immediate request primary, use the plan to understand the broader Investigation, and do not present unanswered Questions as findings. Current Question plan: Main Question: ${mainQuestion} Subquestion 1: What was the total net merchandise revenue for Northstar Outfitters in Q3 and Q4 2025? Subquestion 2: How did the average order value (AOV) change between Q3 and Q4 2025? Subquestion 3: What was the change in total order volume between Q3 and Q4 2025? Subquestion 4: ${selectedQuestion} Subquestion 5: How did the rate of returns and allowances change between Q3 and Q4 2025? Immediate request: ${selectedQuestion}`;
+
+ await invoke(page, 'archive_conversation', { id: conversationId, body: JSON.stringify({
+  id: conversationId, title: conversationTitle, workspace, saved_at_ms: Date.now(), messages: [
+   { id: 'legacy-question-user', role: 'user', text: mainQuestion, ts: 1 }
+  ]
+ }) });
+ const investigation = await invoke(page, 'investigation_ensure', {
+  workspaceId: workspace, conversationId, initialRequest: mainQuestion, sourceMessageId: 'legacy-question-user'
+ });
+ await invoke(page, 'investigation_update_questions', { investigationId: investigation.id, questions: [
+  { id: 'northstar-main', text: mainQuestion },
+  { id: 'northstar-categories', parent_id: 'northstar-main', text: selectedQuestion }
+ ] });
+ desktop.run = await seedRun(desktop, {
+  id: 'notebook-legacy-question-run', conversationId, question: legacyPrompt,
+  investigationContext: {
+   investigation_id: investigation.id, question_id: 'northstar-categories', question_text: selectedQuestion,
+   definitions: [], source_selection: { mode: 'all_sources', included_paths: [] }
+  }
+ });
+ await invoke(page, 'investigation_link_analysis_turns', { investigationId: investigation.id, analysisTurnIds: [desktop.run.id] });
+ await invoke(page, 'investigation_set_analysis_turn_questions', {
+  investigationId: investigation.id, analysisTurnId: desktop.run.id, questionIds: ['northstar-categories']
+ });
+ const run = await invoke(page, 'analysis_turn_load', { turnId: desktop.run.id });
+ expect(run.question).toBe(legacyPrompt); // Legacy provenance remains unchanged.
+ await invoke(page, 'archive_conversation', { id: conversationId, body: JSON.stringify({
+  id: conversationId, title: conversationTitle, workspace, saved_at_ms: Date.now(), messages: [
+   { id: 'legacy-question-user', role: 'user', text: mainQuestion, ts: 1 },
+   { id: 'legacy-question-answer', role: 'assistant', text: run.result.text, ts: 2,
+    answer: { ...run.result, turn_id: run.id, workspace: { path: workspace, revision: run.workspace_revision } } }
+  ]
+ }) });
+ await page.reload();
+ await chooseWorkspace(page, 'commerce');
+ await page.getByRole('button', { name: `Open conversation: ${conversationTitle}`, exact: true }).click();
+ await page.getByRole('button', { name: 'Notebook', exact: true }).click();
+
+ const output = page.locator(`.notebook-output[data-analysis-turn-id="${desktop.run.id}"]`);
+ await expect(output.getByRole('heading', { name: selectedQuestion, exact: true })).toBeVisible();
+ await expect(output).not.toContainText('Use this current analyst-edited Question plan as context');
+ await assertCanonicalUnchanged(desktop.run);
+});

@@ -128,10 +128,11 @@ async function launch(profile) {
 	}
 }
 
-async function seedRun({ page, profile, workspace }, { id = 'gen-saved-run', conversationId = 'gen-revenue-chat', amounts = [10, 20], resultId = 'sales-result', excluded = false, complete = true } = {}) {
+async function seedRun({ page, profile, workspace }, { id = 'gen-saved-run', conversationId = 'gen-revenue-chat', amounts = [10, 20], resultId = 'sales-result', excluded = false, complete = true, question: runQuestion = question, investigationContext } = {}) {
 	const catalog = await invoke(page, 'get_catalog', { workspaceId: workspace });
 	const run = {
-		id, conversation_id: conversationId, question,
+		id, conversation_id: conversationId, question: runQuestion,
+		...(investigationContext ? { investigation_context: investigationContext } : {}),
 		workspace, workspace_revision: catalog.revision,
 		source_scope: { used_sources: [{ source: 'sales.csv', table: 'sales', evidence_ids: [resultId] }], skipped_sources: [] },
 		context_refs: [], prior_turn_refs: [], state: 'accepted',
