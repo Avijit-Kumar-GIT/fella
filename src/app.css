@@ -574,20 +574,31 @@ kbd {
 	font-size: inherit;
 }
 .rich table {
+	width: 100%;
 	border-collapse: collapse;
-	font-family: var(--mono);
-	font-size: var(--fs-xs);
+	font-family: var(--sans);
+	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
+	line-height: 1.45;
+	color: var(--text);
 }
 .rich th,
 .rich td {
-	border: 1px solid var(--border);
-	padding: 1px 7px;
+	border-bottom: 1px solid var(--border);
+	padding: 8px 12px;
 	text-align: left;
+	vertical-align: top;
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: break-word;
 }
 .rich th {
+	font-weight: 550;
 	background: var(--bg-inset);
 	color: var(--text-dim);
+}
+.rich tbody tr:last-child td {
+	border-bottom: 0;
 }
 
 /* Auto-hiding scrollbars invisible until you interact with the scroll area. */

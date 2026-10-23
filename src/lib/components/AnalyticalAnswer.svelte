@@ -42,12 +42,16 @@
 		const turn = turnId;
 		const waitingForAnswer = message.pending;
 		const retryRequested = retry;
+		const hasPresentation = Boolean(id || message.answer?.presentation_spec);
 		// Rendering a saved presentation is synchronous. Artifact resolution is
 		// only needed for old uncached data or a deliberate save/change action.
 		if (!retryRequested && id && untrack(() => !!snapshot)) return;
 		if (untrack(() => resolved && resolved.artifact.id === id && resolved.revision.revision === revision)) return;
 		const request = ++sequence;
 		error = '';
+		// Plain answers are a valid completion. Don't report an absent optional
+		// layout as a failed render or make a pointless artifact lookup.
+		if (!hasPresentation) { loading = false; return; }
 		if (!owner || !turn || waitingForAnswer) return;
 		loading = true;
 		void ensureAnalyticalOutput(message, owner)

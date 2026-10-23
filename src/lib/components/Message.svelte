@@ -283,13 +283,6 @@
 		border-left: 2px solid var(--border-strong);
 		color: var(--chat-meta);
 	}
-	/* markdown tables can't be wrapped in a scroll container (they come from
-	   @html), so let the table itself scroll. */
-	.msg.assistant .text :global(table) {
-		display: block;
-		overflow-x: auto;
-		margin: 4px 0;
-	}
 	/* the shared .thinking dots sit on the baseline after streamed text */
 	.text .thinking {
 		margin-left: 10px;
