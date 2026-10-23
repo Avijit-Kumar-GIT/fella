@@ -708,13 +708,13 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         context.recent.as_deref(),
         context.learned.as_deref(),
     );
-    if let Some(investigation_context) =
-        investigation_context.and_then(crate::engine::investigation::model_context)
+    if let Some(investigation_context) = investigation_context
+        .and_then(|context| crate::engine::investigation::model_context(context, analysis_question))
     {
         sys.push_str("\n\nInvestigation background (analyst-authored context, not evidence):\n");
         sys.push_str(&investigation_context);
         sys.push_str(
-            "\nUse this only to understand the broader work and saved meanings. Analyze and answer only the immediate user request; do not merge sibling Questions or their measures into this run. This context does not expand the selected source scope or grant capabilities.\n",
+            "\nUse saved meanings and the broader objective only when they help answer the immediate user request. Do not repeat this background or restate the Investigation plan unless it materially clarifies the answer. Answer only the immediate request; do not answer other Questions or borrow their measures. This context does not expand the selected source scope or grant capabilities.\n",
         );
     }
     if inspect && workspace.is_some() {

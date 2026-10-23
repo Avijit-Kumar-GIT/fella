@@ -1408,10 +1408,14 @@ pub fn context_snapshot_for_question(
     })
 }
 
-/// Format analyst-authored meanings and the durable Question plan for the
-/// model as background context. The current user request remains a separate
-/// message so sibling Questions cannot leak into current-run verification.
-pub fn model_context(context: &InvestigationContextSnapshot) -> Option<String> {
+/// Format analyst-authored meanings and only the broader objective for the
+/// model as background context. The immediate request is already supplied
+/// separately, so repeating it or listing sibling Questions adds noise and
+/// risks blending their measures into the current run.
+pub fn model_context(
+    context: &InvestigationContextSnapshot,
+    immediate_request: &str,
+) -> Option<String> {
     let mut sections = Vec::new();
     if !context.definitions.is_empty() {
         let definitions = context
@@ -1434,46 +1438,21 @@ pub fn model_context(context: &InvestigationContextSnapshot) -> Option<String> {
         ));
     }
 
-    if !context.question_plan.is_empty() {
-        let roots: Vec<_> = context
-            .question_plan
-            .iter()
-            .filter(|question| question.parent_id.is_none())
-            .collect();
-        let mut lines = Vec::new();
-        if let Some(root) = roots.first() {
-            lines.push(format!("Main Question: {}", root.text.trim()));
-            for (index, question) in context
-                .question_plan
-                .iter()
-                .filter(|question| question.parent_id.as_deref() == Some(root.id.as_str()))
-                .enumerate()
-            {
-                lines.push(format!(
-                    "Subquestion {}: {}",
-                    index + 1,
-                    question.text.trim()
-                ));
-            }
-            for question in context.question_plan.iter().filter(|question| {
-                question.parent_id.is_some()
-                    && question.parent_id.as_deref() != Some(root.id.as_str())
-            }) {
-                lines.push(format!("Related Question: {}", question.text.trim()));
-            }
-        } else {
-            lines.extend(
-                context
-                    .question_plan
-                    .iter()
-                    .enumerate()
-                    .map(|(index, question)| format!("{}. {}", index + 1, question.text.trim())),
-            );
-        }
-        sections.push(format!(
-            "Investigation Question plan (background only; answer only the immediate user request, do not combine sibling Questions):\n{}",
-            lines.join("\n")
-        ));
+    let normalize = |text: &str| {
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_lowercase()
+    };
+    let immediate = normalize(immediate_request);
+    if let Some(objective) = context
+        .question_plan
+        .iter()
+        .find(|question| question.parent_id.is_none())
+        .map(|question| question.text.trim())
+        .filter(|objective| !objective.is_empty() && normalize(objective) != immediate)
+    {
+        sections.push(format!("Broader Investigation objective:\n{objective}"));
     }
 
     (!sections.is_empty()).then(|| sections.join("\n\n"))
@@ -3284,11 +3263,13 @@ mod tests {
         assert_eq!(snapshot.investigation_id, created.id);
         assert_eq!(snapshot.definitions.len(), 2);
         assert_eq!(snapshot.question_plan.len(), 2);
-        let background = model_context(&snapshot).unwrap();
+        let background = model_context(&snapshot, "What was average order value?").unwrap();
         assert!(background.contains("active customer ordered in the last 90 days"));
-        assert!(background.contains("Main Question: Explain revenue movement"));
-        assert!(background.contains("Subquestion 1: What was average order value?"));
-        assert!(background.contains("answer only the immediate user request"));
+        assert!(background.contains("Broader Investigation objective:\nExplain revenue movement"));
+        assert!(!background.contains("What was average order value?"));
+        assert!(!background.contains("Subquestion"));
+        let main_request_context = model_context(&snapshot, "Explain revenue movement").unwrap();
+        assert!(!main_request_context.contains("Broader Investigation objective"));
 
         let edited = update_definitions(
             &data_dir,
