@@ -45,9 +45,10 @@
 	import Chart from './Chart.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 
-	let { viewKey = '', onclose }: { viewKey?: string; onclose?: () => void } = $props();
+	let { viewKey = '', initialInvestigation = null, onclose }: { viewKey?: string; initialInvestigation?: Investigation | null; onclose?: () => void } = $props();
 	// Freeze the keyed instance's owner before its parent switches live tab props.
 	const stableViewKey = untrack(() => viewKey);
+	const initialRecord = untrack(() => initialInvestigation);
 	const initialView = readInvestigationView(stableViewKey);
 	const sectionScroll = { ...initialView.scroll };
 	let scroller = $state<HTMLElement>();
@@ -79,8 +80,8 @@
 		{ id: 'results', label: 'Results' }
 	];
 
-	let investigations = $state<Investigation[]>([]);
-	let selectedId = $state<string | null>(null);
+	let investigations = $state<Investigation[]>(initialRecord ? [initialRecord] : []);
+	let selectedId = $state<string | null>(initialRecord?.id ?? null);
 	let investigationSection = $state<InvestigationSection>(initialView.section);
 	let workspacePath = $state<string | null>(null);
 	let loadedWorkspace = $state<string | null>(null);
@@ -107,7 +108,7 @@
 	let proposalTarget = $state<BriefProposalTarget>('goal');
 	let pendingAnalysisQuestionId = $state<string | null>(null);
 	let staleResultReview = $state<{ questionId: string; status: AnalysisTurnReplayStatus } | null>(null);
-	let loading = $state(false);
+	let loading = $state(!initialRecord);
 	let openingConversation = $state(false);
 	let saving = $state(false);
 	let autosaving = $state(false);
@@ -158,6 +159,8 @@
 	const syncingInvestigations = new Set<string>();
 
 	let selected = $derived(investigations.find((item) => item.id === selectedId) ?? null);
+	let needsQuestionAttention = $derived((selected?.questions ?? []).some((question) => question.status === 'active' && question.answer_status !== 'answered'));
+	let needsResultsReview = $derived((selected?.questions ?? []).some((question) => question.status === 'active' && ['incomplete', 'unsupported', 'insufficient_data', 'needs_review', 'outdated', 'blocked', 'waiting_for_input'].includes(question.answer_status)));
 	let investigationConversationMessages = $derived.by(() => {
 		if (!selected?.conversation_id) return [];
 		return session.conversations.find((conversation) =>
@@ -386,15 +389,18 @@
 			if (serial !== requestSerial) return;
 			if (selected?.id === draft.id && (dirty || questionsDirty || definitionsDirty)) return;
 		}
-		loading = true;
+		const visibleSelection = selected?.workspace_id === path;
+		loading = !visibleSelection;
 		error = '';
 		investigationLoadError = '';
 		conversationError = '';
-		investigations = [];
-		selectedId = null;
-		analysisTurns = {};
-		openAnalysisTurnId = null;
-		questionLinksDraft = [];
+		if (!visibleSelection) {
+			investigations = [];
+			selectedId = null;
+			analysisTurns = {};
+			openAnalysisTurnId = null;
+			questionLinksDraft = [];
+		}
 		try {
 			const all = await ipc.investigationsList(session.conversations.map((conversation) => conversation.id));
 			if (serial !== requestSerial) return;
@@ -415,7 +421,10 @@
 				item.conversation_id === activeConversation.id ||
 				(!!activeQuestion && item.brief_source_message_id === activeQuestion.id)
 			);
-			const conversationInvestigation = navigationInvestigation ?? explicitlyActive ?? linkedToConversation;
+			const seededInvestigation = initialRecord?.workspace_id === path
+				? investigations.find((item) => item.id === initialRecord.id)
+				: null;
+			const conversationInvestigation = navigationInvestigation ?? explicitlyActive ?? seededInvestigation ?? linkedToConversation;
 			selectedId = conversationInvestigation?.id ?? null;
 			const selectedInvestigation = investigations.find((item) => item.id === selectedId);
 			if (isDesktop() && conversationInvestigation && selectedInvestigation && (selectedInvestigation.conversation_id || selectedInvestigation.brief_source_message_id)) {
@@ -1778,7 +1787,7 @@
 				</div>
 			</div>
 			<div class="investigation-identity">
-				<span class="investigation-mark"><Icon name="bookmark" size={20} /></span>
+				<span class="investigation-mark"><Icon name="notebook-pen" size={20} /></span>
 				<div class="investigation-title-row">
 					<h1 id="investigation-title">{selected.title || 'Untitled Investigation'}</h1>
 				<Button variant="ghost" size="icon" aria-label="Rename Investigation" title="Rename Investigation" onclick={() => { nameDraft = selected!.title; nameError = ''; nameOpen = true; }}><Icon name="pencil" size={14} /></Button>
@@ -1830,7 +1839,7 @@
 					{#if conversationError}
 						<p class="analysis-run-error" role="alert">{conversationError}</p>
 					{/if}
-					<div class="investigation-nav fella-pill-nav" role="tablist" aria-label="Investigation sections" tabindex="-1" onkeydown={handleInvestigationTabsKeydown}>
+					<div class="investigation-nav" role="tablist" aria-label="Investigation sections" tabindex="-1" onkeydown={handleInvestigationTabsKeydown}>
 						{#each investigationSections as section (section.id)}
 							<button
 								class="fella-pill-nav-item"
@@ -1839,9 +1848,14 @@
 								role="tab"
 								aria-selected={investigationSection === section.id}
 								aria-controls={`investigation-panel-${section.id}`}
+								aria-label={`${section.label}${section.id === 'questions' && needsQuestionAttention ? ', has unanswered questions' : ''}${section.id === 'results' && needsResultsReview ? ', results need review' : ''}`}
 								tabindex={investigationSection === section.id ? 0 : -1}
 								onclick={() => (investigationSection = section.id)}
-							>{section.label}</button>
+							>
+								{section.label}
+								{#if section.id === 'questions' && needsQuestionAttention}<i class="investigation-tab-indicator question-indicator" aria-hidden="true"></i>{/if}
+								{#if section.id === 'results' && needsResultsReview}<i class="investigation-tab-indicator results-indicator" aria-hidden="true"></i>{/if}
+							</button>
 						{/each}
 					</div>
 					<div
@@ -3463,16 +3477,22 @@
 	:global(.notebook-back:hover), .notebook-panel-actions :global(button:hover) { background:var(--bg-raised); color:var(--text); }
 	.notebook-panel-actions { display:flex; align-items:center; gap:7px; }
 	:global(.notebook-share) { display:inline-flex; min-height:30px; align-items:center; gap:7px; padding:4px 13px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:var(--fs-xs); }
-	:global(.notebook-close) { width:32px; height:32px; min-height:32px; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); }
+	:global(.notebook-close) { width:36px; height:36px; min-height:36px; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); }
 	.investigation-identity { display:flex; flex-direction:column; align-items:center; padding:12px 0 4px; text-align:center; }
-	.investigation-mark { display:grid; width:46px; height:46px; place-items:center; border-radius:50%; background:color-mix(in srgb, var(--brand) 24%, var(--bg-raised)); color:var(--brand-icon); }
+	.investigation-mark { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:#fbbf24; color:#18181b; }
 	.investigation-title-row { display:flex; width:100%; align-items:center; justify-content:center; gap:4px; margin-top:10px; }
-	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 34px); margin:0; color:var(--text); font-size:var(--fs-md); font-weight:550; letter-spacing:-.015em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-	.investigation-title-row :global(button) { width:25px; height:25px; min-height:25px; color:var(--text-faint); }
+	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 34px); margin:0; color:var(--text); font-size:15px; font-weight:500; letter-spacing:-.015em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.investigation-title-row :global(button) { width:25px; height:25px; min-height:25px; color:var(--text-faint); opacity:0; }
+	.investigation-title-row:hover :global(button), .investigation-title-row :global(button:focus-visible) { opacity:1; }
 	.investigation-identity > p { margin:2px 0 0; color:var(--text-faint); font-size:var(--fs-xs); }
-	.investigation-nav { position:sticky; top:0; z-index:5; display:flex; width:100%; max-width:100%; gap:0; margin:14px 0 13px; padding:3px; overflow:hidden; border-color:var(--border); background:color-mix(in srgb,var(--bg-inset) 78%,var(--bg)); }
-	.investigation-nav > .fella-pill-nav-item { flex:1 1 0; min-width:0; min-height:30px; padding-inline:4px; font-size:clamp(10px, 3.1cqi, 12px); }
+	.investigation-nav { position:sticky; top:0; z-index:5; display:flex; width:100%; max-width:100%; justify-content:space-between; gap:0; margin:14px 0 13px; padding:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; background:var(--bg); }
+	.investigation-nav::-webkit-scrollbar { display:none; }
+	.investigation-nav > .fella-pill-nav-item { position:relative; flex:none; min-width:0; min-height:30px; padding-inline:8px; font-size:12px; }
+	.investigation-nav > .fella-pill-nav-item[aria-selected='true'] { background:var(--bg-raised-2); color:var(--text); box-shadow:none; }
+	.investigation-tab-indicator { position:absolute; top:4px; right:4px; width:6px; height:6px; border-radius:50%; }
+	.question-indicator { background:var(--brand-icon); }
+	.results-indicator { background:var(--warn); }
 	.investigation-tab-panel > .investigation-document-section:first-child, .investigation-tab-panel > .analyst-work-plan:first-child { padding-top:4px; }
 	.investigation-content, .brief-editor { min-width:0; }
-	@container investigation-pane (max-width: 430px) { .investigation-page { padding-inline:12px; } .page-head { margin-inline:-12px; padding-inline:12px; } .investigation-nav { width:100%; } .investigation-nav > .fella-pill-nav-item { flex:1 1 0; padding-inline:2px; font-size:clamp(10px, 3.4cqi, 11px); } }
+	@container investigation-pane (max-width: 430px) { .investigation-page { padding-inline:12px; } .page-head { margin-inline:-12px; padding-inline:12px; } .investigation-nav { width:100%; justify-content:flex-start; } .investigation-nav > .fella-pill-nav-item { flex:none; padding-inline:6px; font-size:11.5px; } }
 </style>

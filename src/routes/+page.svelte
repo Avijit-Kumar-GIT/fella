@@ -468,12 +468,12 @@
 								{:else if sidebarMode === 'files'}
 									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
 								{:else}
-									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} />
+									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} onasksource={askAboutSource} />
 								{/if}
 							{/snippet}
 							{#snippet tools()}
 								{#if sidebarMode === 'chat' && scopedWorkspaceActive}
-									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} defaultInspector />
+									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} onasksource={askAboutSource} defaultInspector />
 								{:else if sidebarMode === 'files' && session.catalog.workspace}
 									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
 								{:else if sidebarMode === 'reports' && session.catalog.workspace}

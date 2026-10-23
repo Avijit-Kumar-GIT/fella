@@ -12,7 +12,7 @@ const cache = new Map<string, InvestigationViewState>();
 const prefix = 'fella:tool-view:';
 
 export function readInvestigationView(key: string): InvestigationViewState {
-	const fallback: InvestigationViewState = { section: 'brief', scroll: {}, openRunId: null, definitionsOpen: false, historyOpen: true };
+	const fallback: InvestigationViewState = { section: 'data', scroll: {}, openRunId: null, definitionsOpen: false, historyOpen: true };
 	if (!key) return fallback;
 	try {
 		const saved = cache.get(key) ?? JSON.parse(localStorage.getItem(prefix + key) || 'null');

@@ -41,7 +41,7 @@
 			.filter((source) => folder === 'all' || sourceFolder(source) === folder)
 			.filter((source) => kind === 'all' || (kind === 'data' ? sourceType(source) === 'data' : sourceType(source) === 'document'))
 			.filter((source) => !term || `${source.name} ${relativePath(source.path)} ${source.synopsis ?? ''} ${source.columns?.map((column) => column.name).join(' ') ?? ''}`.toLocaleLowerCase().includes(term))
-			.sort((left, right) => relativePath(left.path).localeCompare(relativePath(right.path), undefined, { numeric: true }) || left.name.localeCompare(right.name, undefined, { numeric: true }));
+			.sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true }) || relativePath(left.path).localeCompare(relativePath(right.path), undefined, { numeric: true }));
 	});
 	let dataCount = $derived(sources.filter((source) => source.view).length);
 	let documentCount = $derived(sources.filter((source) => !source.view).length);
@@ -85,7 +85,7 @@
 
 		<div class="files-list" role="table" aria-label="Cataloged workspace sources">
 			<div class="files-list-head" role="row">
-				<span role="columnheader">Name</span><span role="columnheader">Rows</span><span role="columnheader">Updated</span><span role="columnheader">Status</span>
+				<span role="columnheader" aria-sort="ascending">Name <Icon name="arrow-up-down" size={12} /></span><span role="columnheader">Rows</span><span role="columnheader">Updated</span><span role="columnheader">Status</span>
 			</div>
 			{#each sources as source (`${source.path}:${source.name}`)}
 				{@const active = selected?.path === source.path && selected?.name === source.name}
@@ -122,8 +122,9 @@
 	.files-filter { flex:none; }
 	.files-filter .fella-pill-nav-item { min-height:28px; padding-inline:11px; }
 	.files-list { width:100%; max-width:980px; margin:0 auto; }
-	.files-list-head, .file-row { display:grid; grid-template-columns:minmax(0, 1fr) 76px 96px 86px; align-items:center; gap:12px; }
+	.files-list-head, .file-row { display:grid; grid-template-columns:minmax(0, 1fr) 72px 76px 104px; align-items:center; gap:12px; }
 	.files-list-head { min-height:32px; padding:0 12px; border-bottom:1px solid var(--border); color:var(--text-faint); font-size:11px; }
+	.files-list-head span:first-child { display:flex; align-items:center; gap:5px; }
 	.files-list-head span:not(:first-child) { text-align:right; }
 	.file-row { width:100%; min-width:0; min-height:58px; padding:7px 12px; border:0; border-bottom:1px solid color-mix(in srgb, var(--border) 75%, transparent); border-radius:10px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
 	.file-row:hover, .file-row.selected { background:var(--bg-raised); }

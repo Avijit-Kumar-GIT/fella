@@ -442,24 +442,30 @@
 
 <section class="studio" aria-label="Report editor" aria-busy={loading}>
 	<header class="studio-toolbar">
-		<DropdownMenu.Root>
-			<DropdownMenu.Trigger class="studio-document-trigger" aria-label="Choose report"><Icon name="file" size={14} /><span>{current?.title.trim() || 'Reports'}</span><Icon name="chevron-down" size={14} /></DropdownMenu.Trigger>
-			<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content studio-document-menu" align="start">
-				{#each documents as document (document.id)}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => switchDocument(document.id)}>{document.title}{#if current?.document.id === document.id}<Icon name="check" size={14} />{/if}</DropdownMenu.Item>{/each}
-				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</DropdownMenu.Item>
-			</DropdownMenu.Content></DropdownMenu.Portal>
-		</DropdownMenu.Root>
+		<div class="studio-breadcrumb">
+			<span>Reports</span><span class="studio-breadcrumb-separator">/</span>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger class="studio-document-trigger" aria-label="Choose report"><span>{current?.title.trim() || 'Choose a report'}</span><Icon name="chevron-down" size={12} /></DropdownMenu.Trigger>
+				<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content studio-document-menu" align="start">
+					{#each documents as document (document.id)}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => switchDocument(document.id)}>{document.title}{#if current?.document.id === document.id}<Icon name="check" size={14} />{/if}</DropdownMenu.Item>{/each}
+					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { newTitle = ''; createError = ''; createOpen = true; }}><Icon name="plus" size={14} />New report</DropdownMenu.Item>
+				</DropdownMenu.Content></DropdownMenu.Portal>
+			</DropdownMenu.Root>
+		</div>
 		<div class="toolbar-actions">
-			<Button variant="ghost" size="sm" onclick={() => { reportManagerOpen = true; reportPreview = null; reportJson = ''; reportError = ''; void refreshReportList(); }}>Import</Button>
 			{#if current}
+				<Button class="studio-action" variant="ghost" size="sm" disabled={current.locked} onclick={() => (notesEditing = true)}><Icon name="pencil" size={12} />Edit</Button>
 				<span class="save-status" role="status" aria-live="polite">{status}</span>
-				<Button variant="ghost" size="sm" disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={14} />{exportBusy ? 'Exporting…' : 'Export'}</Button>
-				<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="Report history and actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
+				<Button class="studio-action" variant="ghost" size="sm" disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={12} />{exportBusy ? 'Exporting…' : 'Export'}</Button>
+			{/if}
+			<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="More report actions" title="More report actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { reportManagerOpen = true; reportPreview = null; reportJson = ''; reportError = ''; void refreshReportList(); }}>Import snapshot…</DropdownMenu.Item>
+				{#if current}
 					<DropdownMenu.Item class="fella-ui-menu-item" disabled={packageBusy || current.locked} onSelect={() => void downloadPackage()}>Export portable snapshot</DropdownMenu.Item>
 					<DropdownMenu.Item class="fella-ui-menu-item" disabled={current.locked} onSelect={() => { checkpointTitle = ''; checkpointOpen = true; }}>Save checkpoint…</DropdownMenu.Item>
 					<DropdownMenu.Item class="fella-ui-menu-item" disabled={current.locked} onSelect={() => void saveCopy()}>Save a copy</DropdownMenu.Item>
-				</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
-			{/if}
+				{/if}
+			</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
 		</div>
 	</header>
 	<div class="studio-scroll">
@@ -523,19 +529,24 @@
 
 <style>
 	.studio { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); container-type: inline-size; }
-	.studio-toolbar { display: flex; align-items: center; justify-content: space-between; flex: none; min-width: 0; padding: 10px 18px; gap: var(--space-2); }
-	:global(.studio-document-trigger) { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 52%; min-height: 32px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+	.studio-toolbar { display: flex; align-items: center; justify-content: space-between; flex: none; min-width: 0; padding: 10px 20px; gap: var(--space-2); }
+	.studio-breadcrumb { display:flex; min-width:0; align-items:center; gap:8px; color:var(--text-faint); font-size:var(--fs-xs); }
+	.studio-breadcrumb-separator { color:var(--text-faint); }
+	:global(.studio-document-trigger) { display: flex; align-items: center; gap:6px; min-width:0; max-width:min(360px, 40vw); min-height:30px; padding:4px 2px; border:0; border-radius:8px; background:transparent; color:var(--text); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+	:global(.studio-document-trigger:hover) { color:var(--text); background:var(--bg-raised); }
 	:global(.studio-document-trigger > span) { min-width: 0; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 	:global(.studio-document-menu) { max-width: min(380px, calc(100vw - 32px)); max-height: 350px; overflow: auto; }
 	:global(.studio-document-menu .fella-ui-menu-item) { gap: var(--space-2); justify-content: space-between; overflow-wrap: anywhere; }
-	.toolbar-actions { min-width: 0; display: flex; align-items: center; gap: var(--space-1); }
+	.toolbar-actions { min-width: 0; display: flex; align-items: center; gap: 6px; }
+	:global(.studio-action) { min-height:32px; gap:7px; padding-inline:12px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:var(--fs-xs); }
+	:global(.studio-action:hover:not(:disabled)) { background:var(--bg-raised-2); }
 	.save-status { color: var(--text-faint); font-size: 11px; white-space: nowrap; padding-inline: var(--space-1); }
 	:global(.studio-icon-button) { display: inline-flex; flex: none; align-items: center; justify-content: center; min-height: 28px; min-width: 28px; padding: 5px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
 	:global(.studio-icon-button:hover:not(:disabled)), .add-notes:hover { background: var(--bg-inset); color: var(--text); }
 	:global(.studio-icon-button:disabled) { opacity: .35; cursor: default; }
 	:global(.studio-icon-button:focus-visible), :global(.studio-document-trigger:focus-visible), .add-notes:focus-visible, .document-title:focus-visible, .notes-input:focus-visible, .history summary:focus-visible, .output-picker-list button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 	.studio-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
-	.studio-document { box-sizing: border-box; width: 100%; max-width: 660px; margin: 0 auto; padding: 34px clamp(18px, 4cqi, 30px) 60px; }
+	.studio-document { box-sizing: border-box; width: 100%; max-width: 600px; margin: 0 auto; padding: 48px clamp(18px, 4cqi, 30px) 60px; }
 	.document-heading { margin-bottom: 30px; }
 	.document-title { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 5px; border: 0; background: transparent; color: var(--text); font: 550 clamp(25px, 4cqi, 32px)/1.28 var(--sans); letter-spacing: -.025em; text-overflow: ellipsis; }
 	p { margin: 0; }
@@ -602,5 +613,5 @@
 	.output-picker-list strong { font-weight: 500; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.output-picker-list span { color: var(--text-faint); font-size: var(--fs-xs); grid-row: 2; }
 	.output-picker-list :global(svg) { grid-column: 2; grid-row: 1 / 3; color: var(--text-faint); }
-	@container (max-width: 480px) { .save-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .studio-toolbar { padding-inline: 10px; } .studio-document { padding-top: var(--space-4); } }
+	@container (max-width: 480px) { .save-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .studio-toolbar { padding-inline: 10px; } .studio-document { padding-top: var(--space-4); } :global(.studio-document-trigger) { max-width:34vw; } :global(.studio-action) { gap:4px; padding-inline:8px; } }
 </style>

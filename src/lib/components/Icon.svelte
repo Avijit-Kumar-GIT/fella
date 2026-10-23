@@ -32,7 +32,9 @@
 		'table',
 		'file',
 		'bookmark',
-	'globe',
+		'globe',
+		'notebook-pen',
+		'arrow-up-down',
 		'pencil',
 		'download'
 	] as const;
@@ -45,6 +47,7 @@
 <script lang="ts">
 	import {
 		Asterisk,
+		ArrowUpDown,
 		ArrowUpRight,
 		Bookmark,
 		Check,
@@ -65,6 +68,7 @@
 		MessageSquare,
 		Minus,
 		Moon,
+		NotebookPen,
 		PanelLeft,
 		PanelRight,
 		Pencil,
@@ -116,6 +120,8 @@
 		file: FileText,
 		bookmark: Bookmark,
 		globe: Globe,
+		'notebook-pen': NotebookPen,
+		'arrow-up-down': ArrowUpDown,
 		pencil: Pencil,
 		download: Download
 	};

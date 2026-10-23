@@ -184,7 +184,7 @@
 		gap: var(--space-2);
 		margin-bottom: var(--space-2);
 		color: var(--chat-meta);
-		font-size: var(--fs-sm);
+		font-size: 12px;
 	}
 	.assistant-identity {
 		display: flex;
@@ -201,7 +201,7 @@
 	}
 	.msg.assistant .text {
 		padding: 13px 15px;
-		border: 1px solid var(--border);
+		border: 0;
 		border-radius: 16px;
 		background: var(--bg-raised);
 		font-size: var(--fs-sm);

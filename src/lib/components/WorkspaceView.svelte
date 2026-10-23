@@ -4,7 +4,7 @@
 	import { requestArtifactChange } from '$lib/commands';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { session, type WorkspaceToolTab } from '$lib/session.svelte';
-	import type { Investigation } from '$lib/types';
+	import type { Investigation, SourceInfo } from '$lib/types';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { Input } from '$lib/components/ui/input';
@@ -17,13 +17,14 @@
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 	import CompanionPane from './CompanionPane.svelte';
-	let { onexpand, notebook = false, defaultInspector = false }: { onexpand?: () => void; notebook?: boolean; defaultInspector?: boolean } = $props();
+	let { onexpand, onasksource, notebook = false, defaultInspector = false }: { onexpand?: () => void; onasksource?: (source: SourceInfo) => void; notebook?: boolean; defaultInspector?: boolean } = $props();
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
 	let investigationsLoaded = $state(false);
 	let investigationsUnavailable = $state(false);
 	let investigationBusy = $state(false);
+	let listedWorkspacePath: string | null = null;
 	let investigationsOpen = $state(false);
 	let chooserError = $state('');
 	let createOpen = $state(false);
@@ -59,12 +60,12 @@
 	});
 	let currentInvestigation = $derived.by(() => {
 		if (activeTab?.kind === 'investigation' && activeTab.investigationId) {
-			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
+			return investigations.find((item) => item.id === activeTab.investigationId && item.workspace_id === workspacePath) ?? null;
 		}
-		const linkedToChat = investigations.find((item) => item.conversation_id === session.activeChat.id);
+		const linkedToChat = investigations.find((item) => item.workspace_id === workspacePath && item.conversation_id === session.activeChat.id);
 		if (linkedToChat) return linkedToChat;
 		if (activeTab?.kind === 'investigation' && activeTab.conversationId === session.activeChat.id && activeTab.investigationId) {
-			return investigations.find((item) => item.id === activeTab.investigationId) ?? null;
+			return investigations.find((item) => item.id === activeTab.investigationId && item.workspace_id === workspacePath) ?? null;
 		}
 		return null;
 	});
@@ -79,14 +80,21 @@
 		void version;
 		if (!path) {
 			listRequest += 1;
+			listedWorkspacePath = null;
 			investigations = [];
 			investigationsUnavailable = false;
 			investigationsLoaded = true;
 			return;
 		}
+		const workspaceChanged = path !== listedWorkspacePath;
+		const alreadyLoadedForWorkspace = !workspaceChanged && investigationsLoaded;
+		if (workspaceChanged) {
+			listedWorkspacePath = path;
+			investigations = [];
+			investigationsLoaded = false;
+			investigationsUnavailable = false;
+		}
 		const request = ++listRequest;
-		investigationsLoaded = false;
-		investigationsUnavailable = false;
 		const activeConversationIds = session.conversations.map((conversation) => conversation.id);
 		void ipc.investigationsList(activeConversationIds).then((records) => {
 			if (request !== listRequest || path !== workspacePath) return;
@@ -95,12 +103,15 @@
 			session.reconcileWorkspaceToolTabs(workspaceInvestigations);
 			investigations = workspaceInvestigations
 				.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
+			investigationsUnavailable = false;
 			investigationsLoaded = true;
 		}).catch(() => {
 			if (request !== listRequest) return;
-			investigations = [];
-			investigationsUnavailable = true;
-			investigationsLoaded = true;
+			if (!alreadyLoadedForWorkspace) {
+				investigations = [];
+				investigationsUnavailable = true;
+				investigationsLoaded = true;
+			}
 		});
 		return () => {
 			if (request === listRequest) listRequest += 1;
@@ -495,15 +506,15 @@
 			{:else if activeTab.kind === 'preview' && activeTab.preview}
 				<CompanionPane reference={activeTab.preview} conversationId={activeTab.conversationId} embedded onclose={() => activeTab && session.closeWorkspaceToolTab(activeTab.id)} />
 			{:else if activeTab.kind === 'source'}
-				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} {onexpand} />
+				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} {onexpand} onclose={() => activeTab && session.closeWorkspaceToolTab(activeTab.id)} onask={(source) => onasksource?.(source)} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />
+			{:else if activeTab.kind === 'investigation' && currentInvestigation}
+					{#key `${workspacePath}:${currentInvestigation.id}`}
+						<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} initialInvestigation={currentInvestigation} onclose={() => session.setContentLayout('chat')} />
+				{/key}
 			{:else if activeTab.kind === 'investigation' && !investigationsLoaded}
 				<div class="workspace-opening" role="status">Loading Investigation…</div>
-			{:else if activeTab.kind === 'investigation' && currentInvestigation}
-				{#key `${workspacePath}:${currentInvestigation.id}`}
-					<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} onclose={() => session.setContentLayout('chat')} />
-				{/key}
 			{:else if activeTab.kind === 'investigation' && defaultInspector}
 				<div class="workspace-investigation-empty">
 					<span class="workspace-investigation-empty-icon"><Icon name="bookmark" size={16} /></span>
