@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 
-	let { onopen }: { onopen: (source: SourceInfo) => void } = $props();
+	let { onopen, selectedSource = null }: { onopen: (source: SourceInfo) => void; selectedSource?: SourceInfo | null } = $props();
 	type Node = { id: string; name: string; kind: 'folder' | 'file' | 'sheet'; children: Node[]; sources: SourceInfo[]; source?: SourceInfo };
 	type Row = { node: Node; depth: number; parentIds: string[] };
 	type FreshnessSummary = { questions: number; findings: number; unverifiedRuns: number; checkFailed: boolean };
@@ -90,7 +90,8 @@
 		expandedWorkbooks = { ...expandedWorkbooks, [id]: expandedWorkbooks[id] !== true };
 	}
 
-	function selectedSource(source: SourceInfo): boolean {
+	function sourceIsSelected(source: SourceInfo): boolean {
+		if (selectedSource) return selectedSource.path === source.path && selectedSource.name === source.name;
 		const active = session.activeWorkspaceToolTab;
 		return active?.kind === 'source' && active.sourcePath === source.path && active.sourceName === source.name;
 	}
@@ -235,11 +236,11 @@
 							<Icon name={expandedWorkbooks[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="file" size={14} /><span>{node.name}</span><small>{node.children.length} sheets</small>
 						</button>
 					{:else if node.kind === 'file' && node.sources[0]}
-						<button class="tree-row tree-file" type="button" aria-current={selectedSource(node.sources[0]) ? 'page' : undefined} class:selected={selectedSource(node.sources[0])} style={`--tree-depth:${row.depth}`} title={relativePath(node.sources[0].path, workspacePath)} onclick={() => onopen(node.sources[0])}>
+						<button class="tree-row tree-file" type="button" aria-current={sourceIsSelected(node.sources[0]) ? 'page' : undefined} class:selected={sourceIsSelected(node.sources[0])} style={`--tree-depth:${row.depth}`} title={relativePath(node.sources[0].path, workspacePath)} onclick={() => onopen(node.sources[0])}>
 							<Icon name="file" size={14} /><span>{node.name}</span>
 						</button>
 					{:else if node.kind === 'sheet' && node.source}
-						<button class="tree-row tree-sheet" type="button" aria-current={selectedSource(node.source) ? 'page' : undefined} class:selected={selectedSource(node.source)} style={`--tree-depth:${row.depth}`} title={node.source.name} onclick={() => onopen(node.source!)}>
+						<button class="tree-row tree-sheet" type="button" aria-current={sourceIsSelected(node.source) ? 'page' : undefined} class:selected={sourceIsSelected(node.source)} style={`--tree-depth:${row.depth}`} title={node.source.name} onclick={() => onopen(node.source!)}>
 							<Icon name="table" size={14} /><span>{node.name}</span>
 						</button>
 					{/if}

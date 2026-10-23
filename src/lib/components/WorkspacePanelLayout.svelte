@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount, type Snippet } from 'svelte';
 
-	let { open, notebook = false, expanded = $bindable(false), compact = $bindable(false), conversation, tools }: {
-		open: boolean; notebook?: boolean; expanded?: boolean; compact?: boolean; conversation: Snippet; tools: Snippet;
+	let { open, notebook = false, primaryLabel = 'Chat', secondaryLabel = 'Tools', expanded = $bindable(false), compact = $bindable(false), conversation, tools }: {
+		open: boolean; notebook?: boolean; primaryLabel?: string; secondaryLabel?: string; expanded?: boolean; compact?: boolean; conversation: Snippet; tools: Snippet;
 	} = $props();
 	let host = $state<HTMLDivElement>();
 	let width = $state(0);
@@ -115,7 +115,7 @@
 			tabindex={mobilePane === 'conversation' ? 0 : -1}
 			onclick={() => selectMobilePane('conversation')}
 			onkeydown={tabKeydown}
-		>Chat</button>
+		>{primaryLabel}</button>
 		<button
 			id="workspace-tools-tab"
 			class="workspace-mobile-tab fella-pill-nav-item"
@@ -127,13 +127,13 @@
 			tabindex={mobilePane === 'tools' ? 0 : -1}
 			onclick={() => selectMobilePane('tools')}
 			onkeydown={tabKeydown}
-		>Tools</button>
+		>{secondaryLabel}</button>
 	</div>
 
 	<section
 		class="workspace-conversation-pane"
 		id="workspace-conversation-pane"
-		aria-label="Conversation"
+		aria-label={primaryLabel}
 		role={mobileTabs ? 'tabpanel' : undefined}
 		aria-labelledby={mobileTabs ? 'workspace-conversation-tab' : undefined}
 		hidden={!conversationVisible}
@@ -146,7 +146,7 @@
 		<div
 			class="workspace-divider"
 			role="separator"
-			aria-label={notebook ? 'Resize Investigation pane' : 'Resize workspace tools'}
+			aria-label={notebook ? `Resize ${secondaryLabel.toLocaleLowerCase()} pane` : 'Resize workspace tools'}
 			aria-orientation="vertical"
 			aria-valuemin={notebook ? 320 : 400}
 			aria-valuemax={Math.round(activeMaximum)}
@@ -160,7 +160,7 @@
 	<aside
 		class="workspace-tools-pane"
 		id="workspace-tools-pane"
-		aria-label="Workspace tools"
+		aria-label={secondaryLabel}
 		role={mobileTabs ? 'tabpanel' : undefined}
 		aria-labelledby={mobileTabs ? 'workspace-tools-tab' : undefined}
 		hidden={!toolsVisible}

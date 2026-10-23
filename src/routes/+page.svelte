@@ -10,12 +10,16 @@
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
+	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
+	import WorkspaceSourceView from '$lib/components/WorkspaceSourceView.svelte';
+	import StudioDetailsView from '$lib/components/StudioDetailsView.svelte';
 	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
 	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import type { SourceInfo } from '$lib/types';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
@@ -23,6 +27,9 @@
 	let dragging = $state(false);
 	let toolsExpanded = $state(false);
 	let toolsCompact = $state(false);
+	let sidebarMode = $state<'chat' | 'files' | 'reports'>('chat');
+	let selectedSource = $state<SourceInfo | null>(null);
+	let inspectorConversationKey = '';
 	let windowWidth = $state(1440);
 	let narrowNavigation = $derived(windowWidth < (session.contentLayout === 'notebook' ? 1100 : 700));
 	$effect(() => {
@@ -30,7 +37,11 @@
 	});
 
 	let activeView = $derived(session.workspaceView);
-	let showRightPane = $derived(session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane));
+	let showRightPane = $derived.by(() => {
+		if (sidebarMode === 'files') return Boolean(session.catalog.workspace);
+		if (sidebarMode === 'reports') return Boolean(session.catalog.workspace);
+		return session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane);
+	});
 	let scopedWorkspaceActive = $derived(
 		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
 	);
@@ -39,6 +50,29 @@
 		if (session.contentLayout === 'notebook' && scopedWorkspaceActive) {
 			untrack(() => { if (!session.workspacePaneOpen) session.openWorkspaceToolTab('investigation', null, conversationId); });
 		}
+	});
+	$effect(() => {
+		const section = sidebarMode;
+		const conversation = session.activeChat;
+		const scoped = Boolean(conversation.workspaceScope && session.catalog.workspace === conversation.workspaceScope);
+		if (section !== 'chat' || !scoped) {
+			inspectorConversationKey = '';
+			return;
+		}
+		const key = `${conversation.workspaceScope}:${conversation.id}`;
+		if (key === inspectorConversationKey) return;
+		inspectorConversationKey = key;
+		untrack(() => {
+			const existing = session.workspaceToolTabs.find((tab) => tab.kind === 'investigation' && tab.conversationId === conversation.id);
+			const tab = existing ?? session.openWorkspaceToolTab('investigation', null, conversation.id);
+			if (tab) session.activateWorkspaceToolTab(tab.id);
+		});
+	});
+	$effect(() => {
+		const sources = session.catalog.sources;
+		const selected = selectedSource;
+		if (selected && sources.some((source) => source.path === selected.path && source.name === selected.name)) return;
+		selectedSource = sources[0] ?? null;
 	});
 	$effect(() => {
 		const pane = session.activeChat.companionPane;
@@ -329,7 +363,12 @@
 	<div class="shell" class:narrow-navigation={narrowNavigation}>
 		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} />
+			<Sidebar
+				bind:mode={sidebarMode}
+				onsearch={() => (paletteOpen = true)}
+				onselectsource={(source) => (selectedSource = source)}
+				{selectedSource}
+			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
 		<Titlebar
@@ -359,22 +398,37 @@
 					{#if activeView === 'settings'}
 						<SettingsView />
 					{:else}
-						<WorkspacePanelLayout open={showRightPane} notebook={session.contentLayout === 'notebook'} bind:expanded={toolsExpanded} bind:compact={toolsCompact}>
+						<WorkspacePanelLayout
+							open={showRightPane}
+							notebook={true}
+							primaryLabel={sidebarMode === 'files' ? 'Files' : sidebarMode === 'reports' ? 'Reports' : 'Chat'}
+							secondaryLabel={sidebarMode === 'files' ? 'Preview' : sidebarMode === 'reports' ? 'Report details' : 'Investigation'}
+							bind:expanded={toolsExpanded}
+							bind:compact={toolsCompact}
+						>
 							{#snippet conversation()}
-								<div class="conversation-workspace">
-									<Transcript bind:this={transcript} />
-									<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
-								</div>
+								{#if sidebarMode === 'chat'}
+									<div class="conversation-workspace">
+										<Transcript bind:this={transcript} />
+										<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
+									</div>
+								{:else if sidebarMode === 'files'}
+									<WorkspaceFilesList selected={selectedSource} onselect={(source) => (selectedSource = source)} />
+								{:else}
+									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} />
+								{/if}
 							{/snippet}
 							{#snippet tools()}
-								{#if scopedWorkspaceActive}
-									<div class="workspace-tools-content" hidden={!session.workspacePaneOpen && session.contentLayout !== 'notebook'}>
-										<WorkspaceView notebook={session.contentLayout === 'notebook'} onexpand={() => (toolsExpanded = true)} />
-									</div>
+								{#if sidebarMode === 'chat' && scopedWorkspaceActive}
+									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} defaultInspector />
+								{:else if sidebarMode === 'files' && session.catalog.workspace}
+									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} />
+								{:else if sidebarMode === 'reports' && session.catalog.workspace}
+									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} />
 								{/if}
-								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive}
+								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && sidebarMode === 'chat'}
 									<div class="notebook-empty"><Icon name="folder" size={20} /><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
-								{:else if showRightPane && !session.workspacePaneOpen}
+								{:else if sidebarMode === 'chat' && showRightPane && !session.workspacePaneOpen}
 									<CompanionPane />
 								{/if}
 							{/snippet}
@@ -487,13 +541,6 @@
 		container-type: inline-size;
 		background: var(--workspace-canvas);
 	}
-	.workspace-tools-content {
-		display: flex;
-		flex: 1;
-		min-width: 0;
-		min-height: 0;
-	}
-	.workspace-tools-content[hidden] { display: none !important; }
 	.conversation-workspace {
 		display: flex;
 		flex: 1;

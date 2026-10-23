@@ -3,6 +3,7 @@
 	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import type { StudioDocument } from '$lib/analytics-artifacts';
+	import type { SourceInfo } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from '$lib/components/ui/dialog';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
@@ -12,16 +13,24 @@
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 
-	let { onsearch }: { onsearch?: () => void } = $props();
+	let {
+		onsearch,
+		mode = $bindable<'chat' | 'files' | 'reports'>('chat'),
+		onselectsource,
+		selectedSource = null
+	}: {
+		onsearch?: () => void;
+		mode?: 'chat' | 'files' | 'reports';
+		onselectsource?: (source: SourceInfo) => void;
+		selectedSource?: SourceInfo | null;
+	} = $props();
 
-	let sidebarMode = $state<'chat' | 'files' | 'reports'>('chat');
 	let workspaceReports = $state<StudioDocument[]>([]);
 	let reportsError = $state('');
 	let reportsRequest = 0;
 	$effect(() => {
 		const path = session.catalog.workspace;
 		const reportsVersion = session.reportsVersion;
-		const mode = sidebarMode;
 		void reportsVersion;
 		const request = ++reportsRequest;
 		if (mode !== 'reports' || !path) { workspaceReports = []; reportsError = ''; return; }
@@ -91,7 +100,21 @@
 	}]);
 
 	function newChat(): void {
+		mode = 'chat';
 		session.newConversation();
+	}
+
+	function selectMode(next: 'chat' | 'files' | 'reports'): void {
+		mode = next;
+		if (next !== 'reports' || !session.catalog.workspace) return;
+		const existing = session.workspaceToolTabs.find((tab) => tab.kind === 'studio');
+		if (existing) session.activateWorkspaceToolTab(existing.id);
+		else session.openStudioToolTab();
+	}
+
+	function selectSource(source: SourceInfo): void {
+		if (onselectsource) onselectsource(source);
+		else session.openSourceToolTab(source);
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
@@ -221,12 +244,12 @@
 			</Button>
 		</div>
 	</div>
-	<nav class="sidebar-mode-switch fella-pill-nav" aria-label="Sidebar">
-		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'chat'} onclick={() => (sidebarMode = 'chat')}>Chat</Button>
-		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'files'} onclick={() => (sidebarMode = 'files')}>Files</Button>
-		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={sidebarMode === 'reports'} onclick={() => (sidebarMode = 'reports')}>Reports</Button>
+	<nav class="sidebar-mode-switch fella-pill-nav" aria-label="Workspace sections">
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'chat'} onclick={() => selectMode('chat')}>Chat</Button>
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'files'} onclick={() => selectMode('files')}>Files</Button>
+		<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'reports'} onclick={() => selectMode('reports')}>Reports</Button>
 	</nav>
-	{#if sidebarMode === 'chat'}
+	{#if mode === 'chat'}
 	<section class="repository-section" aria-label="Workspace conversations">
 		<div class="section-head">
 			<h2>Conversations</h2>
@@ -267,7 +290,7 @@
 			{/each}
 		</div>
 	</section>
-	{:else if sidebarMode === 'reports'}
+	{:else if mode === 'reports'}
 		<section class="repository-section" aria-label="Workspace reports">
 			<div class="section-head"><h2>Reports</h2><Button variant="ghost" size="icon" class="section-action" aria-label="New report" title="New report" disabled={!session.catalog.workspace} onclick={() => session.openNewReportTab()}><Icon name="plus" size={16} /></Button></div>
 			{#if !session.catalog.workspace}
@@ -281,7 +304,7 @@
 			{/if}
 		</section>
 	{:else}
-		<WorkspaceEnvironment onopen={(source) => session.openSourceToolTab(source)} />
+		<WorkspaceEnvironment onopen={selectSource} {selectedSource} />
 	{/if}
 	<div class="sidebar-footer">
 		<Button

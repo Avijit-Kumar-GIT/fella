@@ -12,14 +12,16 @@
 	import Icon from './Icon.svelte';
 	import ContextView from './ContextView.svelte';
 	import NotebookInvestigation from './NotebookInvestigation.svelte';
+	import InvestigationBriefView from './InvestigationBriefView.svelte';
 	import ResultDocument from './ResultDocument.svelte';
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 	import CompanionPane from './CompanionPane.svelte';
-	let { onexpand, notebook = false }: { onexpand?: () => void; notebook?: boolean } = $props();
+	let { onexpand, notebook = false, defaultInspector = false }: { onexpand?: () => void; notebook?: boolean; defaultInspector?: boolean } = $props();
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
+	let investigationsLoaded = $state(false);
 	let investigationsUnavailable = $state(false);
 	let investigationBusy = $state(false);
 	let investigationsOpen = $state(false);
@@ -31,6 +33,7 @@
 	let tabsElement = $state<HTMLDivElement>();
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
+	let showToolTabs = $derived(session.workspaceToolTabs.length > 1 || activeTab?.kind !== 'investigation');
 	let terminalTabs = $derived(session.workspaceToolTabs.filter((tab) => tab.kind === 'terminal'));
 	$effect(() => {
 		const records = investigations, path = workspacePath;
@@ -78,9 +81,11 @@
 			listRequest += 1;
 			investigations = [];
 			investigationsUnavailable = false;
+			investigationsLoaded = true;
 			return;
 		}
 		const request = ++listRequest;
+		investigationsLoaded = false;
 		investigationsUnavailable = false;
 		const activeConversationIds = session.conversations.map((conversation) => conversation.id);
 		void ipc.investigationsList(activeConversationIds).then((records) => {
@@ -90,10 +95,12 @@
 			session.reconcileWorkspaceToolTabs(workspaceInvestigations);
 			investigations = workspaceInvestigations
 				.sort((left, right) => right.updated_at_ms - left.updated_at_ms);
+			investigationsLoaded = true;
 		}).catch(() => {
 			if (request !== listRequest) return;
 			investigations = [];
 			investigationsUnavailable = true;
+			investigationsLoaded = true;
 		});
 		return () => {
 			if (request === listRequest) listRequest += 1;
@@ -263,6 +270,7 @@
 <section class="workspace" aria-label="Workspace tools">
 	{#if session.workspaceToolTabs.length > 0}
 		<div class="workspace-tabs-bar">
+			{#if showToolTabs}
 			<div bind:this={tabsElement} class="workspace-tool-tabs" role="tablist" aria-label="Open workspace tools">
 				{#each session.workspaceToolTabs as tab (tab.id)}
 						<div class="workspace-tool-tab-group" role="presentation">
@@ -311,6 +319,7 @@
 					</DropdownMenu.Content>
 				</DropdownMenu.Portal>
 			</DropdownMenu.Root>
+			{/if}
 			<button
 				class="workspace-tool-add"
 				type="button"
@@ -489,6 +498,22 @@
 				<WorkspaceSourceView source={activeSource} workspacePath={workspacePath} revision={session.catalog.revision ?? null} {onexpand} />
 			{:else if activeTab.kind === 'context'}
 				<ContextView />
+			{:else if activeTab.kind === 'investigation' && !investigationsLoaded}
+				<div class="workspace-opening" role="status">Loading Investigation…</div>
+			{:else if activeTab.kind === 'investigation' && currentInvestigation}
+				{#key `${workspacePath}:${currentInvestigation.id}`}
+					<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} />
+				{/key}
+			{:else if activeTab.kind === 'investigation' && defaultInspector}
+				<div class="workspace-investigation-empty">
+					<span class="workspace-investigation-empty-icon"><Icon name="bookmark" size={16} /></span>
+					<h2>This conversation has no Investigation</h2>
+					<p>Start one when you’re ready. It opens its own conversation and keeps the analysis organized here.</p>
+					<div class="workspace-investigation-empty-actions">
+						<Button size="sm" onclick={() => { newName = nextInvestigationTitle(); chooserError = ''; createOpen = true; }}>New Investigation</Button>
+						<Button size="sm" variant="ghost" onclick={() => session.openWorkspaceToolChooser()}>Open an existing one</Button>
+					</div>
+				</div>
 			{:else}
 				{#key `${workspacePath}:${activeTab.id}`}
 					<NotebookInvestigation workspace={workspacePath!} investigationId={activeTab.investigationId ?? undefined} conversationId={activeTab.conversationId ?? undefined} onopenconversation={() => session.setContentLayout('chat')} />
@@ -520,9 +545,14 @@
 		flex-direction: column;
 		min-width: 0;
 		min-height: 0;
-		background: var(--bg);
+		background: var(--workspace-canvas);
 	}
 	.workspace-opening { display: grid; flex: 1; place-content: center; color: var(--text-faint); font-size: var(--fs-sm); }
+	.workspace-investigation-empty { display:grid; flex:1; align-content:center; justify-items:start; gap:10px; width:min(100%, 420px); margin-inline:auto; padding:clamp(20px, 5vw, 40px); }
+	.workspace-investigation-empty-icon { display:grid; width:38px; height:38px; place-items:center; border-radius:13px; background:var(--bg-inset); color:var(--brand); }
+	.workspace-investigation-empty h2 { margin:6px 0 0; color:var(--text); font-size:var(--fs-md); font-weight:600; letter-spacing:-.015em; }
+	.workspace-investigation-empty p { max-width:40ch; margin:0; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.55; }
+	.workspace-investigation-empty-actions { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-top:6px; }
 	.workspace-tool-chooser {
 		display: grid;
 		flex: 1;
