@@ -81,7 +81,7 @@
 				<Logo size={36} active={session.busy} />
 				<span class="workspace-identity-copy"><strong>Fella</strong><small>{activeLabel.replace(/^Fella\s+/i, '')}</small></span>
 			{:else}
-				<Logo size={20} active={session.busy} />
+				<Logo size={compact ? 16 : 20} active={session.busy} />
 				<span class="workspace-switcher-label">{activeLabel}</span>
 			{/if}
 			<Icon name="chevron-down" size={12} />
@@ -201,7 +201,7 @@
 	}
 	.workspace-switcher.compact { width:max-content; max-width:100%; padding:0; }
 	:global(.workspace-menu-separator) { height: 1px; margin: 6px 0; background: var(--border); }
-	:global(.workspace-switcher.compact .workspace-switcher-trigger) { width:auto; max-width:100%; height:32px; min-height:32px; gap:8px; padding:6px 12px; border:0; border-radius:999px; background:var(--bg-raised); }
+	:global(.workspace-switcher.compact .workspace-switcher-trigger) { width:auto; max-width:100%; height:20px; min-height:20px; gap:8px; padding:2px 10px; border:0; border-radius:999px; background:var(--bg-raised); }
 	:global(.workspace-switcher.compact .workspace-switcher-label) { font-size:13px; font-weight:500; }
 	.workspace-switcher.identity { flex:1; width:auto; min-width:0; padding:0; }
 	:global(.workspace-switcher.identity .workspace-switcher-trigger) { height:auto; min-height:36px; gap:12px; padding:0; border:0; background:transparent; }
