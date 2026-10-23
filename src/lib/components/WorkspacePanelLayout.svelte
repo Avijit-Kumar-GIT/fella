@@ -12,12 +12,12 @@
 	let dragging = $state(false);
 	const storageKey = 'fella:tools-width';
 	const notebookStorageKey = 'fella:notebook-tools-width-v2';
-	let narrow = $derived(width > 0 && width < 760);
+	let narrow = $derived(width > 0 && width < 680);
 	let solo = $derived(open && (expanded || (!notebook && compact)));
 	let mobileTabs = $derived(open && notebook && narrow && !expanded);
-	let notebookMaximum = $derived(Math.max(320, width - 400));
-	let notebookDefaultWidth = $derived(Math.min(defaultToolsWidth, Math.max(320, Math.round(width * 0.36))));
-	let notebookActualWidth = $derived(Math.min(notebookMaximum, Math.max(320, notebookToolsWidth ?? notebookDefaultWidth)));
+	let notebookMaximum = $derived(Math.max(300, width - 341));
+	let notebookDefaultWidth = $derived(Math.min(defaultToolsWidth, notebookMaximum));
+	let notebookActualWidth = $derived(Math.min(notebookMaximum, Math.max(300, notebookToolsWidth ?? notebookDefaultWidth)));
 	let maximum = $derived(Math.max(400, width - 380));
 	let actualWidth = $derived(Math.min(maximum, Math.max(400, toolWidth)));
 	let activeWidth = $derived(notebook ? notebookActualWidth : actualWidth);
@@ -31,7 +31,7 @@
 			const saved = Number(localStorage.getItem(storageKey));
 			if (Number.isFinite(saved) && saved >= 400) toolWidth = Math.min(saved, 1200);
 			const savedNotebook = Number(localStorage.getItem(`${notebookStorageKey}:${layoutKey}`));
-			if (Number.isFinite(savedNotebook) && savedNotebook >= 320) notebookToolsWidth = Math.min(savedNotebook, 1200);
+			if (Number.isFinite(savedNotebook) && savedNotebook >= 300) notebookToolsWidth = Math.min(savedNotebook, 1200);
 		} catch { /* Optional local preference. */ }
 		const observer = new ResizeObserver(([entry]) => {
 			width = entry.contentRect.width;
@@ -45,7 +45,7 @@
 		if (!notebook) return;
 		try {
 			const saved = Number(localStorage.getItem(`${notebookStorageKey}:${key}`));
-			notebookToolsWidth = Number.isFinite(saved) && saved >= 320 ? Math.min(saved, 1200) : null;
+			notebookToolsWidth = Number.isFinite(saved) && saved >= 300 ? Math.min(saved, 1200) : null;
 		} catch { notebookToolsWidth = null; }
 	});
 
@@ -56,7 +56,7 @@
 	}
 
 	function setActiveWidth(value: number): void {
-		const minimum = notebook ? 320 : 400;
+		const minimum = notebook ? 300 : 400;
 		const upper = notebook ? notebookMaximum : maximum;
 		const next = Math.max(minimum, Math.min(upper, value));
 		if (notebook) notebookToolsWidth = next;
@@ -75,7 +75,7 @@
 		if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
 		event.preventDefault();
 		const delta = event.key === 'ArrowLeft' ? 32 : -32;
-		const minimum = notebook ? 320 : 400;
+		const minimum = notebook ? 300 : 400;
 		setActiveWidth(event.key === 'Home' ? minimum : event.key === 'End' ? activeMaximum : activeWidth + delta);
 		rememberWidth();
 	}
@@ -156,7 +156,7 @@
 			role="separator"
 			aria-label={notebook ? `Resize ${secondaryLabel.toLocaleLowerCase()} pane` : 'Resize workspace tools'}
 			aria-orientation="vertical"
-			aria-valuemin={notebook ? 320 : 400}
+			aria-valuemin={notebook ? 300 : 400}
 			aria-valuemax={Math.round(activeMaximum)}
 			aria-valuenow={Math.round(activeWidth)}
 			tabindex="0"
@@ -180,12 +180,12 @@
 <style>
 	.workspace-chat-layout { position: relative; display: grid; flex: 1; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; background: var(--workspace-canvas); }
 	.workspace-chat-layout[data-panel-mode='split'] { grid-template-columns: minmax(0, 1fr) 1px var(--tools-width); }
-	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] { grid-template-columns: minmax(400px, 1fr) 1px minmax(320px, var(--notebook-tools-width)); }
+	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] { grid-template-columns: minmax(340px, 1fr) 1px minmax(300px, var(--notebook-tools-width)); }
 	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-tools-pane { grid-column: 3; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-divider { grid-column: 2; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='split'][data-notebook='true'] .workspace-conversation-pane { grid-column: 1; grid-row: 1; }
 	.workspace-chat-layout[data-panel-mode='mobile'] { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-mobile-tabs { grid-column: 1; grid-row: 1; }
+	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-mobile-tabs { grid-column:1; grid-row:1; margin-top:52px; }
 	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-conversation-pane,
 	.workspace-chat-layout[data-panel-mode='mobile'] .workspace-tools-pane { grid-column: 1; grid-row: 2; }
 	.workspace-conversation-pane, .workspace-tools-pane { display: flex; min-width: 0; min-height: 0; overflow: hidden; }

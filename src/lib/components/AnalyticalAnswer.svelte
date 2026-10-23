@@ -18,6 +18,11 @@
 	let loading = $state(false);
 	let saving = $state(false);
 	let reviewing = $state(false);
+	let copied = $state(false);
+	async function copyAnswer(): Promise<void> {
+		try { await navigator.clipboard.writeText(message.answer?.text ?? message.text); copied = true; }
+		catch { error = 'Could not copy this answer.'; }
+	}
 	async function inspect(review = false): Promise<void> {
 		if (!workspace || workspace !== session.catalog.workspace) return;
 		try {
@@ -84,6 +89,7 @@
 </script>
 
 <section class="analytical-answer" aria-label="Analytical answer">
+	<div class="answer-surface">
 	{#if display}
 			<AnalyticalPresentation spec={display.spec} results={display.results} initialState={message.presentation_state ?? {}} onstatechange={(state) => {
 				message.presentation_state = state;
@@ -99,8 +105,10 @@
 		<MarkdownContent text={message.answer?.text ?? message.text} />
 		{#if error}<div class="view-note" role="status"><p>The answer’s layout could not be displayed. Your analysis is still available.</p><Button variant="ghost" size="sm" disabled={loading} onclick={() => { resolved = null; retry++; }}>Retry display</Button><details><summary>Display details</summary><p>{error}</p></details></div>{/if}
 	{/if}
+	</div>
 	<div class="answer-actions">
-		<Button variant="ghost" size="sm" class="save-report" disabled={saving} onclick={() => void save()}>{saving ? 'Saving…' : 'Create report'}</Button>
+		<Button variant="ghost" size="sm" class="save-report" disabled={saving} onclick={() => void save()}><Icon name="file" size={12} />{saving ? 'Saving…' : 'Create report'}</Button>
+		<Button variant="ghost" size="icon" class="answer-copy" aria-label={copied ? 'Answer copied' : 'Copy answer'} title={copied ? 'Copied' : 'Copy answer'} onclick={() => void copyAnswer()}><Icon name={copied ? 'check' : 'copy'} size={12} /></Button>
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger class="answer-more" aria-label="Answer actions" title="Answer actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
 			<DropdownMenu.Portal>
@@ -120,8 +128,11 @@
 </section>
 
 <style>
-	.analytical-answer { min-width: 0; }
-	.answer-actions { display:flex; align-items:center; gap:4px; margin-top:8px; }
+	.analytical-answer { min-width:0; color:var(--chat-body); font-size:13px; line-height:21px; }
+	.answer-surface { min-width:0; padding:14px 16px; border-radius:16px; background:var(--bg-raised); }
+	.answer-surface :global(.analytical-document) { color:var(--chat-body); font-size:13px; line-height:21px; }
+	:global(.answer-copy) { width:28px; min-width:28px; height:28px; min-height:28px; padding:0; border-radius:50%; color:var(--text-dim); }
+	.answer-actions { display:flex; align-items:center; gap:4px; margin-top:8px; padding-inline:4px; }
 	.answer-actions :global(.save-report) { height:28px; padding-inline:8px; color:var(--text-dim); font-size:var(--fs-xs); }
 	:global(.answer-more) { display:grid; place-items:center; width:28px; height:28px; padding:0; border:0; border-radius:var(--radius-chip); background:transparent; color:var(--text-faint); cursor:pointer; }
 	:global(.answer-more:hover), :global(.answer-more[data-state='open']) { background:var(--bg-inset); color:var(--text); }

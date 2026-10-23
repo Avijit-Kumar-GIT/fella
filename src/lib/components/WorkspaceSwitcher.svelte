@@ -2,15 +2,17 @@
 	import { session, GENERAL_WORKSPACE_ID } from '$lib/session.svelte';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import Icon from './Icon.svelte';
-	import Logo from './Logo.svelte';
+	import FellaMark from './FellaMark.svelte';
 	import { openFolder } from '$lib/commands';
 
 	let {
 		onselect,
-		compact = false
+		compact = false,
+		identity = false
 	}: {
 		onselect: (id: string) => void | Promise<void>;
 		compact?: boolean;
+		identity?: boolean;
 	} = $props();
 
 	const shortcutModifier =
@@ -68,20 +70,21 @@
 	}
 </script>
 
-<div class="workspace-switcher" class:compact>
+<div class="workspace-switcher" class:compact class:identity>
 	<DropdownMenu.Root open={menuOpen} onOpenChange={setMenuOpen}>
 		<DropdownMenu.Trigger
 			class="workspace-switcher-trigger"
-			aria-label={`Switch workspace. Current: ${activeLabel}`}
+			aria-label={`${identity ? 'Choose workspace from sidebar' : 'Switch workspace'}. Current: ${activeLabel}`}
 			title={`Switch workspace (${shortcutModifier}+1–9)`}
 		>
-			{#if session.activeWorkspaceId}
-				<Icon name="repository" size={14} />
+			{#if identity}
+				<FellaMark size={36} fontSize={15} active={session.busy} />
+				<span class="workspace-identity-copy"><strong>Fella</strong><small>{activeLabel.replace(/^Fella\s+/i, '')}</small></span>
 			{:else}
-				<Logo size={16} active={session.busy} />
+				<FellaMark size={20} fontSize={10} active={session.busy} />
+				<span class="workspace-switcher-label">{activeLabel}</span>
 			{/if}
-			<span class="workspace-switcher-label">{activeLabel}</span>
-			<Icon name="chevron-right" size={14} />
+			<Icon name="chevron-down" size={12} />
 		</DropdownMenu.Trigger>
 		<DropdownMenu.Portal>
 			<DropdownMenu.Content
@@ -167,11 +170,11 @@
 	}
 	:global(.workspace-switcher-trigger > svg:last-child) {
 		flex: none;
-		transform: rotate(90deg);
+		transform: none;
 		color: var(--text-faint);
 		transition: transform 120ms ease;
 	}
-	:global(.workspace-switcher-trigger[data-state='open'] > svg:last-child) { transform: rotate(-90deg); }
+	:global(.workspace-switcher-trigger[data-state='open'] > svg:last-child) { transform: rotate(180deg); }
 	:global(.workspace-menu-content) {
 		min-width: 260px;
 		max-width: min(360px, calc(100vw - 24px));
@@ -196,7 +199,15 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.workspace-switcher.compact { width: 190px; padding: 0; }
+	.workspace-switcher.compact { width:max-content; max-width:100%; padding:0; }
 	:global(.workspace-menu-separator) { height: 1px; margin: 6px 0; background: var(--border); }
-	:global(.workspace-switcher.compact .workspace-switcher-trigger) { height: 30px; min-height: 30px; padding: 5px 8px; }
+	:global(.workspace-switcher.compact .workspace-switcher-trigger) { width:auto; max-width:100%; height:32px; min-height:32px; gap:8px; padding:6px 12px; border:0; border-radius:999px; background:var(--bg-raised); }
+	:global(.workspace-switcher.compact .workspace-switcher-label) { font-size:13px; font-weight:500; }
+	.workspace-switcher.identity { flex:1; width:auto; min-width:0; padding:0; }
+	:global(.workspace-switcher.identity .workspace-switcher-trigger) { height:auto; min-height:36px; gap:12px; padding:0; border:0; background:transparent; }
+	.workspace-identity-copy { display:grid; flex:1; min-width:0; gap:1px; }
+	.workspace-identity-copy strong { color:var(--text); font-size:14px; font-weight:500; }
+	.workspace-identity-copy small { overflow:hidden; color:var(--text-dim); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+	:global(.workspace-switcher.identity .workspace-switcher-trigger > svg:last-child) { opacity:0; }
+	:global(.workspace-switcher.identity .workspace-switcher-trigger:hover > svg:last-child), :global(.workspace-switcher.identity .workspace-switcher-trigger:focus-visible > svg:last-child) { opacity:1; }
 </style>

@@ -59,7 +59,7 @@ export const componentDefinitions = {
 		props: z.object({ content: label, level: z.number().int().min(1).max(4).optional() }).strict(), slots: [] as const
 	},
 	Text: {
-		description: 'Plain explanatory text for interpretation, method, or narrative.',
+		description: 'Explanatory prose with Markdown emphasis, lists, and links. Use structured Table and Chart components for analytical results.',
 		props: z.object({ content }).strict(), slots: [] as const
 	},
 	Caption: {

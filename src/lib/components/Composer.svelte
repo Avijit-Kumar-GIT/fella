@@ -5,6 +5,7 @@
 		completionsFor,
 		dispatch,
 		openRepository,
+		openFolder,
 		steerRun,
 		stop
 	} from '$lib/commands';
@@ -472,13 +473,13 @@
 						disabled={!clarificationOther.trim() || session.busy}
 						aria-label="Continue with this interpretation"
 					>
-						<Icon name="corner-down-left" size={16} />
+						<Icon name="arrow-up" size={15} />
 					</Button>
 				</div>
 			</form>
 		</div>
 	{:else}
-	<div class="field" class:secret={pendingInput}>
+	<div class="field" class:secret={pendingInput} style:--composer-row={contextRefs.length || unavailableWorkspacePath ? 2 : 1}>
 		{#if unavailableWorkspacePath && !pendingInput}
 			<div class="workspace-unavailable-note" role="status">
 				<span>
@@ -529,7 +530,7 @@
 			onfocus={() => (menuOff = false)}
 		></Textarea>
 		<div class="bottom-row">
-			{#if !pendingInput && session.catalog.sources.length}
+			{#if !pendingInput && !unavailableWorkspacePath}
 				<Button
 					variant="ghost"
 					size="icon"
@@ -539,7 +540,7 @@
 					aria-haspopup="dialog"
 					aria-expanded={contextOpen}
 					aria-controls="composer-context-menu"
-					onclick={() => (contextOpen = !contextOpen)}
+					onclick={() => session.catalog.sources.length ? (contextOpen = !contextOpen) : void openFolder()}
 				>
 					<Icon name="plus" size={16} />
 				</Button>
@@ -569,7 +570,7 @@
 					aria-label="Cancel and re-ask with this"
 					onclick={() => void submit()}
 				>
-					<Icon name="corner-down-left" size={16} />
+					<Icon name="arrow-up" size={15} />
 				</Button>
 			{:else if session.busy}
 				<Button variant="destructive" size="icon" class="act stop" title="Stop (Esc)" aria-label="Stop" onclick={() => stop()}>
@@ -581,11 +582,11 @@
 				</Button>
 			{:else if value.trim()}
 				<Button variant="default" size="icon" class="act send" aria-label="Send" onclick={() => void submit()}>
-					<Icon name="corner-down-left" size={16} />
+					<Icon name="arrow-up" size={15} />
 				</Button>
 			{:else}
 				<Button variant="default" size="icon" class="act send" aria-label="Send" disabled>
-					<Icon name="corner-down-left" size={16} />
+					<Icon name="arrow-up" size={15} />
 				</Button>
 			{/if}
 		</div>
@@ -628,9 +629,10 @@
 		position: relative;
 		flex: 0 1 var(--content-max);
 		width: 100%;
-		max-width: 560px;
+		max-width: none;
+		container-type:inline-size;
 		margin-inline: auto;
-		padding: 8px 16px 14px;
+		padding: 8px 20px 16px;
 	}
 	.workspace-unavailable-note {
 		display: flex;
@@ -1232,5 +1234,22 @@
 		padding: 4px 8px;
 		font-size: var(--fs-xs);
 		color: var(--text-faint);
+	}
+
+	/* The reference composer is a single quiet line; its controls reflow inside
+	   the same surface when the conversation pane becomes narrow. */
+	.field:not(.secret):not(.clarification-field) { display:grid; grid-template-columns:28px minmax(80px,1fr) auto 32px; align-items:center; gap:8px; padding:8px 8px 8px 12px; border:1px solid var(--border); border-radius:26px; background:var(--bg-inset); }
+	.field:not(.secret) .bottom-row { display:contents; }
+	.field:not(.secret) :global(.composer-main-textarea) { grid-column:2; grid-row:var(--composer-row,1); min-height:30px; padding:5px 0; font-size:13px; line-height:20px; }
+	.field:not(.secret) :global(.context-add) { grid-column:1; grid-row:var(--composer-row,1); width:28px; height:28px; min-height:28px; padding:0; border-radius:50%; color:var(--text-faint); }
+	.field:not(.secret) :global(.model-trigger) { grid-column:3; grid-row:var(--composer-row,1); max-width:180px; margin:0; padding:4px 0; font:12px var(--mono); color:var(--chat-body); }
+	.field:not(.secret) :global(.act) { grid-column:4; grid-row:var(--composer-row,1); width:32px; min-width:32px; height:32px; min-height:32px; margin:0; }
+	.field:not(.secret) .context-row, .field:not(.secret) .workspace-unavailable-note { grid-column:1 / -1; grid-row:1; }
+	@container (max-width:500px) {
+		.field:not(.secret):not(.clarification-field) { grid-template-columns:28px minmax(0,1fr) 32px; }
+		.field:not(.secret) :global(.composer-main-textarea) { grid-column:1 / -1; grid-row:var(--composer-row,1); padding-inline:5px; }
+		.field:not(.secret) :global(.context-add) { grid-column:1; grid-row:calc(var(--composer-row,1) + 1); }
+		.field:not(.secret) :global(.model-trigger) { grid-column:2; grid-row:calc(var(--composer-row,1) + 1); justify-self:end; max-width:100%; }
+		.field:not(.secret) :global(.act) { grid-column:3; grid-row:calc(var(--composer-row,1) + 1); }
 	}
 </style>

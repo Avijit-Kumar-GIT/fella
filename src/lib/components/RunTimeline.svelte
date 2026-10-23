@@ -159,7 +159,7 @@
 		if (answer?.status === 'insufficient_data') return 'Insufficient data';
 		if (answer?.status === 'failed') return 'Verification failed';
 		if (failed) return 'Analysis did not finish';
-		if (answer) return answer.status === 'verified' ? 'Analysis checked' : 'Run finished';
+		if (answer) return 'Run finished';
 		if (runState) return runStateLabel(runState) ?? 'Run finished';
 		return 'Analysis did not finish';
 	});
@@ -316,10 +316,10 @@
 		display: flex;
 		align-items: center;
 	}
-	.timeline-head { justify-content: space-between; gap: var(--space-3); min-height: 28px; }
+	.timeline-head { justify-content:center; gap:8px; min-height:34px; padding-block:8px; }
 	.run-status { min-width: 0; gap: var(--space-2); }
-	.run-status strong { overflow: hidden; color: var(--text); font-size: var(--fs-sm); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
-	.run-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--ok); }
+	.run-status strong { overflow: hidden; color:var(--text-dim); font-size:12px; font-weight:400; text-overflow: ellipsis; white-space: nowrap; }
+	.run-dot { width:6px; height:6px; flex: none; border-radius: 50%; background: var(--ok); }
 	.run-dot.error { background: var(--err); }
 	.run-kind { flex: none; padding: 2px 7px; border-radius: var(--radius-chip); background: var(--bg-inset); color: var(--text-faint); font-size: var(--fs-xs); }
 	.timeline-tools { flex: none; gap: var(--space-2); }

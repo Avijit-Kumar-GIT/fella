@@ -6,8 +6,8 @@
 	width: 100%;
 	max-width: 100%;
 	min-width: 0;
-	gap: var(--space-4);
-	color: var(--text);
+	gap:12px;
+	color:var(--chat-body);
 	font-size: var(--fs);
 	line-height: var(--lh);
 	overflow-wrap: anywhere;
@@ -201,14 +201,14 @@
 	border-collapse: collapse;
 	color: var(--text);
 	text-align: left;
-	font-size: var(--fs-sm);
-	font-variant-numeric: tabular-nums;
+	font:11.5px/1.5 var(--mono);
+	font-variant-numeric:tabular-nums;
 }
 
 .analytical-document .presentation-table-scroll th,
 .analytical-document .presentation-table-scroll td {
 	max-width: 30rem;
-	padding: 10px 12px;
+	padding:6px 8px;
 	border-bottom: 1px solid var(--border);
 	vertical-align: top;
 	white-space: pre-wrap;
@@ -219,7 +219,7 @@
 .analytical-document .presentation-table-scroll th {
 	position: sticky;
 	top: 0;
-	background: var(--pane-head);
+	background:color-mix(in srgb,var(--bg-raised-2) 60%,var(--bg-raised));
 	color: var(--text-dim);
 	font-weight: 550;
 }

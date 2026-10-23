@@ -345,7 +345,7 @@
 		</div>
 		<div class="source-list-heading">
 			<h4>Cataloged sources</h4>
-			<span>{sources.length} cataloged</span>
+			<span>{sources.length}</span>
 		</div>
 		<ul class="source-list" aria-label="Cataloged data sources">
 			{#each visibleSources as source (sourceKey(source))}
@@ -373,7 +373,7 @@
 							aria-controls={selectedKey === sourceKey(source) ? 'investigation-source-detail' : undefined}
 							onclick={() => toggleSource(source)}
 						>
-							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
+							<span class="source-mark" aria-hidden="true"><Icon name={source.view ? 'table' : 'file'} size={12} /></span>
 							<span class="source-main">
 								<strong>{source.name}</strong>
 								<small class="source-relative-path" title={source.path}>{relativePath(source.path)} · {kindLabel(source)}{source.view && source.row_count != null ? ` · ${formatCount(source.row_count)} rows` : ''}</small>
@@ -532,16 +532,16 @@
 	.source-relative-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.source-readiness { padding: 0; border: 0; }
 	.readiness-heading { margin: 0 4px 7px; }
-	.readiness-heading h3 { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.readiness-heading h3 { margin: 0; color: var(--text-faint); font-size:var(--fs-xs); font-weight:400; }
 	.catalog-loading { margin: 0; padding: 14px; border-radius: var(--radius-window); background: var(--bg-raised); color: var(--text-faint); font-size: var(--fs-xs); }
 	.availability-card { display:grid; gap:var(--space-2); padding:13px 14px 11px; border-radius:var(--radius-window); background:var(--bg-raised); }
 	.availability-metrics { display:flex; align-items:baseline; flex-wrap:wrap; gap:5px 16px; }
 	.availability-metrics > div { display:flex; min-width:0; align-items:baseline; gap:5px; }
-	.availability-metrics strong { color:var(--text); font-size:20px; font-weight:550; font-variant-numeric:tabular-nums; }
+	.availability-metrics strong { color:var(--text); font-size:20px; font-weight:500; font-variant-numeric:tabular-nums; }
 	.availability-metrics span { color:var(--text-dim); font-size:var(--fs-xs); }
 	.readiness-caveat, .profile-caveat { margin: var(--space-2) 0 0; color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.45; }
 	.scope-controls { display:block; min-width:0; margin:18px 0 0; padding:0; border:0; color:var(--text-dim); font-size:var(--fs-xs); }
-	.scope-controls legend { width:100%; padding:0; margin:0 4px 7px; color:var(--text-faint); font-size:var(--fs-xs); font-weight:600; }
+	.scope-controls legend { width:100%; padding:0; margin:0 4px 7px; color:var(--text-faint); font-size:var(--fs-xs); font-weight:400; }
 	.scope-segment { display:flex; min-width:0; padding:4px; border-radius:999px; background:var(--bg-raised); }
 	.scope-controls label { position:relative; display:flex; min-width:0; min-height:32px; flex:1; align-items:center; justify-content:center; padding:4px 8px; border-radius:999px; color:var(--text-dim); text-align:center; cursor:pointer; }
 	.scope-controls label.active { background:var(--bg-raised-2); color:var(--text); }
@@ -559,12 +559,12 @@
 	.catalog-revision code { max-width: min(42vw, 360px); color: var(--text-dim); overflow-wrap: anywhere; }
 	.indexed-at { flex: none; }
 	.source-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); margin: 18px 4px 7px; }
-	.source-list-heading h4 { margin: 0; color: var(--text); font-size: var(--fs-xs); font-weight: 650; }
+	.source-list-heading h4 { margin: 0; color: var(--text); font-size:var(--fs-xs); font-weight:400; }
 	.source-list-heading span { color: var(--text-faint); font-size: 11px; }
 	.source-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0; margin: 0; padding:5px 8px; border-radius:var(--radius-window); background:var(--bg-raised); list-style: none; }
-	.source-list li + li { border-top:1px solid var(--border-subtle, var(--border)); }
+	.source-list li + li { border-top:0; }
 	.source-search { display: flex; min-width:0; align-items: center; gap: var(--space-2); margin-top: 11px; padding:0 11px; border:1px solid var(--border); border-radius:999px; background:var(--bg-inset); color:var(--text-faint); }
-	.source-search :global(input) { min-width: 0; }
+	.source-search :global(input) { min-width:0; min-height:34px; height:34px; padding:7px 0; border:0; background:transparent; box-shadow:none; font-size:12.5px; }
 	.source-search-count { flex: none; font-size: var(--fs-xs); }
 	.source-row { display: flex; min-width: 0; align-items: center; gap: 7px; }
 	.source-scope-toggle-spacer { width:20px; flex:none; }
@@ -573,7 +573,7 @@
 	.source-option.disabled { opacity: .72; }
 	.source-mark { display: inline-flex; flex: none; color: var(--text-dim); }
 	.source-main { display: grid; min-width: 0; flex: 1; gap: 2px; overflow:hidden; }
-	.source-main strong { overflow:hidden; font-size: var(--fs-xs); font-weight: 550; text-overflow:ellipsis; white-space:nowrap; }
+	.source-main strong { overflow:hidden; font-size:var(--fs-xs); font-weight:400; text-overflow:ellipsis; white-space:nowrap; }
 	.source-main small { overflow:hidden; color: var(--text-faint); font-size: 11px; text-overflow:ellipsis; white-space:nowrap; }
 	.source-readiness-label, .skipped-status { flex: none; color: var(--text-dim); font-size: 11px; }
 	.source-readiness-label[data-state='ready'] { color: var(--brand-icon, var(--brand)); }
@@ -587,7 +587,7 @@
 	.source-facts { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-3); }
 	.source-facts span { display: grid; gap: 2px; }
 	.source-facts small { color: var(--text-faint); font-size: 11px; }
-	.source-facts strong { font-size: var(--fs-xs); font-weight: 600; }
+	.source-facts strong { font-size:var(--fs-xs); font-weight:400; }
 	.source-note, .source-synopsis, .capability-note, .empty-sources { margin: var(--space-3) 0 0; color: var(--text-dim); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.source-note strong { margin-right: var(--space-2); color: var(--text); }
 	.field-profile { margin-top: var(--space-3); color: var(--text-dim); font-size: var(--fs-xs); }

@@ -36,16 +36,18 @@
 		'notebook-pen',
 		'arrow-up-down',
 		'pencil',
-		'download'
+		'download',
+		'arrow-up', 'arrow-down', 'user', 'database', 'flask', 'copy'
 	] as const;
 
 	export type IconName = (typeof ICON_NAMES)[number];
 	/** 12px metadata, 14px compact controls, 16px standard UI, 20px display. */
-	export type IconSize = 12 | 14 | 16 | 20;
+	export type IconSize = 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 18 | 19 | 20 | 24;
 </script>
 
 <script lang="ts">
 	import {
+		ArrowUp, ArrowDown, UserRound, Database, FlaskConical, Copy,
 		Asterisk,
 		ArrowUpDown,
 		ArrowUpRight,
@@ -123,7 +125,8 @@
 		'notebook-pen': NotebookPen,
 		'arrow-up-down': ArrowUpDown,
 		pencil: Pencil,
-		download: Download
+		download: Download,
+		'arrow-up': ArrowUp, 'arrow-down': ArrowDown, user: UserRound, database: Database, flask: FlaskConical, copy: Copy
 	};
 
 	let { name, size = 16 }: { name: IconName; size?: IconSize } = $props();

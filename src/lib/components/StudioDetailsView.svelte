@@ -20,15 +20,14 @@
 		const version = session.reportsVersion;
 		void version;
 		const request = ++requestId;
-		document = null;
-		artifacts = [];
-		analysisRuns = [];
+		const alreadyVisible = document?.id === id && document?.workspace === root;
+		if (!alreadyVisible) { document = null; artifacts = []; analysisRuns = []; }
 		error = '';
 		if (!root || !id) {
 			loading = false;
 			return;
 		}
-		loading = true;
+		loading = !alreadyVisible;
 		void Promise.all([ipc.studioList(root), ipc.artifactList(root)]).then(async ([documents, available]) => {
 			if (request !== requestId || workspace !== root || documentId !== id) return;
 			const selectedDocument = documents.find((item) => item.id === id) ?? null;
@@ -131,12 +130,12 @@
 
 <style>
 	.report-details { display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; overflow:hidden; color:var(--text); }
-	.details-toolbar { display:flex; height:48px; flex:none; align-items:center; justify-content:space-between; padding:0 14px; color:var(--text-dim); font-size:var(--fs-xs); }
-	.details-toolbar button { display:grid; width:30px; height:30px; place-items:center; border:0; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); cursor:pointer; }
+	.details-toolbar { display:flex; height:52px; padding-top:16px; flex:none; align-items:center; justify-content:space-between; padding:0 14px; color:var(--text-dim); font-size:var(--fs-xs); }
+	.details-toolbar button { display:grid; width:36px; height:36px; place-items:center; border:0; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); cursor:pointer; }
 	.details-toolbar button:hover { background:var(--bg-inset); color:var(--text); }
-	.details-scroll { min-height:0; flex:1; overflow:auto; padding:18px 20px 24px; }
-	.details-section { padding:0 0 18px; margin:0 0 22px; }
-	.details-section h3 { margin:0; color:var(--text-faint); font-size:var(--fs-xs); font-weight:600; }
+	.details-scroll { min-height:0; flex:1; overflow:auto; padding:24px 20px 20px; }
+	.details-section { padding:0 0 18px; margin:0 0 28px; }
+	.details-section h3 { margin:0; color:var(--text-faint); font-size:12px; font-weight:400; }
 	.section-heading { display:flex; align-items:center; justify-content:space-between; }
 	.section-heading > span { color:var(--text-faint); font-size:var(--fs-xs); }
 	.outline-list, .history-list { display:grid; gap:2px; margin:9px 0 0; padding:0; list-style:none; }
@@ -148,15 +147,17 @@
 	.review-card { padding:12px 14px; border-radius:16px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); line-height:1.5; }
 	.review-card p { margin:0; }
 	.source-list { display:grid; gap:4px; margin:9px 0 0; padding:0; list-style:none; }
-	.source-list li { display:flex; min-width:0; align-items:center; gap:9px; padding:6px 4px; color:var(--text-dim); font:11px var(--mono); }
+	.source-list li { display:flex; min-width:0; align-items:center; gap:9px; padding:6px 4px; color:var(--text-dim); font:12px var(--mono); }
 	.source-list li > :global(svg) { flex:none; color:var(--text-faint); }
 	.source-list li > span:last-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.history-list strong { overflow:hidden; color:var(--text-dim); font-size:var(--fs-sm); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 	.history-list small { color:var(--text-faint); font-size:11px; }
 	.history-list { gap:10px; }
-	.history-list li { display:grid; min-width:0; gap:3px; padding-left:10px; border-left:1px solid var(--border-strong); }
+	.history-list li { display:grid; min-width:0; gap:3px; position:relative; padding-left:16px; border-left:1px solid var(--border); }
 	.section-empty, .details-state { margin:10px 0 0; color:var(--text-faint); font-size:var(--fs-sm); line-height:1.5; }
 	.details-state { padding:20px; }
 	.details-error { color:var(--err); overflow-wrap:anywhere; }
 	@container investigation-pane (max-width: 430px) { .details-toolbar { padding-inline:12px; } .details-scroll { padding:16px 14px 20px; } }
+	.history-list li::before { position:absolute; top:6px; left:-4px; width:7px; height:7px; border-radius:50%; background:var(--text-faint); content:''; }
+	.history-list li:first-child::before { background:var(--brand-icon); }
 </style>

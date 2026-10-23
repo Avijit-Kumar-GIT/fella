@@ -62,7 +62,7 @@
 		return rerunAnalysisTurn(message);
 	}
 
-	let stick = true;
+	let stick = $state(true);
 	function onScroll() {
 		if (!scroller) return;
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
@@ -278,14 +278,19 @@
 	{/if}
 </div>
 
+{#if !stick && hasConversationTurn}
+	<button class="jump-latest" onclick={() => { stick = true; scroller?.scrollTo({ top:scroller.scrollHeight, behavior:'smooth' }); }}><Icon name="arrow-down" size={11} />Jump to latest</button>
+{/if}
+
 <style>
+	.jump-latest { position:absolute; z-index:10; bottom:80px; left:50%; display:flex; align-items:center; gap:6px; transform:translateX(-50%); padding:4px 12px; border:0; border-radius:999px; background:var(--brand); color:white; box-shadow:var(--shadow-sm); font-size:12px; cursor:pointer; }
 	.model-setup { margin-top: 20px; color: var(--text-dim); font-size: var(--fs-sm); }
 	.model-setup > summary { cursor: pointer; }
 	.transcript {
 		flex: 1;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: 30px 18px var(--space-5);
+		padding:56px 20px 24px;
 		min-height: 0;
 		transition: padding var(--dur) var(--ease);
 	}
@@ -296,8 +301,11 @@
 	/* Cap the reading column so long lines don't sprawl the "app not terminal"
 	   cue. Centred in the scroller. */
 	.stream {
-		max-width: 520px;
-		margin-inline: auto;
+		width:100%;
+		max-width:520px;
+		margin-inline:auto;
+		font-size:13px;
+		line-height:21px;
 		transition: max-width var(--dur) var(--ease);
 	}
 	.transcript.focus .stream {

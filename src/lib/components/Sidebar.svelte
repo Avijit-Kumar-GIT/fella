@@ -9,16 +9,19 @@
 	import { Input } from '$lib/components/ui/input';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
-	import Logo from './Logo.svelte';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+	import WindowControls from './WindowControls.svelte';
 
 	let {
 		onsearch,
+		onworkspaceselect,
 		onsectionselect,
 		mode = $bindable<'chat' | 'files' | 'reports'>('chat'),
 		selectedFolder = 'all',
 		onselectfolder
 	}: {
 		onsearch?: () => void;
+		onworkspaceselect: (id:string) => void | Promise<void>;
 		onsectionselect?: (section: 'chat' | 'files' | 'reports') => void;
 		mode?: 'chat' | 'files' | 'reports';
 		selectedFolder?: string;
@@ -102,6 +105,9 @@
 	}
 
 	function subtitle(c: ConversationSummary): string {
+		const live = session.conversations.find(conversation => conversation.id === c.id);
+		const latest = live ? [...live.messages].reverse().find(message => message.role === 'assistant' && message.text.trim()) : undefined;
+		if (latest) return latest.text.replace(/[#*_`]/g, '').replace(/\s+/g, ' ').trim().slice(0,160);
 		const preview = c.preview.trim();
 		const currentTitle = title(c).trim();
 		return preview && preview.toLocaleLowerCase() !== currentTitle.toLocaleLowerCase()
@@ -288,19 +294,19 @@
 
 	<aside class="sidebar">
 			<div class="header">
-				<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={16} /></Button>
+				<WindowControls />
 				<div class="header-actions">
-					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="Search" title={`Search (${shortcutModifier}+K)`} aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog" onclick={() => onsearch?.()}><Icon name="search" size={16} /></Button>
-					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={16} /></Button>
+					<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={14} /></Button>
+					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="Search" title={`Search (${shortcutModifier}+K)`} aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog" onclick={() => onsearch?.()}><Icon name="search" size={14} /></Button>
+					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={15} /></Button>
 				</div>
 			</div>
 			<div class="workspace-identity">
-				<span class="identity-mark"><Logo size={21} active={session.busy} /></span>
-				<span class="identity-copy"><strong>Fella</strong><small title={session.activeWorkspaceId ?? 'General'}>{session.activeWorkspaceId ? repositoryName(session.activeWorkspaceId) : 'General'}</small></span>
+				<WorkspaceSwitcher identity onselect={onworkspaceselect} />
 				{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
 					{#if repo.path}
 						<DropdownMenu.Root>
-							<DropdownMenu.Trigger class="identity-menu-trigger" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
+							<DropdownMenu.Trigger class="identity-menu-trigger" aria-label="Workspace settings" title="Workspace settings"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
 							<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
 								{#if repo.historyOnly}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void selectRepository(repo)}>Reconnect folder</DropdownMenu.Item>{/if}
 								<DropdownMenu.Item class="fella-ui-menu-item workspace-delete-menu-item" onSelect={() => requestWorkspaceDelete(repo)}>Delete workspace and conversations</DropdownMenu.Item>
@@ -318,7 +324,7 @@
 				<section class="repository-section chat-history" aria-label="Workspace conversations">
 					{#each [{ label: 'Investigations', rows: investigationConversations }, { label: 'Questions', rows: questionConversations }] as group (group.label)}
 						<div class="conversation-group">
-							<div class="section-head"><h2>{group.label}</h2>{#if group.label === 'Investigations'}<span class="group-count">{group.rows.length}</span>{/if}</div>
+							<div class="section-head"><h2>{group.label}</h2>{#if group.label === 'Investigations'}<DropdownMenu.Root><DropdownMenu.Trigger class="section-action investigation-actions" aria-label="Investigation actions" title="Investigation actions"><Icon name="more-horizontal" size={14} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end"><DropdownMenu.Item class="fella-ui-menu-item" disabled={!session.catalog.workspace} onSelect={() => session.requestNewInvestigation()}><Icon name="plus" size={14} />New Investigation…</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>{/if}</div>
 					{#if group.rows.length}
 						{#each group.rows as c (c.id)}
 							<div class="item-wrap">
@@ -326,8 +332,8 @@
 									<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
 								{:else}
 									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c)} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
-										<span class="conversation-mark"><Icon name={group.label === 'Investigations' ? 'bookmark' : 'ask'} size={14} /></span>
-										<span class="conversation-copy"><span class="conversation-title-line"><strong>{title(c)}</strong></span><small>{subtitle(c)}</small></span>
+										<span class="conversation-mark" class:investigation={group.label === 'Investigations'}><Icon name={group.label === 'Investigations' ? (session.conversationId === c.id ? 'flask' : 'notebook-pen') : 'database'} size={14} /></span>
+										<span class="conversation-copy"><span class="conversation-title-line"><strong>{title(c)}</strong>{#if session.conversationId === c.id}<Icon name="pencil" size={11} />{/if}</span><small>{subtitle(c)}</small></span>
 									</Button>
 									<div class="row-actions">
 										<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" onclick={(e) => startRename(c, e)}><Icon name="pencil" size={14} /></Button>
@@ -374,8 +380,9 @@
 				</section>
 			{/if}
 			<div class="sidebar-footer">
-				<Button variant="ghost" class="add-folder-button" type="button" onclick={() => void openFolder()}><Icon name="folder" size={14} />Open a folder</Button>
-				<Button variant="ghost" size="icon" class={`settings-button${session.workspaceView === 'settings' ? ' active' : ''}`} title={`Settings (${shortcutModifier}+,)`} aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" aria-current={session.workspaceView === 'settings' ? 'page' : undefined} onclick={() => session.setWorkspaceView('settings')}><Icon name="settings" size={16} /></Button>
+				<span class="local-profile" title="Local profile"><Icon name="user" size={16} /></span>
+				<Button variant="ghost" class="add-folder-button" type="button" onclick={() => void openFolder()}><Icon name="plus" size={13} />Add sources</Button>
+				<Button variant="ghost" size="icon" class={`settings-button${session.workspaceView === 'settings' ? ' active' : ''}`} title={`Settings (${shortcutModifier}+,)`} aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" aria-current={session.workspaceView === 'settings' ? 'page' : undefined} onclick={() => session.setWorkspaceView('settings')}><Icon name="settings" size={15} /></Button>
 			</div>
 	</aside>
 
@@ -422,35 +429,33 @@
 </Dialog.Root>
 
 <style>
-	.sidebar { display:flex; flex-direction:column; flex:none; width:268px; min-width:220px; max-width:320px; height:100%; padding:0 10px 10px; background:var(--sidebar-surface); border-right:1px solid var(--border); }
-	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:48px; padding:0 6px; }
-	.header-actions { display:flex; align-items:center; gap:2px; }
-	.header-actions :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:30px; height:30px; min-height:30px; padding:0; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
+	.sidebar { display:flex; flex-direction:column; flex:none; width:268px; min-width:268px; max-width:268px; height:100%; padding:0; background:var(--sidebar-surface); border-right:1px solid var(--border); }
+	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:48px; padding:16px 16px 0; -webkit-app-region:drag; }
+	.header-actions { display:flex; align-items:center; gap:8px; -webkit-app-region:no-drag; }
+	.header-actions :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:32px; height:32px; min-height:32px; padding:0; border:0; border-radius:999px; background:var(--bg-raised-2); color:var(--text-dim); cursor:pointer; }
 	.header-actions :global(.icon-btn:hover), :global(.section-action:hover), :global(.identity-menu-trigger:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
-	.workspace-identity { display:flex; min-width:0; align-items:center; gap:11px; padding:13px 7px 14px; }
-	.identity-mark { display:grid; width:36px; height:36px; flex:none; place-items:center; border-radius:50%; background:color-mix(in srgb, var(--brand) 13%, var(--bg-raised)); }
-	.identity-copy { display:grid; flex:1; min-width:0; gap:2px; }
-	.identity-copy strong { color:var(--text); font-size:var(--fs-sm); font-weight:550; }
-	.identity-copy small { overflow:hidden; color:var(--text-dim); font-size:var(--fs-xs); text-overflow:ellipsis; white-space:nowrap; }
-	:global(.identity-menu-trigger) { display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
-	.sidebar-mode-switch { flex:none; display:flex; width:100%; gap:2px; margin:0 0 15px; }
-	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:30px; height:30px; padding:0 6px; font-size:var(--fs-xs); }
-	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; scrollbar-width:thin; }
-	.conversation-group + .conversation-group { margin-top:18px; }
-	.section-head { display:flex; align-items:center; gap:8px; min-height:28px; padding:0 8px 4px; }
-	.section-head h2 { margin:0; color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
+	.workspace-identity { position:relative; display:flex; min-width:0; align-items:center; gap:8px; margin-top:24px; padding:0 16px; }
+	:global(.identity-menu-trigger) { position:absolute; right:12px; opacity:0; display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
+	.workspace-identity:hover :global(.identity-menu-trigger), :global(.identity-menu-trigger:focus-visible), :global(.identity-menu-trigger[data-state='open']) { opacity:1; }
+	.sidebar-mode-switch { flex:none; display:flex; width:calc(100% - 24px); gap:0; margin:16px 12px 0; padding:4px; }
+	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:30px; height:30px; padding:0 6px; font-size:12.5px; font-weight:400; }
+	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; scrollbar-width:thin; padding:0 12px; margin-top:20px; }
+	.conversation-group + .conversation-group { margin-top:20px; }
+	.section-head { display:flex; align-items:center; gap:8px; min-height:23px; padding:0 8px 6px; }
+	.section-head h2 { margin:0; color:var(--text-dim); font-size:11.5px; font-weight:400; }
 	.group-count { margin-left:auto; color:var(--text-faint); font-size:11px; }
-	:global(.report-add) { margin-left:auto; }
+	:global(.report-add), :global(.investigation-actions) { margin-left:auto; }
+	:global(.investigation-actions) { background:transparent; width:20px; height:20px; min-height:20px; }
 	.folder-list, .report-list { display:grid; gap:2px; }
 	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }
-	.sidebar :global(.conversation-row), :global(.report-row) { display:flex; justify-content:flex-start; width:100%; min-width:0; min-height:54px; padding:7px 8px; border-radius:11px; color:var(--text-dim); text-align:left; }
+	.sidebar :global(.conversation-row), :global(.report-row) { display:flex; justify-content:flex-start; width:100%; min-width:0; min-height:54px; gap:12px; padding:8px; border-radius:12px; color:var(--text-dim); text-align:left; }
 	.sidebar :global(.conversation-row:hover), :global(.report-row:hover), .folder-row:hover { background:var(--bg-raised); color:var(--text); }
 	.sidebar :global(.conversation-row.active), :global(.report-row.active) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
 	.conversation-mark, .folder-mark, .report-mark { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:var(--bg-raised-2, var(--bg-inset)); color:var(--text-dim); }
 	:global(.conversation-row.active) .conversation-mark { background:color-mix(in srgb, var(--brand) 20%, var(--bg-raised-2, var(--bg-inset))); color:var(--brand-icon); }
-	.conversation-copy, .report-copy { display:grid; min-width:0; flex:1; gap:3px; text-align:left; }
+	.conversation-copy, .report-copy { display:grid; min-width:0; flex:1; gap:0; text-align:left; }
 	.conversation-title-line { display:flex; min-width:0; align-items:center; gap:6px; }
-	.conversation-copy strong, .report-copy strong { overflow:hidden; color:var(--text); font-size:var(--fs-sm); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+	.conversation-copy strong, .report-copy strong { overflow:hidden; color:var(--text); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 	.conversation-copy small, .report-copy small { display:block; overflow:hidden; color:var(--text-dim); font-size:var(--fs-xs); font-weight:400; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
 	.row-actions { position:absolute; top:11px; right:5px; display:none; gap:1px; padding-left:3px; background:var(--bg-raised-2, var(--bg-inset)); border-radius:var(--radius-sm); }
 	.item-wrap:hover .row-actions, .item-wrap:focus-within .row-actions { display:flex; }
@@ -471,11 +476,18 @@
 	.catalog-warning small { color:var(--text-faint); font-size:11px; line-height:1.45; }
 	.report-mark { border-radius:9px; }
 	:global(.report-row) { min-height:50px; gap:10px; }
-	.sidebar-footer { display:flex; align-items:center; gap:7px; padding:10px 2px 0; margin-top:auto; }
-	:global(.add-folder-button) { display:flex; flex:1; justify-content:center; min-width:0; min-height:36px; gap:8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); }
+	.sidebar-footer { display:flex; align-items:center; gap:12px; padding:12px; margin-top:auto; }
+	:global(.add-folder-button) { display:flex; flex:1; justify-content:center; min-width:0; min-height:38px; gap:8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); }
 	:global(.add-folder-button:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
-	:global(.settings-button) { display:grid; width:34px; height:34px; flex:none; place-items:center; border-radius:999px; color:var(--text-faint); }
+	:global(.settings-button) { display:grid; width:15px; min-width:15px; height:32px; flex:none; place-items:center; border-radius:999px; color:var(--text-faint); }
 	:global(.settings-button:hover), :global(.settings-button.active) { background:var(--bg-raised); color:var(--text); }
+	:global(.collapse-btn) { background:transparent !important; width:14px !important; min-width:14px !important; padding:0 !important; }
+	.conversation-mark.investigation { background:#fbbf24; color:#18181b; }
+	:global(.conversation-row.active) .conversation-mark.investigation { background:var(--brand); color:white; }
+	.conversation-title-line :global(svg) { flex:none; color:var(--text-faint); }
+	.item-wrap:hover .conversation-title-line > :global(svg), .item-wrap:focus-within .conversation-title-line > :global(svg) { opacity:0; }
+	.local-profile { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:#b45309; color:white; }
+
 	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
 	:global(.conversation-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
 	:global(.workspace-delete-title) { margin:0; font-size:18px; font-weight:650; }

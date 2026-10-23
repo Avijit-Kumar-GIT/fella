@@ -43,10 +43,12 @@
 	import InvestigationQuestionSourceScope from './InvestigationQuestionSourceScope.svelte';
 	import QuestionAnswerPreview from './QuestionAnswerPreview.svelte';
 	import InvestigationResultsView from './InvestigationResultsView.svelte';
+	import InvestigationRunOverview from './InvestigationRunOverview.svelte';
+	import InvestigationResultsSummary from './InvestigationResultsSummary.svelte';
 	import Chart from './Chart.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 
-	let { viewKey = '', initialInvestigation = null, onclose }: { viewKey?: string; initialInvestigation?: Investigation | null; onclose?: () => void } = $props();
+	let { viewKey = '', initialInvestigation = null, onclose, onexpand, expanded = false }: { viewKey?: string; initialInvestigation?: Investigation | null; onclose?: () => void; onexpand?: () => void; expanded?: boolean } = $props();
 	// Freeze the keyed instance's owner before its parent switches live tab props.
 	const stableViewKey = untrack(() => viewKey);
 	const initialRecord = untrack(() => initialInvestigation);
@@ -98,9 +100,13 @@
 	let definitionsOpen = $state(false);
 	let historyOpen = $state(true);
 	let editingQuestionIds = $state<string[]>([]);
+	let newQuestionText = $state('');
 	let savedBrief = $state('');
 	let savedQuestions = $state('');
 	let savedDefinitions = $state('');
+	let briefDraftId = $state<string | null>(null);
+	let questionDraftId = $state<string | null>(null);
+	let definitionDraftId = $state<string | null>(null);
 	let loadedBriefKey = '';
 	let loadedQuestionsKey = '';
 	let loadedDefinitionsKey = '';
@@ -119,6 +125,9 @@
 	let openAnalysisTurnId = $state<string | null>(null);
 	let analysisTurnLoadingId = $state<string | null>(null);
 	let analysisTurnError = $state('');
+	let overviewRunId = $state<string | null>(initialView.openRunId);
+	let overviewLoadingId = $state<string | null>(null);
+	let overviewError = $state('');
 	let questionLinksError = $state('');
 	let questionLinksStatus = $state('');
 	let questionLinksDraft = $state<string[]>([]);
@@ -309,11 +318,11 @@
 		constraints: constraintsText.split('\n').map((item) => item.trim()).filter(Boolean)
 	});
 	let briefKey = $derived(JSON.stringify(currentBrief));
-	let dirty = $derived(Boolean(selected && briefKey !== savedBrief));
+	let dirty = $derived(Boolean(selected && briefDraftId === selected.id && briefKey !== savedBrief));
 	let questionsKey = $derived(JSON.stringify(questions));
-	let questionsDirty = $derived(Boolean(selected && questionsKey !== savedQuestions));
+	let questionsDirty = $derived(Boolean(selected && questionDraftId === selected.id && questionsKey !== savedQuestions));
 	let definitionsKey = $derived(JSON.stringify(definitions));
-	let definitionsDirty = $derived(Boolean(selected && definitionsKey !== savedDefinitions));
+	let definitionsDirty = $derived(Boolean(selected && definitionDraftId === selected.id && definitionsKey !== savedDefinitions));
 	let observedEditableDraftKey = '';
 	$effect(() => {
 		const key = JSON.stringify([selected?.id ?? null, briefKey, questionsKey, definitionsKey]);
@@ -611,6 +620,7 @@
 			desiredOutput = '';
 			constraintsText = '';
 			savedBrief = '';
+			briefDraftId = null;
 			return;
 		}
 		goal = item.brief.goal;
@@ -618,6 +628,7 @@
 		desiredOutput = item.brief.desired_output;
 		constraintsText = item.brief.constraints.join('\n');
 		savedBrief = JSON.stringify(item.brief);
+		briefDraftId = item.id;
 	});
 
 	$effect(() => {
@@ -629,6 +640,7 @@
 		if (!item) {
 			questions = [];
 			savedQuestions = '';
+			questionDraftId = null;
 			return;
 		}
 		questions = (item.questions ?? (item.brief.goal.trim()
@@ -640,6 +652,7 @@
 			source_selection: question.source_selection
 		}));
 		savedQuestions = JSON.stringify(questions);
+		questionDraftId = item.id;
 	});
 
 	$effect(() => {
@@ -654,6 +667,7 @@
 			text: definition.text
 		}));
 		savedDefinitions = JSON.stringify(definitions);
+		definitionDraftId = item?.id ?? null;
 	});
 
 	$effect(() => {
@@ -726,6 +740,7 @@
 		desiredOutput = item.brief.desired_output;
 		constraintsText = item.brief.constraints.join('\n');
 		savedBrief = JSON.stringify(item.brief);
+		briefDraftId = item.id;
 		briefEditing = false;
 		error = '';
 	}
@@ -774,6 +789,23 @@
 			return path.slice(root.length + 1).replace(/\\/g, '/');
 		}
 		return path.replace(/\\/g, '/');
+	}
+
+	function submitNewQuestion(event: SubmitEvent): void {
+		event.preventDefault();
+		const text = newQuestionText.trim();
+		if (!text || saving || proposingQuestions) return;
+		addQuestion();
+		const added = questions.at(-1)!;
+		questions = questions.map(question => question.id === added.id ? { ...question, text } : question);
+		editingQuestionIds = editingQuestionIds.filter(id => id !== added.id);
+		newQuestionText = '';
+	}
+
+	function questionExcerpt(questionId: string): string {
+		const turnId = savedQuestion(questionId)?.latest_analysis_turn_id;
+		const message = investigationConversationMessages.find(item => item.role === 'assistant' && item.answer?.turn_id === turnId);
+		return (message?.answer?.text ?? '').split(/\n\s*\n/)[0]?.replace(/[#*_`]/g, '').slice(0, 160) ?? '';
 	}
 
 	function addQuestion(): void {
@@ -841,7 +873,7 @@
 		// Keep the review jump inside this Investigation. scrollIntoView() may
 		// scroll every ancestor, including the workspace/tool chrome around this
 		// pane, which can leave the section tabs underneath those bars.
-		const scroller = field.closest<HTMLElement>('.investigation-page');
+		const scroller = field.closest<HTMLElement>('.investigation-section-scroll');
 		if (!scroller) return;
 		const scrollport = scroller.getBoundingClientRect();
 		const scrollportTop = scrollport.top + scroller.clientTop;
@@ -1102,6 +1134,27 @@
 		const count = new Set(selection.included_paths).size;
 		return `${count} source${count === 1 ? '' : 's'} selected for this Question`;
 	}
+
+	async function loadOverviewRun(turnId: string): Promise<void> {
+		const owner = selected?.id;
+		overviewRunId = turnId;
+		overviewError = '';
+		if (analysisTurns[turnId]) return;
+		overviewLoadingId = turnId;
+		try {
+			const run = await ipc.analysisTurnLoad(turnId);
+			if (owner === selected?.id) analysisTurns = { ...analysisTurns, [turnId]:run };
+		} catch (cause) {
+			if (owner === selected?.id && overviewRunId === turnId) overviewError = cause instanceof Error ? cause.message : String(cause);
+		} finally { if (overviewLoadingId === turnId) overviewLoadingId = null; }
+	}
+	$effect(() => {
+		const item = selected, section = investigationSection;
+		const ids = item ? analysisRunIds(item) : [];
+		if (section !== 'analysis' || !ids.length) return;
+		if (!overviewRunId || !ids.includes(overviewRunId)) void untrack(() => loadOverviewRun(ids.at(-1)!));
+		else if (!analysisTurns[overviewRunId] && overviewLoadingId !== overviewRunId && !overviewError) void untrack(() => loadOverviewRun(overviewRunId!));
+	});
 
 	async function openAnalysisRun(turnId: string, navigate = true): Promise<void> {
 		if (navigate) investigationSection = 'analysis';
@@ -1545,6 +1598,7 @@
 				source_selection: question.source_selection
 			}));
 			savedQuestions = JSON.stringify(questions);
+			questionDraftId = updated.id;
 			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -1618,6 +1672,7 @@
 				text: definition.text
 			}));
 			savedDefinitions = JSON.stringify(definitions);
+			definitionDraftId = updated.id;
 			return true;
 		} catch (cause) {
 			error = cause instanceof Error ? cause.message : String(cause);
@@ -1640,11 +1695,11 @@
 		const item = investigations.find((record) => record.id === investigationId);
 		if (!item || selected?.id !== investigationId) return;
 		const brief = { ...currentBrief, constraints: [...currentBrief.constraints] };
-		const briefChanged = JSON.stringify(brief) !== savedBrief;
+		const briefChanged = briefDraftId === investigationId && JSON.stringify(brief) !== savedBrief;
 		const questionSnapshot = questions.map((question) => ({ ...question }));
-		const questionsChanged = JSON.stringify(questionSnapshot) !== savedQuestions;
+		const questionsChanged = questionDraftId === investigationId && JSON.stringify(questionSnapshot) !== savedQuestions;
 		const definitionSnapshot = definitions.map((definition) => ({ ...definition }));
-		const definitionsChanged = JSON.stringify(definitionSnapshot) !== savedDefinitions;
+		const definitionsChanged = definitionDraftId === investigationId && JSON.stringify(definitionSnapshot) !== savedDefinitions;
 		const saveQuestionsChanged = questionsChanged && questionSnapshot.every((question) => question.text.trim());
 		const saveDefinitionsChanged = definitionsChanged && definitionSnapshot.every((definition) => definition.text.trim());
 		if (!briefChanged && !saveQuestionsChanged && !saveDefinitionsChanged) return;
@@ -1777,11 +1832,11 @@
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-<section bind:this={scroller} class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown} onscroll={rememberScroll}>
+<section class="investigation-page" aria-labelledby="investigation-title">
 	<header class="page-head">
 		{#if selected}
 			<div class="notebook-panel-bar">
-				<Button type="button" variant="ghost" class="notebook-back" onclick={() => session.setContentLayout('notebook')}><Icon name="chevron-right" size={14} />Notebook</Button>
+				<Button type="button" variant="ghost" class="notebook-back" onclick={() => onexpand?.()}><Icon name="chevron-right" size={14} />{expanded ? 'Chat' : 'Notebook'}</Button>
 				<div class="notebook-panel-actions">
 					<Button id="investigation-share-action" type="button" variant="ghost" class="notebook-share" onclick={() => (investigationSection = 'share')}><Icon name="globe" size={14} />Share</Button>
 				<Button type="button" variant="ghost" size="icon" class="notebook-close" aria-label="Close Investigation panel" title="Close panel" onclick={() => onclose?.()}><Icon name="x" size={14} /></Button>
@@ -1859,6 +1914,7 @@
 							</button>
 						{/each}
 					</div>
+					<div class="investigation-section-scroll" bind:this={scroller} role="region" aria-label="Investigation content" tabindex="0" onkeydown={handleScrollRegionKeydown} onscroll={rememberScroll}>
 					<div
 						id="investigation-panel-brief"
 						class="investigation-tab-panel"
@@ -1869,14 +1925,12 @@
 					>
 					<section class="brief-summary" aria-labelledby="brief-summary-title">
 						<header class="brief-summary-header">
-							<div class="brief-objective">
-								<h3 id="brief-summary-title">Objective</h3>
-								<p>{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</p>
-							</div>
+							<h3 id="brief-summary-title">Objective</h3>
 							<Button type="button" variant="outline" disabled={saving} onclick={() => (briefEditing = true)}>
-								<Icon name="pencil" size={14} />Edit
+								<Icon name="pencil" size={11} />Edit
 							</Button>
 						</header>
+						<p class="brief-objective">{goal.trim() || rootQuestion?.text.trim() || 'Not set'}</p>
 						{#if audience.trim() || desiredOutput.trim() || constraintsText.trim()}
 							<section class="brief-scope" aria-label="Investigation scope">
 								<h4>Scope</h4>
@@ -1965,6 +2019,10 @@
 					>
 					<section class="analyst-work-plan" aria-labelledby="question-plan-title">
 					<section class="question-editor" aria-label="Investigation questions">
+						<form class="question-add" onsubmit={submitNewQuestion}>
+							<Input aria-label="New investigation question" bind:value={newQuestionText} placeholder="Add a question to this investigation…" disabled={saving || proposingQuestions} />
+							<Button size="icon" type="submit" aria-label="Add question" disabled={!newQuestionText.trim() || saving || proposingQuestions}><Icon name="arrow-up" size={13} /></Button>
+						</form>
 						<header class="question-heading question-plan-heading">
 							<div>
 								<h3 id="question-plan-title">Questions</h3>
@@ -1975,26 +2033,7 @@
 								</span>
 							</div>
 						</header>
-						<div class="question-plan-actions">
-							{#if rootQuestion}
-								<Button type="button" variant="outline" size="sm" disabled={saving || proposingQuestions} onclick={addQuestion}>
-									<Icon name="plus" size={14} />Add subquestion
-								</Button>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								title={subquestions.length ? 'Remove current subquestions before drafting a replacement breakdown.' : undefined}
-								disabled={!canSuggestBreakdown || saving || proposingQuestions}
-								onclick={() => void suggestBreakdown()}
-							>
-								{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
-							</Button>
-							{/if}
-							{#if autosaveError && (dirty || questionsDirty || definitionsDirty)}
-								<Button type="button" variant="ghost" disabled={autosaving} onclick={retryEditableAutosave}>Retry save</Button>
-							{/if}
-						</div>
+
 						{#if coverage.activeQuestions.length}
 						<details class="coverage-disclosure">
 							<summary>{coverage.answered} of {coverage.activeQuestions.length} answered{#if coverage.needsReview.length} · {coverage.needsReview.length} need attention{/if}</summary>
@@ -2058,7 +2097,9 @@
 						{/if}
 						{#if questions.length}
 							{#if rootQuestion}
-								<div class="question-item root-question-item">
+								<details class="question-item root-question-item" open={editingQuestionIds.includes(rootQuestion.id) || !rootQuestion.text.trim()}>
+									<summary class="question-row-summary"><i class="question-status-mark" data-status={questionAnswerStatus(rootQuestion.id)}></i><span class="question-summary-copy"><span><small>Q1</small>{rootQuestion.text || 'Main question'}</span>{#if questionExcerpt(rootQuestion.id)}<span class="question-excerpt">{questionExcerpt(rootQuestion.id)}</span>{/if}<small class="question-summary-status">{questionAnswerStatusLabel(questionAnswerStatus(rootQuestion.id))}</small></span><Icon name="chevron-right" size={12} /></summary>
+									<div class="question-expanded">
 									<div class="question-item-heading">
 										<label for="question-{rootQuestion.id}">Main question</label>
 										<Badge
@@ -2141,12 +2182,16 @@
 										onChange={(selection) => updateQuestionSourceSelection(rootQuestion.id, selection)}
 									/>
 								</div>
+								</details>
 							{/if}
 							{#if subquestions.length}
-											<h4 class="subquestion-title">Subquestions</h4>
+											<h4 class="subquestion-title sr-only">Subquestions</h4>
 								<ol class="question-list">
 									{#each subquestions as question, index (question.id)}
-										<li class="question-item">
+										<li class="question-row">
+										<details class="question-item" open={editingQuestionIds.includes(question.id) || !question.text.trim()}>
+											<summary class="question-row-summary"><i class="question-status-mark" data-status={questionAnswerStatus(question.id)}></i><span class="question-summary-copy"><span><small>Q{index + 2}</small>{question.text || 'New question'}</span>{#if questionExcerpt(question.id)}<span class="question-excerpt">{questionExcerpt(question.id)}</span>{/if}<small class="question-summary-status">{questionAnswerStatusLabel(questionAnswerStatus(question.id))}</small></span><Icon name="chevron-right" size={12} /></summary>
+											<div class="question-expanded">
 											<div class="question-item-heading">
 												<label for="question-{question.id}">Subquestion {index + 1}</label>
 												<Badge
@@ -2235,6 +2280,7 @@
 												disabled={saving || proposingQuestions}
 												onChange={(selection) => updateQuestionSourceSelection(question.id, selection)}
 											/>
+											</div></details>
 										</li>
 									{/each}
 								</ol>
@@ -2247,6 +2293,23 @@
 								</Button>
 							</div>
 						{/if}
+						<div class="question-plan-actions"><h4>Suggested by Fella</h4>
+							{#if rootQuestion}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								title={subquestions.length ? 'Remove current subquestions before drafting a replacement breakdown.' : undefined}
+								disabled={!canSuggestBreakdown || saving || proposingQuestions}
+								onclick={() => void suggestBreakdown()}
+							>
+								{proposingQuestions ? 'Suggesting…' : 'Suggest breakdown'}
+							</Button>
+							{/if}
+							{#if autosaveError && (dirty || questionsDirty || definitionsDirty)}
+								<Button type="button" variant="ghost" disabled={autosaving} onclick={retryEditableAutosave}>Retry save</Button>
+							{/if}
+						</div>
 						{#if pendingAnalysisQuestion}
 							<section class="run-preview" aria-labelledby="run-preview-title">
 								<header>
@@ -2391,9 +2454,10 @@
 						>
 					<section class="investigation-document-section investigation-analysis-section" aria-labelledby="investigation-analysis-heading">
 						<h3 id="investigation-analysis-heading" class="sr-only">Analysis runs</h3>
+						<InvestigationRunOverview ids={analysisRunIds(selected)} records={analysisTurns} selectedId={overviewRunId} loading={overviewLoadingId === overviewRunId && overviewRunId !== null} error={overviewError} onselect={(id) => void loadOverviewRun(id)} oninspect={(id) => void openAnalysisRun(id)} />
 					<details class="investigation-history" bind:open={historyOpen}>
 						<summary>
-								<span>Runs and findings</span>
+								<span>Manage findings and records</span>
 							<small>{analysisRunIds(selected).length} run{analysisRunIds(selected).length === 1 ? '' : 's'} · {selected.findings?.length ?? 0} finding{selected.findings?.length === 1 ? '' : 's'}</small>
 						</summary>
 						<div class="investigation-history-content">
@@ -2860,6 +2924,9 @@
 						>
 					<section class="investigation-document-section investigation-results-section" aria-labelledby="investigation-results-heading">
 						<h3 id="investigation-results-heading" class="sr-only">Investigation results</h3>
+						<InvestigationResultsSummary investigation={selected} messages={investigationConversationMessages} onreview={(id) => reviewQuestionFromResults(id)} onreport={() => void reviewInvestigationHandoff()} busy={exportingReport} disabledReason={reportExportDisabledReason} />
+						{#if reportExportStatus}<p class="report-export-status" role={reportExportFailed ? 'alert' : 'status'}>{reportExportStatus}</p>{/if}
+						<details class="results-records"><summary>Evidence and question coverage</summary>
 						<InvestigationResultsView
 							investigation={selected}
 							conversationMessages={investigationConversationMessages}
@@ -2868,6 +2935,7 @@
 							onopenlegacy={openLegacyRunFromResults}
 							onreviewquestion={reviewQuestionFromResults}
 						/>
+						</details>
 							<footer class="investigation-completion-actions">
 							{#if selected.status === 'complete'}
 								<Button type="button" variant="outline" disabled={saving} onclick={() => void reopenInvestigation()}>
@@ -2915,6 +2983,7 @@
 						{/if}
 					</section>
 						</div>
+					</div>
 				</div>
 			</div>
 		{:else}
@@ -3192,7 +3261,7 @@
 	.investigation-document-heading > div { display: grid; min-width: 0; gap: 3px; }
 	.investigation-document-heading h2, .investigation-document-heading h3 { margin: 0; font-size: var(--fs-md); font-weight: 650; }
 	.investigation-document-heading p { color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
-	.investigation-data-section :global(.source-readiness) { padding: var(--space-2) 0 0; border-bottom: 0; }
+	.investigation-data-section :global(.source-readiness) { padding:0; border-bottom: 0; }
 	.investigation-analysis-section { scroll-margin-top: var(--space-5); }
 	.investigation-results-section :global(.results-view) { padding: 0; }
 	.investigation-share-section { margin-bottom: var(--space-6); }
@@ -3200,8 +3269,7 @@
 	.brief-summary { display: grid; gap: 20px; padding: 12px 0 20px; margin-top: var(--space-2); border: 0; background: transparent; }
 	.brief-summary-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.brief-objective { display: grid; min-width: 0; flex: 1; gap: 9px; }
-	.brief-summary h3, .brief-scope h4 { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
-	.brief-objective p { min-width: 0; padding: 14px 16px; border-radius: var(--radius-window); background: var(--bg-raised); color: var(--text); font-size: var(--fs-sm); line-height: 1.6; overflow-wrap: anywhere; }
+	.brief-summary h3, .brief-scope h4 { margin:0; color:var(--text-faint); font-size:12px; font-weight:400; }
 	.brief-scope { display: grid; gap: 5px; }
 	.brief-scope dl { display: grid; margin: 0; }
 	.brief-scope dl > div { display: grid; grid-template-columns: minmax(76px, .42fr) minmax(0, 1fr); gap: var(--space-3); padding: 10px 4px; border-bottom: 1px solid var(--border-subtle, var(--border)); }
@@ -3479,31 +3547,67 @@
 		.question-plan-actions { justify-content: flex-start; }
 		.question-empty-state { align-items: flex-start; flex-direction: column; }
 	}
-	/* Notebook detail pane: compact, centered identity above its five real views. */
-	.investigation-page { box-sizing:border-box; width:100%; max-width:none; padding:0 16px 20px; background:var(--bg); }
-	.page-head { display:block; position:relative; margin:0 -16px 14px; padding:0 16px; background:var(--bg); }
-	.notebook-panel-bar { display:flex; height:44px; align-items:center; justify-content:space-between; }
-	:global(.notebook-back) { display:inline-flex; min-height:30px; align-items:center; gap:5px; padding:4px 8px; border-radius:999px; color:var(--text-dim); font-size:var(--fs-xs); }
+	/* Reference layout: fixed identity and section navigation, one inner scrollport. */
+	.investigation-page { display:flex; flex-direction:column; flex:1; width:100%; max-width:none; height:100%; min-height:0; padding:0; margin:0; overflow:hidden; background:var(--bg); }
+	.page-head { display:block; position:relative; flex:none; margin:0; padding:0 16px; background:var(--bg); }
+	.notebook-panel-bar { display:flex; height:52px; padding-top:16px; align-items:center; justify-content:space-between; -webkit-app-region:drag; }
+	.notebook-panel-bar :global(button) { -webkit-app-region:no-drag; }
+	:global(.notebook-back) { display:inline-flex; min-height:32px; align-items:center; gap:4px; padding:6px 8px; border-radius:999px; color:var(--text-dim); font-size:12.5px; font-weight:400; }
 	:global(.notebook-back) :global(svg) { transform:rotate(180deg); }
-	:global(.notebook-back:hover), .notebook-panel-actions :global(button:hover) { background:var(--bg-raised); color:var(--text); }
-	.notebook-panel-actions { display:flex; align-items:center; gap:7px; }
-	:global(.notebook-share) { display:inline-flex; min-height:30px; align-items:center; gap:7px; padding:4px 13px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:var(--fs-xs); }
+	:global(.notebook-back:hover), .notebook-panel-actions :global(button:hover) { background:var(--bg-raised-2); color:var(--text); }
+	.notebook-panel-actions { display:flex; align-items:center; gap:8px; }
+	:global(.notebook-share) { display:inline-flex; min-height:36px; align-items:center; gap:8px; padding:8px 16px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:13px; font-weight:400; }
 	:global(.notebook-close) { width:36px; height:36px; min-height:36px; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); }
-	.investigation-identity { display:flex; flex-direction:column; align-items:center; padding:12px 0 4px; text-align:center; }
+	.investigation-identity { display:flex; flex-direction:column; align-items:center; padding:20px 0 0; text-align:center; }
 	.investigation-mark { display:grid; width:48px; height:48px; place-items:center; border-radius:50%; background:#fbbf24; color:#18181b; }
-	.investigation-title-row { display:flex; width:100%; align-items:center; justify-content:center; gap:4px; margin-top:10px; }
-	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 34px); margin:0; color:var(--text); font-size:15px; font-weight:500; letter-spacing:-.015em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-	.investigation-title-row :global(button) { width:25px; height:25px; min-height:25px; color:var(--text-faint); opacity:0; }
+	.investigation-title-row { position:relative; display:flex; width:100%; min-height:23px; align-items:center; justify-content:center; margin-top:12px; }
+	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 64px); margin:0; color:var(--text); font-size:15px; font-weight:400; letter-spacing:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.investigation-title-row :global(button) { position:absolute; right:4px; width:25px; height:25px; min-height:25px; color:var(--text-faint); opacity:0; }
 	.investigation-title-row:hover :global(button), .investigation-title-row :global(button:focus-visible) { opacity:1; }
-	.investigation-identity > p { margin:2px 0 0; color:var(--text-faint); font-size:var(--fs-xs); }
-	.investigation-nav { position:sticky; top:0; z-index:5; display:flex; width:100%; max-width:100%; justify-content:space-between; gap:0; margin:14px 0 13px; padding:0; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; background:var(--bg); }
+	.investigation-identity > p { margin:4px 0 0; color:var(--text-faint); font-size:13px; }
+	.investigation-content, .brief-editor { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; overflow:hidden; }
+	.investigation-nav { position:relative; top:auto; z-index:5; display:grid; grid-template-columns:.7fr 1fr 1.2fr 1fr 1fr; flex:none; align-self:center; width:calc(100% - 24px); max-width:348px; justify-content:center; gap:0; margin:20px 12px 0; padding:0; overflow:hidden; scrollbar-width:none; background:var(--bg); }
 	.investigation-nav::-webkit-scrollbar { display:none; }
-	.investigation-nav > .fella-pill-nav-item { position:relative; flex:none; min-width:0; min-height:30px; padding-inline:8px; font-size:12px; }
+	.investigation-nav > .fella-pill-nav-item { position:relative; flex:none; min-width:0; min-height:27px; padding:4px 10px; font-size:12.5px; font-weight:400; line-height:19px; }
 	.investigation-nav > .fella-pill-nav-item[aria-selected='true'] { background:var(--bg-raised-2); color:var(--text); box-shadow:none; }
-	.investigation-tab-indicator { position:absolute; top:4px; right:4px; width:6px; height:6px; border-radius:50%; }
-	.question-indicator { background:var(--brand-icon); }
-	.results-indicator { background:var(--warn); }
-	.investigation-tab-panel > .investigation-document-section:first-child, .investigation-tab-panel > .analyst-work-plan:first-child { padding-top:4px; }
-	.investigation-content, .brief-editor { min-width:0; }
-	@container investigation-pane (max-width: 430px) { .investigation-page { padding-inline:12px; } .page-head { margin-inline:-12px; padding-inline:12px; } .investigation-nav { width:100%; justify-content:flex-start; } .investigation-nav > .fella-pill-nav-item { flex:none; padding-inline:6px; font-size:11.5px; } }
+	.investigation-tab-indicator { position:absolute; top:2px; right:2px; width:6px; height:6px; border-radius:50%; }
+	.question-indicator { background:var(--brand-icon); } .results-indicator { background:var(--warn); }
+	.investigation-section-scroll { flex:1; min-height:0; min-width:0; overflow-y:auto; overflow-x:hidden; overscroll-behavior:contain; padding:20px 16px 16px; }
+	.investigation-tab-panel > .investigation-document-section:first-child, .investigation-tab-panel > .analyst-work-plan:first-child { padding-top:0; }
+	.brief-summary { gap:8px; margin:0; padding:0; }
+	.brief-summary-header { align-items:center; padding:0 4px; }
+	.brief-summary-header :global(button) { min-height:18px; height:18px; padding:0; border:0; background:transparent; color:var(--text-faint); font-size:12px; }
+	.brief-objective { display:block; margin:0; padding:14px 16px; border-radius:16px; background:var(--bg-raised); font-size:14.5px; line-height:23px; color:var(--text); }
+	.brief-scope { margin-top:16px; }
+	.brief-scope dl > div { grid-template-columns:92px minmax(0,1fr); }
+	.brief-source-note { margin-top:16px; }
+	.question-add { display:flex; min-width:0; align-items:center; gap:8px; padding:6px 6px 6px 14px; margin-bottom:16px; border:1px solid var(--border); border-radius:999px; background:var(--bg-inset); }
+	.question-add :global(input) { flex:1; min-height:28px; height:28px; padding:0; border:0; background:transparent; box-shadow:none; font-size:12.5px; }
+	.question-add :global(button) { flex:none; width:28px; min-width:28px; height:28px; min-height:28px; padding:0; border-radius:50%; }
+	.question-plan-heading h3 { font-size:12px; color:var(--text-dim); font-weight:400; }
+	.question-item { padding:0; border:0; }
+	.question-row, .root-question-item { border-bottom:1px solid var(--border); }
+	.question-row:last-child { border-bottom:0; }
+	.question-row-summary { display:grid; grid-template-columns:18px minmax(0,1fr) 12px; gap:8px; padding:12px 4px; list-style:none; cursor:pointer; }
+	.question-row-summary::-webkit-details-marker { display:none; }
+	.question-row-summary > :global(svg) { align-self:center; color:var(--text-faint); transition:transform .15s; }
+	.question-item[open] > .question-row-summary > :global(svg) { transform:rotate(90deg); }
+	.question-status-mark { width:8px; height:8px; margin-top:6px; border:1px solid var(--text-faint); border-radius:50%; }
+	.question-status-mark[data-status='answered'] { border-color:var(--ok); background:var(--ok); }
+	.question-status-mark[data-status='running'] { border-color:var(--brand-icon); background:var(--brand-icon); animation:pulse 1.3s infinite; }
+	.question-status-mark[data-status='blocked'], .question-status-mark[data-status='incomplete'], .question-status-mark[data-status='needs_review'], .question-status-mark[data-status='outdated'] { border-color:var(--warn); background:var(--warn); }
+	.question-summary-copy { display:grid; min-width:0; gap:4px; color:var(--text); font-size:13px; line-height:19px; overflow-wrap:anywhere; }
+	.question-summary-copy > span > small { margin-right:6px; color:var(--text-faint); font:11px var(--mono); }
+	.question-summary-status { color:var(--text-faint); font-size:11.5px; }
+	.question-excerpt { display:-webkit-box; overflow:hidden; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; color:var(--text-dim); font-size:12px; line-height:18px; }
+	.question-expanded { padding:10px; margin:0 4px 12px; border-radius:12px; background:var(--bg-raised); }
+	.question-plan-actions { margin-top:16px; }
+	.question-plan-actions h4 { width:100%; margin:0; font-size:12px; color:var(--text-dim); font-weight:400; }
+	.question-plan-actions :global(button) { min-height:30px; border:0; background:transparent; font-size:12.5px; color:var(--text-dim); }
+	@keyframes pulse { 50% { opacity:.45; } }
+	@container investigation-pane (max-width:360px) { .page-head { padding-inline:12px; } .investigation-section-scroll { padding-inline:12px; } .investigation-nav > .fella-pill-nav-item { padding-inline:2px; font-size:12px; } }
+	.results-records { margin-top:20px; }
+	.results-records > summary { width:fit-content; margin-bottom:12px; color:var(--text-dim); font-size:12px; cursor:pointer; }
+	.investigation-history { border:0; border-radius:0; background:transparent; }
+	.investigation-history > summary { min-height:30px; padding:0 4px; color:var(--text-dim); font-size:12px; font-weight:400; }
 </style>

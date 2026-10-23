@@ -17,7 +17,7 @@
 	import TerminalToolView from './TerminalToolView.svelte';
 	import WorkspaceSourceView from './WorkspaceSourceView.svelte';
 	import CompanionPane from './CompanionPane.svelte';
-	let { onexpand, onasksource, notebook = false, defaultInspector = false }: { onexpand?: () => void; onasksource?: (source: SourceInfo) => void; notebook?: boolean; defaultInspector?: boolean } = $props();
+	let { onexpand, onasksource, notebook = false, defaultInspector = false, hideToolBar = false, expanded = false }: { onexpand?: () => void; onasksource?: (source: SourceInfo) => void; notebook?: boolean; defaultInspector?: boolean; hideToolBar?: boolean; expanded?: boolean } = $props();
 
 	let workspacePath = $derived(session.catalog.workspace);
 	let investigations = $state<Investigation[]>([]);
@@ -34,6 +34,10 @@
 	let tabsElement = $state<HTMLDivElement>();
 	const restoringTabKeys = new Set<string>();
 	let activeTab = $derived(session.activeWorkspaceToolTab);
+	$effect(() => {
+		if (!defaultInspector || !workspacePath || !session.newInvestigationRequested) return;
+		untrack(() => { session.newInvestigationRequested = false; newName = nextInvestigationTitle(); chooserError = ''; createOpen = true; });
+	});
 	let showToolTabs = $derived(session.workspaceToolTabs.length > 1 || activeTab?.kind !== 'investigation');
 	let terminalTabs = $derived(session.workspaceToolTabs.filter((tab) => tab.kind === 'terminal'));
 	$effect(() => {
@@ -279,7 +283,7 @@
 </script>
 
 <section class="workspace" aria-label="Workspace tools">
-	{#if session.workspaceToolTabs.length > 0}
+	{#if session.workspaceToolTabs.length > 0 && !hideToolBar && !(defaultInspector && activeTab?.kind === 'investigation' && !session.workspaceToolChooserOpen)}
 		<div class="workspace-tabs-bar">
 			{#if showToolTabs}
 			<div bind:this={tabsElement} class="workspace-tool-tabs" role="tablist" aria-label="Open workspace tools">
@@ -511,7 +515,7 @@
 				<ContextView />
 			{:else if activeTab.kind === 'investigation' && currentInvestigation}
 					{#key `${workspacePath}:${currentInvestigation.id}`}
-						<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} initialInvestigation={currentInvestigation} onclose={() => session.setContentLayout('chat')} />
+						<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} initialInvestigation={currentInvestigation} {onexpand} {expanded} onclose={() => session.setContentLayout('chat')} />
 				{/key}
 			{:else if activeTab.kind === 'investigation' && !investigationsLoaded}
 				<div class="workspace-opening" role="status">Loading Investigation…</div>

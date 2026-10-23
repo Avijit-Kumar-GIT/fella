@@ -123,9 +123,9 @@
 		width: max-content;
 		max-width: 100%;
 		padding: 3px;
-		border: 1px solid var(--border);
+		border: 0;
 		border-radius: 999px;
-		background: color-mix(in srgb, var(--bg-inset) 72%, var(--bg));
+		background: var(--bg-raised);
 	}
 
 	.fella-pill-nav-item {
@@ -153,9 +153,9 @@
 	.fella-pill-nav-item[aria-selected='true'],
 	.fella-pill-nav-item[aria-pressed='true'],
 	.fella-pill-nav-item[data-state='active'] {
-		background: var(--bg-raised);
+		background: var(--bg-raised-2);
 		color: var(--text);
-		box-shadow: var(--shadow-xs);
+		box-shadow: none;
 	}
 
 	.fella-pill-nav-item:focus-visible {
@@ -273,6 +273,15 @@
 }
 
 @font-face {
+ font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap;
+ src: url('/fonts/Inter-Variable.ttf') format('truetype');
+}
+@font-face {
+ font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: swap;
+ src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+}
+
+@font-face {
 	font-family: 'Geist';
 	font-weight: 100 900;
 	font-display: swap;
@@ -350,17 +359,18 @@
 	--pad: 32px;
 
 	/* --- fixed --------------------------------------------------------- */
-	--sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+	--sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
 		'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-	--mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
+	--mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
 		Consolas, 'DejaVu Sans Mono', monospace;
 	/* type scale: two small steps for chrome/dense data, two up for headings */
-	--fs: 15px;
-	--fs-sm: 14px;
+	--fs: 13px;
+	--fs-sm: 13px;
+	--fs-md: 14px;
 	--fs-xs: 12px;
 	--fs-lg: 16px;
 	--fs-xl: 22px;
-	--lh: 1.6;
+	--lh: 1.5;
 
 	/* spacing scale everything vertical/inset should land on one of these */
 	--space-1: 4px;
@@ -372,9 +382,9 @@
 	--content-max: 1120px;
 
 	--radius-sm: 8px;
-	--radius-chip: 8px;
+	--radius-chip: 999px;
 	--radius-conversation: 18px;
-	--radius-window: 22px;
+	--radius-window: 16px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
@@ -418,7 +428,7 @@
 	--on-brand: #ffffff;
 	/* A touch more lightness keeps the outgoing bubble distinct from the dark
 	   canvas without introducing another hue. */
-	--user-bubble: color-mix(in srgb, var(--brand) 90%, white);
+	--user-bubble: var(--brand);
 	--user-bubble-text: #ffffff;
 	--link: #8fb0dd;
 	--ok: #34d399;
@@ -451,9 +461,9 @@ body {
 	color: var(--text);
 	font-family: var(--sans);
 	font-size: var(--fs);
-	font-weight: 450;
+	font-weight: 400;
 	line-height: var(--lh);
-	letter-spacing: -0.006em;
+	letter-spacing: 0;
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 	overflow: hidden;

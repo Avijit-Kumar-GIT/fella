@@ -189,7 +189,6 @@ async function waitForDevServer(url, timeoutMs = 15000) {
 
 async function createWindow() {
 	const mac = process.platform === 'darwin';
-	const windows = process.platform === 'win32';
 	const savedState = await readWindowState();
 	const win = new BrowserWindow({
 		...(savedState?.bounds ?? { width: 1280, height: 800 }),
@@ -197,10 +196,11 @@ async function createWindow() {
 		minHeight: 640,
 		resizable: true,
 		show: false,
-		// Windows is frameless because Fella draws its own controls; Linux and
-		// macOS retain the native frame.
-		frame: !windows,
+		// macOS supplies its traffic lights; Windows and Linux use the same
+		// functional controls in Fella’s sidebar header.
+		frame: mac,
 		titleBarStyle: mac ? 'hiddenInset' : undefined,
+		trafficLightPosition: mac ? { x:16, y:26 } : undefined,
 		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,
 		autoHideMenuBar: false,
 		title: 'Fella',

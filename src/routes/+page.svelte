@@ -8,6 +8,7 @@
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
+	import WindowControls from '$lib/components/WindowControls.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
@@ -27,7 +28,6 @@
 	let dragging = $state(false);
 	let toolsExpanded = $state(false);
 	let toolsCompact = $state(false);
-	let sidebarMode = $state<'chat' | 'files' | 'reports'>('chat');
 	let selectedSource = $state<SourceInfo | null>(null);
 	let selectedFolder = $state('all');
 	let fileInspectorOpen = $state(true);
@@ -35,15 +35,15 @@
 	let pendingSourcePrompt = $state('');
 	let inspectorConversationKey = '';
 	let windowWidth = $state(1440);
-	let narrowNavigation = $derived(windowWidth < (session.contentLayout === 'notebook' ? 1100 : 700));
+	let narrowNavigation = $derived(windowWidth < ((session.workspacePaneOpen || session.workspaceSection !== 'chat') ? 980 : 700));
 	$effect(() => {
 		if (narrowNavigation) untrack(() => { session.sidebarCollapsed = true; });
 	});
 
 	let activeView = $derived(session.workspaceView);
 	let showRightPane = $derived.by(() => {
-		if (sidebarMode === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
-		if (sidebarMode === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
+		if (session.workspaceSection === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
+		if (session.workspaceSection === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
 		return session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane);
 	});
 	let scopedWorkspaceActive = $derived(
@@ -56,7 +56,7 @@
 		}
 	});
 	$effect(() => {
-		const section = sidebarMode;
+		const section = session.workspaceSection;
 		const conversation = session.activeChat;
 		const scoped = Boolean(conversation.workspaceScope && session.catalog.workspace === conversation.workspaceScope);
 		if (section !== 'chat' || !scoped) {
@@ -84,13 +84,13 @@
 		untrack(() => { selectedFolder = 'all'; });
 	});
 	$effect(() => {
-		const mode = sidebarMode;
+		const mode = session.workspaceSection;
 		if (mode === 'files') untrack(() => { fileInspectorOpen = true; });
 		if (mode === 'reports') untrack(() => { reportInspectorOpen = true; });
 	});
 	$effect(() => {
 		const prompt = pendingSourcePrompt;
-		if (sidebarMode !== 'chat' || !prompt || !composer) return;
+		if (session.workspaceSection !== 'chat' || !prompt || !composer) return;
 		queueMicrotask(() => {
 			if (!composer || pendingSourcePrompt !== prompt) return;
 			composer.setText(prompt);
@@ -120,7 +120,7 @@
 	}
 
 	function askAboutSource(source: SourceInfo): void {
-		sidebarMode = 'chat';
+		session.workspaceSection = 'chat';
 		fileInspectorOpen = true;
 		pendingSourcePrompt = `What should I know about ${source.name}?`;
 	}
@@ -414,7 +414,8 @@
 		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
 			<Sidebar
-				bind:mode={sidebarMode}
+				bind:mode={session.workspaceSection}
+				onworkspaceselect={selectWorkspace}
 				onsearch={() => (paletteOpen = true)}
 				onsectionselect={(section) => { if (section === 'files') fileInspectorOpen = true; if (section === 'reports') reportInspectorOpen = true; }}
 				selectedFolder={selectedFolder}
@@ -422,13 +423,9 @@
 			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
-		<Titlebar
-			onpalette={() => (paletteOpen = true)}
-			onworkspaceselect={selectWorkspace}
-			expanded={toolsExpanded}
-			compact={toolsCompact}
-			ontoggleexpand={() => (toolsExpanded = !toolsExpanded)}
-		/>
+		{#if session.sidebarCollapsed || session.focus}
+			<div class="collapsed-navigation"><WindowControls /><button aria-label="Expand sidebar" title="Expand sidebar" onclick={() => { session.focus = false; if (session.sidebarCollapsed) session.toggleSidebar(); }}><Icon name="panel" size={14} /></button></div>
+		{/if}
 		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
 				<div class="mount-status" aria-hidden="true">
@@ -447,41 +444,43 @@
 			<main>
 				<div class="main-row">
 					{#if activeView === 'settings'}
-						<SettingsView />
+						<div class="settings-workspace"><SettingsView /></div>
 					{:else}
 						<WorkspacePanelLayout
 							open={showRightPane}
 							notebook={true}
-							primaryLabel={sidebarMode === 'files' ? 'Files' : sidebarMode === 'reports' ? 'Reports' : 'Chat'}
-							secondaryLabel={sidebarMode === 'files' ? 'Preview' : sidebarMode === 'reports' ? 'Report details' : 'Investigation'}
-							defaultToolsWidth={sidebarMode === 'reports' ? 320 : 380}
-							layoutKey={sidebarMode}
+							primaryLabel={session.workspaceSection === 'files' ? 'Files' : session.workspaceSection === 'reports' ? 'Reports' : 'Chat'}
+							secondaryLabel={session.workspaceSection === 'files' ? 'Preview' : session.workspaceSection === 'reports' ? 'Report details' : 'Investigation'}
+							defaultToolsWidth={session.workspaceSection === 'reports' ? 320 : 380}
+							layoutKey={session.workspaceSection}
 							bind:expanded={toolsExpanded}
 							bind:compact={toolsCompact}
 						>
 							{#snippet conversation()}
-								{#if sidebarMode === 'chat'}
-									<div class="conversation-workspace">
+								<div class="primary-workspace" class:reports={session.workspaceSection === 'reports'} class:navigation-collapsed={session.sidebarCollapsed}>
+								{#if session.workspaceSection !== 'reports'}<Titlebar onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
+								<div class="conversation-workspace" hidden={session.workspaceSection !== 'chat'}>
 										<Transcript bind:this={transcript} />
 										<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
 									</div>
-								{:else if sidebarMode === 'files'}
+								{#if session.workspaceSection === 'files'}
 									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
-								{:else}
-									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} onasksource={askAboutSource} />
+								{:else if session.workspaceSection === 'reports'}
+									<WorkspaceView notebook hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
 								{/if}
+								</div>
 							{/snippet}
 							{#snippet tools()}
-								{#if sidebarMode === 'chat' && scopedWorkspaceActive}
-									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} onasksource={askAboutSource} defaultInspector />
-								{:else if sidebarMode === 'files' && session.catalog.workspace}
+								{#if session.workspaceSection === 'chat' && scopedWorkspaceActive}
+									<WorkspaceView notebook expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
+								{:else if session.workspaceSection === 'files' && session.catalog.workspace}
 									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
-								{:else if sidebarMode === 'reports' && session.catalog.workspace}
+								{:else if session.workspaceSection === 'reports' && session.catalog.workspace}
 									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
 								{/if}
-								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && sidebarMode === 'chat'}
+								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && session.workspaceSection === 'chat'}
 									<div class="notebook-empty"><Icon name="folder" size={20} /><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
-								{:else if sidebarMode === 'chat' && showRightPane && !session.workspacePaneOpen}
+								{:else if session.workspaceSection === 'chat' && showRightPane && !session.workspacePaneOpen}
 									<CompanionPane />
 								{/if}
 							{/snippet}
@@ -514,8 +513,10 @@
 		position: relative;
 		display: flex;
 		height: 100%;
+		min-width:0; overflow:hidden; border:1px solid var(--border-strong); border-radius:22px;
 	}
 	.app {
+		position:relative;
 		display: flex;
 		flex-direction: column;
 		flex: 1;
@@ -594,6 +595,12 @@
 		container-type: inline-size;
 		background: var(--workspace-canvas);
 	}
+	.primary-workspace { position:relative; display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; overflow:hidden; container-name:primary-pane; container-type:inline-size; }
+	.primary-workspace.reports.navigation-collapsed { padding-top:52px; }
+	.settings-workspace { display:flex; flex:1; min-height:0; padding-top:56px; }
+	.collapsed-navigation { position:absolute; top:16px; left:16px; z-index:25; display:flex; align-items:center; gap:12px; -webkit-app-region:drag; }
+	.collapsed-navigation > button { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; color:var(--text-dim); background:var(--bg-raised); -webkit-app-region:no-drag; }
+	.conversation-workspace[hidden] { display:none; }
 	.conversation-workspace {
 		display: flex;
 		flex: 1;

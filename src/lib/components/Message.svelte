@@ -5,7 +5,7 @@
 	import EvidenceBlock from './EvidenceBlock.svelte';
 	import EvidenceSummary, { answerNeedsReview, answerSemanticGaps } from './EvidenceSummary.svelte';
 	import Icon from './Icon.svelte';
-	import Logo from './Logo.svelte';
+	import FellaMark from './FellaMark.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalAnswer from './AnalyticalAnswer.svelte';
 	import { enterUp } from '$lib/motion';
@@ -80,10 +80,11 @@
 		<span class="sr-only">Fella replied: </span>
 		<div class="assistant-heading">
 			<div class="assistant-identity">
-				<Logo size={18} active={message.pending} />
+				<FellaMark size={16} fontSize={8} active={message.pending} />
 				{#if needsAttention}
 					<Badge
 						variant="default"
+						class="answer-review"
 						role="status"
 						aria-label="Answer status"
 						data-testid="answer-review-status"
@@ -151,6 +152,7 @@
 </div>
 
 <style>
+	:global(.answer-review) { padding:2px 8px; border:0; border-radius:999px; background:color-mix(in srgb,var(--warn) 10%,transparent); color:var(--warn); font-size:12px; font-weight:400; line-height:18px; }
 	.msg {
 		padding: 8px 0;
 	}
@@ -161,16 +163,16 @@
 	.msg.user {
 		display: flex;
 		justify-content: flex-end;
-		padding: var(--space-4) 0 var(--space-2);
+		padding:8px 0 0;
 	}
 	.you {
-		max-width: min(82%, 420px);
-		padding: 9px 14px 10px;
+		max-width:min(100%, 420px);
+		padding:10px 14px;
 		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
 		background: var(--user-bubble);
 		color: var(--user-bubble-text);
-		font-size: var(--fs-sm);
-		line-height: 1.52;
+		font-size:13px;
+		line-height:21px;
 		text-align: left;
 	}
 	.you-copy {
@@ -200,12 +202,12 @@
 		word-break: break-word;
 	}
 	.msg.assistant .text {
-		padding: 13px 15px;
+		padding:14px 16px;
 		border: 0;
 		border-radius: 16px;
 		background: var(--bg-raised);
 		font-size: var(--fs-sm);
-		line-height: 1.58;
+		line-height:21px;
 		color: var(--chat-body);
 	}
 	/* Markdown emphasis is deliberately brighter, not dramatically heavier.
@@ -213,7 +215,7 @@
 	   every bold phrase into an accent-colored badge. */
 	.msg.assistant .text :global(strong) {
 		color: var(--chat-strong);
-		font-weight: 650;
+		font-weight:600;
 	}
 	/* A "Background:" aside general knowledge, not computed from the files. */
 	.background {
@@ -278,7 +280,7 @@
 	.msg.assistant .text :global(h4) {
 		font-size: 1.05em;
 		color: var(--chat-strong);
-		font-weight: 650;
+		font-weight:600;
 		margin: 0.6em 0 0.25em;
 	}
 	.msg.assistant .text :global(blockquote) {

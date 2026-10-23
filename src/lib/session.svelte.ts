@@ -636,6 +636,14 @@ class Session {
 	mountProgress = $state<WorkspaceProgress | null>(null);
 	/** The app-level page; an unbound conversation is the initial destination. */
 	workspaceView = $state<WorkspaceView>('ask');
+	workspaceSection = $state<'chat' | 'files' | 'reports'>('chat');
+	newInvestigationRequested = $state(false);
+	requestNewInvestigation(): void {
+		if (!this.catalog.workspace) return;
+		this.workspaceSection = 'chat';
+		this.setWorkspacePaneOpen(true);
+		this.newInvestigationRequested = true;
+	}
 	/** Window organization only; never a mounted Workspace or an execution mode. */
 	contentLayout = $state<'chat' | 'notebook'>('chat');
 	setContentLayout(layout: 'chat' | 'notebook'): void {
@@ -1292,6 +1300,7 @@ class Session {
 	}
 
 	openStudioToolTab(documentId: string | null = null, artifactId: string | null = null): WorkspaceToolTab | null {
+		this.workspaceSection = 'reports';
 		const context = this.activeWorkspaceContext;
 		if (!context || !this.catalog.workspace) return null;
 		context.workspaceToolTabs ??= [];
