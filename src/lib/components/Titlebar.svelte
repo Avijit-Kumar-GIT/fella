@@ -61,8 +61,9 @@
 	.titlebar-overlay .titlebar-menus { display:flex; min-width:0; align-items:center; justify-self:start; gap:2px; pointer-events:auto; -webkit-app-region:no-drag; }
 	.titlebar-overlay .titlebar-menus button { min-width:0; height:26px; padding:0 8px; border-radius:5px; color:var(--text); font-size:12px; font-weight:400; }
 	.titlebar-overlay .titlebar-menus button:hover, .titlebar-overlay .titlebar-menus button:focus-visible { background:var(--bg-raised-2); }
-	.titlebar-overlay .titlebar-workspace { grid-column:2; align-self:center; margin-block:3px; max-width:min(274px, calc(100vw - 420px)); }
-	:global(.titlebar-overlay .titlebar-workspace .workspace-switcher.compact .workspace-switcher-trigger) { height:26px; min-height:26px; padding-block:3px; }
+	.titlebar-overlay .titlebar-workspace { grid-column:2; align-self:center; margin-block:4px; max-width:min(274px, calc(100vw - 420px)); }
+	:global(.titlebar-overlay .titlebar-workspace .workspace-switcher.compact .workspace-switcher-trigger) { height:24px; min-height:24px; padding-block:4px; }
+	:global(.titlebar-overlay .titlebar-workspace .workspace-switcher.compact .workspace-switcher-trigger > .logo) { width:16px; height:16px; }
 	.titlebar-overlay .titlebar-actions { position:static; grid-column:3; justify-self:end; }
 	.titlebar-overlay :global(.chrome-action) { width:26px; height:26px; }
 	@media (max-width:700px) { .titlebar-overlay { gap:2px; padding-inline:4px; } .titlebar-overlay .titlebar-leading { gap:4px; } .titlebar-overlay .titlebar-menus button { padding-inline:5px; } .titlebar-overlay .titlebar-workspace { max-width:calc(100vw - 500px); } }
