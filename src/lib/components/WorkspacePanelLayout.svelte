@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { onMount, type Snippet } from 'svelte';
 
-	let { open, notebook = false, primaryLabel = 'Chat', secondaryLabel = 'Tools', expanded = $bindable(false), compact = $bindable(false), conversation, tools }: {
-		open: boolean; notebook?: boolean; primaryLabel?: string; secondaryLabel?: string; expanded?: boolean; compact?: boolean; conversation: Snippet; tools: Snippet;
+	let { open, notebook = false, primaryLabel = 'Chat', secondaryLabel = 'Tools', defaultToolsWidth = 380, layoutKey = 'default', expanded = $bindable(false), compact = $bindable(false), conversation, tools }: {
+		open: boolean; notebook?: boolean; primaryLabel?: string; secondaryLabel?: string; defaultToolsWidth?: number; layoutKey?: string; expanded?: boolean; compact?: boolean; conversation: Snippet; tools: Snippet;
 	} = $props();
 	let host = $state<HTMLDivElement>();
 	let width = $state(0);
@@ -11,12 +11,12 @@
 	let mobilePane = $state<'tools' | 'conversation'>('conversation');
 	let dragging = $state(false);
 	const storageKey = 'fella:tools-width';
-	const notebookStorageKey = 'fella:notebook-tools-width';
+	const notebookStorageKey = 'fella:notebook-tools-width-v2';
 	let narrow = $derived(width > 0 && width < 760);
 	let solo = $derived(open && (expanded || (!notebook && compact)));
 	let mobileTabs = $derived(open && notebook && narrow && !expanded);
 	let notebookMaximum = $derived(Math.max(320, width - 400));
-	let notebookDefaultWidth = $derived(Math.min(520, Math.max(320, Math.round(width * 0.36))));
+	let notebookDefaultWidth = $derived(Math.min(defaultToolsWidth, Math.max(320, Math.round(width * 0.36))));
 	let notebookActualWidth = $derived(Math.min(notebookMaximum, Math.max(320, notebookToolsWidth ?? notebookDefaultWidth)));
 	let maximum = $derived(Math.max(400, width - 380));
 	let actualWidth = $derived(Math.min(maximum, Math.max(400, toolWidth)));
@@ -30,7 +30,7 @@
 		try {
 			const saved = Number(localStorage.getItem(storageKey));
 			if (Number.isFinite(saved) && saved >= 400) toolWidth = Math.min(saved, 1200);
-			const savedNotebook = Number(localStorage.getItem(notebookStorageKey));
+			const savedNotebook = Number(localStorage.getItem(`${notebookStorageKey}:${layoutKey}`));
 			if (Number.isFinite(savedNotebook) && savedNotebook >= 320) notebookToolsWidth = Math.min(savedNotebook, 1200);
 		} catch { /* Optional local preference. */ }
 		const observer = new ResizeObserver(([entry]) => {
@@ -40,10 +40,18 @@
 		if (host) observer.observe(host);
 		return () => observer.disconnect();
 	});
+	$effect(() => {
+		const key = layoutKey;
+		if (!notebook) return;
+		try {
+			const saved = Number(localStorage.getItem(`${notebookStorageKey}:${key}`));
+			notebookToolsWidth = Number.isFinite(saved) && saved >= 320 ? Math.min(saved, 1200) : null;
+		} catch { notebookToolsWidth = null; }
+	});
 
 	function rememberWidth(): void {
 		try {
-			localStorage.setItem(notebook ? notebookStorageKey : storageKey, String(Math.round(notebook ? notebookActualWidth : toolWidth)));
+			localStorage.setItem(notebook ? `${notebookStorageKey}:${layoutKey}` : storageKey, String(Math.round(notebook ? notebookActualWidth : toolWidth)));
 		} catch { /* Optional local preference. */ }
 	}
 

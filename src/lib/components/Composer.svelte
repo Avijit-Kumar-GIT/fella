@@ -583,6 +583,10 @@
 				<Button variant="default" size="icon" class="act send" aria-label="Send" onclick={() => void submit()}>
 					<Icon name="corner-down-left" size={16} />
 				</Button>
+			{:else}
+				<Button variant="default" size="icon" class="act send" aria-label="Send" disabled>
+					<Icon name="corner-down-left" size={16} />
+				</Button>
 			{/if}
 		</div>
 		{#if modelPickerOpen}
@@ -624,9 +628,9 @@
 		position: relative;
 		flex: 0 1 var(--content-max);
 		width: 100%;
-		max-width: var(--content-max);
+		max-width: 560px;
 		margin-inline: auto;
-		padding: var(--space-1) var(--pad) var(--space-2);
+		padding: 8px 16px 14px;
 	}
 	.workspace-unavailable-note {
 		display: flex;
@@ -896,12 +900,12 @@
 	.field {
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-2);
-		background: var(--workspace-canvas);
+		gap: 6px;
+		background: var(--bg-raised);
 		border: 1px solid var(--border-strong);
-		border-radius: 12px;
+		border-radius: 22px;
 		box-shadow: none;
-		padding: var(--space-3) var(--space-3) var(--space-2) var(--space-4);
+		padding: 8px 9px 8px 12px;
 		transition:
 			border-color var(--dur-fast) var(--ease),
 			box-shadow var(--dur-fast) var(--ease);
@@ -1031,8 +1035,8 @@
 	.bottom-row {
 		display: flex;
 		align-items: center;
-		gap: var(--space-2);
-		min-height: 28px;
+		gap: 6px;
+		min-height: 30px;
 	}
 	.model-picker {
 		position: absolute;
@@ -1123,7 +1127,7 @@
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		font-size: var(--fs-lg);
+		font-size: var(--fs-sm);
 		line-height: 1.5;
 		max-height: 200px;
 		overflow-y: auto;

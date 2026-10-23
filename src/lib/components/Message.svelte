@@ -152,7 +152,7 @@
 
 <style>
 	.msg {
-		padding: var(--space-3) 0;
+		padding: 8px 0;
 	}
 	.investigation-run-link {
 		margin-top: var(--space-1);
@@ -164,13 +164,13 @@
 		padding: var(--space-4) 0 var(--space-2);
 	}
 	.you {
-		max-width: min(72%, 58ch);
+		max-width: min(82%, 420px);
 		padding: 9px 14px 10px;
 		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
 		background: var(--user-bubble);
 		color: var(--user-bubble-text);
-		font-size: var(--fs);
-		line-height: 1.48;
+		font-size: var(--fs-sm);
+		line-height: 1.52;
 		text-align: left;
 	}
 	.you-copy {
@@ -200,8 +200,12 @@
 		word-break: break-word;
 	}
 	.msg.assistant .text {
-		font-size: var(--fs-lg);
-		line-height: 1.6;
+		padding: 13px 15px;
+		border: 1px solid var(--border);
+		border-radius: 16px;
+		background: var(--bg-raised);
+		font-size: var(--fs-sm);
+		line-height: 1.58;
 		color: var(--chat-body);
 	}
 	/* Markdown emphasis is deliberately brighter, not dramatically heavier.

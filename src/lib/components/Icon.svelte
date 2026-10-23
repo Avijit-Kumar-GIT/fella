@@ -32,6 +32,7 @@
 		'table',
 		'file',
 		'bookmark',
+	'globe',
 		'pencil',
 		'download'
 	] as const;
@@ -58,6 +59,7 @@
 		Folder,
 		FolderGit2,
 		FolderKanban,
+		Globe,
 		Info,
 		LayoutGrid,
 		MessageSquare,
@@ -113,6 +115,7 @@
 		table: Table,
 		file: FileText,
 		bookmark: Bookmark,
+		globe: Globe,
 		pencil: Pencil,
 		download: Download
 	};

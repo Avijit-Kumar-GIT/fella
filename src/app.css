@@ -295,9 +295,13 @@
 	   writing surface (they differ now), --bg-inset the recessed fill. */
 	--bg: #fcfcfb;
 	--bg-raised: #ffffff;
+	--bg-raised-2: #f0efec;
 	--bg-inset: #f2f2f0;
 	--app-chrome: #f0efec;
 	--sidebar-surface: #f5f4f1;
+	--sidebar-hover: #eeedea;
+	--sidebar-selected: #e9e8e4;
+	--surface: #ffffff;
 	--workspace-surface: #ffffff;
 	--workspace-canvas: #f3f2ef;
 	--pane-surface: #ffffff;
@@ -370,7 +374,7 @@
 	--radius-sm: 8px;
 	--radius-chip: 8px;
 	--radius-conversation: 18px;
-	--radius-window: 16px;
+	--radius-window: 22px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
@@ -383,39 +387,43 @@
 }
 
 :root[data-color-mode='dark'] {
-	--bg: #0e0e10;
-	--bg-raised: #17171a;
-	--bg-inset: #1e1e22;
-	--app-chrome: #111113;
-	--sidebar-surface: #151517;
-	--workspace-surface: #18181b;
-	--workspace-canvas: #141416;
-	--pane-surface: #1b1b1e;
-	--pane-head: #1d1d20;
-	--pane-edge: #2b2b30;
-	--pane-edge-active: #45454b;
+	--bg: #0e0e0f;
+	--bg-raised: #19191b;
+	--bg-raised-2: #242427;
+	--bg-inset: #161617;
+	--app-chrome: #0e0e0f;
+	--sidebar-surface: #121213;
+	--sidebar-hover: #242427;
+	--sidebar-selected: #242427;
+	--surface: #19191b;
+	--workspace-surface: #0e0e0f;
+	--workspace-canvas: #0e0e0f;
+	--pane-surface: #121213;
+	--pane-head: #121213;
+	--pane-edge: rgb(255 255 255 / 0.07);
+	--pane-edge-active: rgb(255 255 255 / 0.12);
 	--window-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 5px 16px rgba(0, 0, 0, 0.16);
-	--border: #26262a;
-	--border-strong: #37373d;
-	--text: #ededec;
-	--text-dim: #8f8d88;
-	--text-faint: #838079;
-	--chat-body: #c8c7c2;
-	--chat-strong: #f1f1ee;
-	--chat-meta: #9b9992;
-	--chat-question: #ededec;
-	--accent: #ededec;
-	--brand: #008080;
-	--brand-icon: #55c6bf;
+	--border: rgb(255 255 255 / 0.07);
+	--border-strong: rgb(255 255 255 / 0.12);
+	--text: #f4f4f5;
+	--text-dim: #a1a1aa;
+	--text-faint: #71717a;
+	--chat-body: #d4d4d8;
+	--chat-strong: #f4f4f5;
+	--chat-meta: #a1a1aa;
+	--chat-question: #f4f4f5;
+	--accent: #f4f4f5;
+	--brand: #0f7f78;
+	--brand-icon: #4fd1c5;
 	--on-brand: #ffffff;
 	/* A touch more lightness keeps the outgoing bubble distinct from the dark
 	   canvas without introducing another hue. */
 	--user-bubble: color-mix(in srgb, var(--brand) 90%, white);
 	--user-bubble-text: #ffffff;
 	--link: #8fb0dd;
-	--ok: #7cc07c;
-	--warn: #d8a640;
-	--err: #e06c6c;
+	--ok: #34d399;
+	--warn: #fbbf24;
+	--err: #f87171;
 	--chart-violet: #aa99e2;
 	--chart-cyan: #56d1cf;
 	--chart-slate: #b0b7bd;

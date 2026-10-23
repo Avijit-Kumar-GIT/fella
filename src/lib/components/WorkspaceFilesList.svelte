@@ -4,9 +4,10 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import Icon from './Icon.svelte';
+	import WorkspaceEnvironment from './WorkspaceEnvironment.svelte';
 	import { session } from '$lib/session.svelte';
 
-	let { selected, onselect }: { selected: SourceInfo | null; onselect: (source: SourceInfo) => void } = $props();
+	let { selected, onselect, folder = 'all' }: { selected: SourceInfo | null; onselect: (source: SourceInfo) => void; folder?: string } = $props();
 	let query = $state('');
 	let kind = $state<'all' | 'data' | 'documents'>('all');
 
@@ -23,6 +24,11 @@
 		return source.view ? 'data' : 'document';
 	}
 
+	function sourceFolder(source: SourceInfo): string {
+		const segments = relativePath(source.path).split('/').filter(Boolean);
+		return segments.length > 1 ? segments[0] : '__root';
+	}
+
 	function updatedLabel(timestamp: number): string {
 		return Number.isFinite(timestamp) && timestamp > 0
 			? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(timestamp))
@@ -32,18 +38,20 @@
 	let sources = $derived.by(() => {
 		const term = query.trim().toLocaleLowerCase();
 		return [...session.catalog.sources]
+			.filter((source) => folder === 'all' || sourceFolder(source) === folder)
 			.filter((source) => kind === 'all' || (kind === 'data' ? sourceType(source) === 'data' : sourceType(source) === 'document'))
 			.filter((source) => !term || `${source.name} ${relativePath(source.path)} ${source.synopsis ?? ''} ${source.columns?.map((column) => column.name).join(' ') ?? ''}`.toLocaleLowerCase().includes(term))
 			.sort((left, right) => relativePath(left.path).localeCompare(relativePath(right.path), undefined, { numeric: true }) || left.name.localeCompare(right.name, undefined, { numeric: true }));
 	});
-	let dataCount = $derived(session.catalog.sources.filter((source) => source.view).length);
-	let documentCount = $derived(session.catalog.sources.filter((source) => !source.view).length);
+	let dataCount = $derived(sources.filter((source) => source.view).length);
+	let documentCount = $derived(sources.filter((source) => !source.view).length);
+	let folderLabel = $derived(folder === 'all' ? 'All files' : folder === '__root' ? 'Workspace root' : folder);
 </script>
 
 <main class="files-page" aria-label="Workspace files">
 	<header class="files-heading">
 		<div>
-			<h1>Files</h1>
+			<h1>{folderLabel}</h1>
 			<p class="files-summary">
 				{#if session.catalog.workspace}
 					{dataCount} queryable {dataCount === 1 ? 'source' : 'sources'} · {documentCount} readable {documentCount === 1 ? 'document' : 'documents'}
@@ -52,9 +60,7 @@
 				{/if}
 			</p>
 		</div>
-		{#if session.catalog.workspace}
-			<Button variant="outline" size="sm" onclick={() => void openFolder()}><Icon name="folder" size={14} />Open another folder</Button>
-		{/if}
+			<WorkspaceEnvironment compact />
 	</header>
 
 	{#if !session.catalog.workspace}
@@ -79,7 +85,7 @@
 
 		<div class="files-list" role="table" aria-label="Cataloged workspace sources">
 			<div class="files-list-head" role="row">
-				<span role="columnheader">Name</span><span role="columnheader">Rows</span><span role="columnheader">Updated</span><span role="columnheader">Access</span>
+				<span role="columnheader">Name</span><span role="columnheader">Rows</span><span role="columnheader">Updated</span><span role="columnheader">Status</span>
 			</div>
 			{#each sources as source (`${source.path}:${source.name}`)}
 				{@const active = selected?.path === source.path && selected?.name === source.name}
@@ -106,11 +112,11 @@
 </main>
 
 <style>
-	.files-page { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; overflow:auto; padding:clamp(20px, 3vw, 36px); color:var(--text); }
+	.files-page { display:flex; flex:1; flex-direction:column; min-width:0; min-height:0; overflow:auto; padding:34px clamp(20px, 3vw, 34px); color:var(--text); }
 	.files-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; max-width:980px; width:100%; margin:0 auto; }
-	.files-heading h1 { margin:2px 0 0; font-size:clamp(22px, 2.2vw, 28px); font-weight:650; letter-spacing:-.03em; }
-	.files-summary { margin:5px 0 0; color:var(--text-dim); font-size:var(--fs-sm); }
-	.files-controls { display:flex; align-items:center; gap:12px; width:100%; max-width:980px; margin:24px auto 14px; }
+	.files-heading h1 { margin:2px 0 0; font-size:clamp(22px, 2.2vw, 26px); font-weight:550; letter-spacing:-.025em; }
+	.files-summary { margin:5px 0 0; color:var(--text-dim); font-size:var(--fs-xs); }
+	.files-controls { display:flex; align-items:center; gap:12px; width:100%; max-width:980px; margin:22px auto 13px; }
 	.files-search { display:flex; flex:1; min-width:120px; align-items:center; gap:8px; padding-left:12px; border:1px solid var(--border); border-radius:999px; background:var(--bg-inset); color:var(--text-faint); }
 	.files-search :global(input) { min-width:0; min-height:36px; border:0; background:transparent; box-shadow:none; }
 	.files-filter { flex:none; }
@@ -119,7 +125,7 @@
 	.files-list-head, .file-row { display:grid; grid-template-columns:minmax(0, 1fr) 76px 96px 86px; align-items:center; gap:12px; }
 	.files-list-head { min-height:32px; padding:0 12px; border-bottom:1px solid var(--border); color:var(--text-faint); font-size:11px; }
 	.files-list-head span:not(:first-child) { text-align:right; }
-	.file-row { width:100%; min-width:0; min-height:58px; padding:7px 12px; border:0; border-bottom:1px solid color-mix(in srgb, var(--border) 75%, transparent); border-radius:var(--radius-sm); background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
+	.file-row { width:100%; min-width:0; min-height:58px; padding:7px 12px; border:0; border-bottom:1px solid color-mix(in srgb, var(--border) 75%, transparent); border-radius:10px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
 	.file-row:hover, .file-row.selected { background:var(--bg-raised); }
 	.file-name-cell { display:flex; min-width:0; align-items:center; gap:11px; }
 	.file-type-icon { display:grid; width:30px; height:30px; flex:none; place-items:center; border-radius:9px; background:var(--bg-raised); color:var(--text-faint); }

@@ -302,10 +302,9 @@
 
 <style>
 	.run-timeline {
-		max-width: 76ch;
+		max-width: 520px;
 		margin: 0 auto var(--space-3);
-		padding: var(--space-2) 0 0;
-		border-top: 1px solid var(--border);
+		padding: 3px 0 0;
 		color: var(--text-dim);
 	}
 	:global(.timeline-collapsible) { min-width: 0; }

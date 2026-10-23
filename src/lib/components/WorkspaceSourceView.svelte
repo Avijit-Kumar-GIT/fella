@@ -11,8 +11,10 @@
 		source,
 		workspacePath,
 		revision,
-		onexpand
-	}: { source: SourceInfo | null; workspacePath: string | null; revision: string | null; onexpand?: () => void } = $props();
+		onexpand,
+		onclose,
+		onask
+	}: { source: SourceInfo | null; workspacePath: string | null; revision: string | null; onexpand?: () => void; onclose?: () => void; onask?: (source: SourceInfo) => void } = $props();
 
 	let rows = $state<QueryResult | null>(null);
 	let documentText = $state('');
@@ -76,6 +78,7 @@
 
 <section class="source-view" aria-label={source ? `File preview: ${source.name}` : 'File preview'}>
 	{#if source}
+		<div class="source-toolbar"><span>File details</span><Button variant="ghost" size="icon" aria-label="Close file details" title="Close file details" onclick={() => onclose?.()}><Icon name="x" size={14} /></Button></div>
 		<header class="source-head">
 			<div class="source-title-row">
 				<span class="source-icon"><Icon name={source.view ? 'table' : 'file'} size={16} /></span>
@@ -89,6 +92,7 @@
 				{#if source.view}<span>{new Intl.NumberFormat().format(source.row_count ?? 0)} rows</span>{/if}
 				<details><summary>Details</summary><span>Catalog {revision ?? 'revision unavailable'}</span></details>
 			</div>
+			<Button class="source-ask-button" onclick={() => onask?.(source)}><Icon name="ask" size={14} />Ask about this file</Button>
 		</header>
 		{#if loading}
 			<div class="source-loading" role="status"><Spinner size={16} />Loading read-only preview…</div>
@@ -152,24 +156,28 @@
 	:global(.source-columns-trigger) { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius); padding: 7px 10px; background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 	:global(.source-columns-menu) { max-height: 360px; overflow: auto; }
 	.source-metadata details summary { cursor: pointer; }
-	.source-view { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; gap: var(--space-4); padding: var(--space-5); overflow: auto; }
-	.source-head { display: grid; gap: var(--space-3); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border); }
+	.source-view { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; gap: 0; padding: 0 20px 20px; overflow: auto; color:var(--text); }
+	.source-toolbar { display:flex; min-height:48px; flex:none; align-items:center; justify-content:space-between; color:var(--text-dim); font-size:var(--fs-xs); }
+	.source-toolbar :global(button) { width:30px; min-height:30px; height:30px; border-radius:50%; }
+	.source-head { display: grid; gap: 13px; padding:18px 0 20px; }
 	.source-title-row { display: flex; min-width: 0; align-items: flex-start; gap: var(--space-3); }
-	.source-icon { display: grid; width: 30px; height: 30px; flex: none; place-items: center; border-radius: var(--radius-sm); background: var(--bg-inset); color: var(--text-dim); }
+	.source-icon { display: grid; width: 44px; height: 44px; flex: none; place-items: center; border-radius: 12px; background: var(--bg-raised); color: var(--brand-icon); }
 	.source-title-copy { min-width: 0; }
-	.source-title-copy h1 { margin: 0; font-size: var(--fs-md); font-weight: 650; overflow-wrap: anywhere; }
+	.source-title-copy h1 { margin: 0; font-size: var(--fs-md); font-weight: 550; overflow-wrap: anywhere; }
 	.source-title-copy p { margin: 2px 0 0; color: var(--text-faint); font-size: var(--fs-xs); overflow-wrap: anywhere; }
-	.source-metadata { display: flex; flex-wrap: wrap; gap: var(--space-2); color: var(--text-faint); font-size: 11px; }
-	.source-metadata span + span::before { content: '·'; margin-right: var(--space-2); color: var(--border-strong); }
-	.table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-md); }
+	.source-metadata { display: flex; flex-wrap: wrap; gap: 6px 10px; color: var(--text-dim); font-size: 11px; }
+	.source-metadata span + span::before { content: '·'; margin-right: 8px; color: var(--text-faint); }
+	:global(.source-ask-button) { display:flex; width:100%; min-height:36px; align-items:center; justify-content:center; gap:8px; border-radius:999px; background:var(--brand); color:var(--on-brand); font-size:var(--fs-xs); }
+	:global(.source-ask-button:hover) { filter:brightness(.94); }
+	.table-scroll { max-width: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 12px; }
 	table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: var(--fs-xs); }
 	th, td { max-width: 240px; padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 	th { position: sticky; top: 0; background: var(--bg-inset); color: var(--text-dim); font-weight: 600; }
 	td { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
 	tr:last-child td { border-bottom: 0; }
-	.document-preview { min-height: 0; margin: 0; padding: var(--space-4); border-radius: var(--radius-md); background: var(--bg-inset); color: var(--text); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.document-preview { min-height: 0; margin: 0; padding: var(--space-4); border-radius: 12px; background: var(--bg-inset); color: var(--text); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.source-footnote { margin: 0; color: var(--text-faint); font-size: var(--fs-xs); }
-	.source-loading { display: flex; align-items: center; gap: var(--space-2); color: var(--text-dim); font-size: var(--fs-sm); }
+	.source-loading { display: flex; align-items: center; gap: var(--space-2); padding-top:16px; color: var(--text-dim); font-size: var(--fs-sm); }
 	.source-message { display: grid; align-content: start; gap: var(--space-2); max-width: 56ch; padding: var(--space-4) 0; color: var(--text-dim); font-size: var(--fs-sm); }
 	.source-message strong { color: var(--text); font-weight: 600; }
 	.source-message p { margin: 0; line-height: 1.5; }

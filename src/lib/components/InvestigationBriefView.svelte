@@ -45,7 +45,7 @@
 	import Chart from './Chart.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 
-	let { viewKey = '' }: { viewKey?: string } = $props();
+	let { viewKey = '', onclose }: { viewKey?: string; onclose?: () => void } = $props();
 	// Freeze the keyed instance's owner before its parent switches live tab props.
 	const stableViewKey = untrack(() => viewKey);
 	const initialView = readInvestigationView(stableViewKey);
@@ -76,8 +76,7 @@
 		{ id: 'data', label: 'Sources' },
 		{ id: 'questions', label: 'Questions' },
 		{ id: 'analysis', label: 'Analysis' },
-		{ id: 'results', label: 'Results' },
-		{ id: 'share', label: 'Share' }
+		{ id: 'results', label: 'Results' }
 	];
 
 	let investigations = $state<Investigation[]>([]);
@@ -1770,15 +1769,24 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <section bind:this={scroller} class="investigation-page" aria-labelledby="investigation-title" tabindex="0" onkeydown={handleScrollRegionKeydown} onscroll={rememberScroll}>
 	<header class="page-head">
-		<div class="investigation-title-row">
-			<h1 id="investigation-title">{selected?.title ?? 'Investigation'}</h1>
-			{#if selected}<Button variant="ghost" size="icon" aria-label="Rename Investigation" title="Rename Investigation" onclick={() => { nameDraft = selected!.title; nameError = ''; nameOpen = true; }}><Icon name="pencil" size={14} /></Button>{/if}
-			{#if !selected}<p>One request, the data behind it, and the results Fella produces.</p>{/if}
-		</div>
-		{#if selected && selected.conversation_id !== session.activeChat.id}
-			<Button type="button" variant="outline" disabled={openingConversation || (!selected.conversation_id && !selected.brief_source_message_id)} onclick={() => void openSelectedConversation()}>
-				<Icon name="ask" size={16} />{openingConversation ? 'Opening…' : 'Open conversation'}
-			</Button>
+		{#if selected}
+			<div class="notebook-panel-bar">
+				<Button type="button" variant="ghost" class="notebook-back" onclick={() => session.setContentLayout('notebook')}><Icon name="chevron-right" size={14} />Notebook</Button>
+				<div class="notebook-panel-actions">
+					<Button id="investigation-share-action" type="button" variant="ghost" class="notebook-share" onclick={() => (investigationSection = 'share')}><Icon name="globe" size={14} />Share</Button>
+				<Button type="button" variant="ghost" size="icon" class="notebook-close" aria-label="Close Investigation panel" title="Close panel" onclick={() => onclose?.()}><Icon name="x" size={14} /></Button>
+				</div>
+			</div>
+			<div class="investigation-identity">
+				<span class="investigation-mark"><Icon name="bookmark" size={20} /></span>
+				<div class="investigation-title-row">
+					<h1 id="investigation-title">{selected.title || 'Untitled Investigation'}</h1>
+				<Button variant="ghost" size="icon" aria-label="Rename Investigation" title="Rename Investigation" onclick={() => { nameDraft = selected!.title; nameError = ''; nameOpen = true; }}><Icon name="pencil" size={14} /></Button>
+				</div>
+				<p>Investigation</p>
+			</div>
+		{:else}
+			<div class="investigation-title-row"><h1 id="investigation-title">Investigation</h1><p>One request, the data behind it, and the results Fella produces.</p></div>
 		{/if}
 	</header>
 	{#if workspacePath && !loading && !investigationLoadError && !selected}
@@ -2869,7 +2877,7 @@
 							id="investigation-panel-share"
 							class="investigation-tab-panel"
 							role="tabpanel"
-							aria-labelledby="investigation-tab-share"
+							aria-labelledby="investigation-share-action"
 							tabindex="0"
 							hidden={investigationSection !== 'share'}
 						>
@@ -3446,4 +3454,25 @@
 		.question-plan-actions { justify-content: flex-start; }
 		.question-empty-state { align-items: flex-start; flex-direction: column; }
 	}
+	/* Notebook detail pane: compact, centered identity above its five real views. */
+	.investigation-page { box-sizing:border-box; width:100%; max-width:none; padding:0 16px 20px; background:var(--bg); }
+	.page-head { display:block; position:relative; margin:0 -16px 14px; padding:0 16px; background:var(--bg); }
+	.notebook-panel-bar { display:flex; height:44px; align-items:center; justify-content:space-between; }
+	:global(.notebook-back) { display:inline-flex; min-height:30px; align-items:center; gap:5px; padding:4px 8px; border-radius:999px; color:var(--text-dim); font-size:var(--fs-xs); }
+	:global(.notebook-back) :global(svg) { transform:rotate(180deg); }
+	:global(.notebook-back:hover), .notebook-panel-actions :global(button:hover) { background:var(--bg-raised); color:var(--text); }
+	.notebook-panel-actions { display:flex; align-items:center; gap:7px; }
+	:global(.notebook-share) { display:inline-flex; min-height:30px; align-items:center; gap:7px; padding:4px 13px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:var(--fs-xs); }
+	:global(.notebook-close) { width:32px; height:32px; min-height:32px; border-radius:50%; background:var(--bg-raised); color:var(--text-dim); }
+	.investigation-identity { display:flex; flex-direction:column; align-items:center; padding:12px 0 4px; text-align:center; }
+	.investigation-mark { display:grid; width:46px; height:46px; place-items:center; border-radius:50%; background:color-mix(in srgb, var(--brand) 24%, var(--bg-raised)); color:var(--brand-icon); }
+	.investigation-title-row { display:flex; width:100%; align-items:center; justify-content:center; gap:4px; margin-top:10px; }
+	.investigation-title-row h1 { flex:0 1 auto; max-width:calc(100% - 34px); margin:0; color:var(--text); font-size:var(--fs-md); font-weight:550; letter-spacing:-.015em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.investigation-title-row :global(button) { width:25px; height:25px; min-height:25px; color:var(--text-faint); }
+	.investigation-identity > p { margin:2px 0 0; color:var(--text-faint); font-size:var(--fs-xs); }
+	.investigation-nav { position:sticky; top:0; z-index:5; display:flex; width:100%; max-width:100%; gap:0; margin:14px 0 13px; padding:3px; overflow:hidden; border-color:var(--border); background:color-mix(in srgb,var(--bg-inset) 78%,var(--bg)); }
+	.investigation-nav > .fella-pill-nav-item { flex:1 1 0; min-width:0; min-height:30px; padding-inline:4px; font-size:clamp(10px, 3.1cqi, 12px); }
+	.investigation-tab-panel > .investigation-document-section:first-child, .investigation-tab-panel > .analyst-work-plan:first-child { padding-top:4px; }
+	.investigation-content, .brief-editor { min-width:0; }
+	@container investigation-pane (max-width: 430px) { .investigation-page { padding-inline:12px; } .page-head { margin-inline:-12px; padding-inline:12px; } .investigation-nav { width:100%; } .investigation-nav > .fella-pill-nav-item { flex:1 1 0; padding-inline:2px; font-size:clamp(10px, 3.4cqi, 11px); } }
 </style>

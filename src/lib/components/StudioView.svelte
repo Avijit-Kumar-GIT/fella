@@ -469,7 +469,7 @@
 		{:else}
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>
-				<div class="document-heading"><input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" /><p class="document-caption">Selected results and your explanation.</p></div>
+				<div class="document-heading"><input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" /><p class="document-caption">Report · Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(target.document.updated_at_ms))}</p></div>
 				{#if target.error}<div class="save-error"><p role="alert">{target.error}</p><div><Button size="sm" variant="outline" disabled={target.locked || target.saving} onclick={() => void saveDraft(target)}>Retry save</Button><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => void saveCopy()}>Save a copy</Button></div></div>{:else if target.notice}<p class="document-notice" role="status">{target.notice}</p>{/if}
 				<section class="document-notes" aria-label="Document notes">
 					{#if notesEditing}<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label><div class="notes-actions"><Button variant="ghost" size="sm" disabled={target.locked} onclick={() => { notesEditing = false; void saveDraft(target); }}>Done</Button></div>
@@ -522,9 +522,9 @@
 <Dialog.Root open={restoreTarget !== null} onOpenChange={value => { if (!value) restoreTarget = null; }}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><Dialog.Title class="dialog-title">Restore checkpoint?</Dialog.Title><Dialog.Description class="dialog-description">Restore “{restoreTarget?.title}”. Fella first saves the current document as a checkpoint. Later artifact revisions are not deleted.</Dialog.Description><div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button size="sm" disabled={current?.locked} onclick={() => void restore()}>Restore checkpoint</Button></div></Dialog.Content></Dialog.Portal></Dialog.Root>
 
 <style>
-	.studio { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--pane-surface, var(--bg-raised)); container-type: inline-size; }
-	.studio-toolbar { display: flex; align-items: center; justify-content: space-between; flex: none; min-width: 0; padding: 10px 14px; gap: var(--space-2); }
-	:global(.studio-document-trigger) { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 52%; min-height: 32px; padding: 5px 10px; border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
+	.studio { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; background: var(--bg); container-type: inline-size; }
+	.studio-toolbar { display: flex; align-items: center; justify-content: space-between; flex: none; min-width: 0; padding: 10px 18px; gap: var(--space-2); }
+	:global(.studio-document-trigger) { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 52%; min-height: 32px; padding: 5px 11px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); color: var(--text-dim); font: inherit; font-size: var(--fs-xs); cursor: pointer; }
 	:global(.studio-document-trigger > span) { min-width: 0; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
 	:global(.studio-document-menu) { max-width: min(380px, calc(100vw - 32px)); max-height: 350px; overflow: auto; }
 	:global(.studio-document-menu .fella-ui-menu-item) { gap: var(--space-2); justify-content: space-between; overflow-wrap: anywhere; }
@@ -535,23 +535,24 @@
 	:global(.studio-icon-button:disabled) { opacity: .35; cursor: default; }
 	:global(.studio-icon-button:focus-visible), :global(.studio-document-trigger:focus-visible), .add-notes:focus-visible, .document-title:focus-visible, .notes-input:focus-visible, .history summary:focus-visible, .output-picker-list button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 	.studio-scroll { min-height: 0; flex: 1; overflow: auto; overscroll-behavior: contain; }
-	.studio-document { box-sizing: border-box; width: 100%; max-width: 1000px; margin: 0 auto; padding: var(--space-5) clamp(18px, 5cqi, 48px) var(--space-6); }
-	.document-heading { margin-bottom: var(--space-5); }
-	.document-title { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 var(--space-2); border: 0; background: transparent; color: var(--text); font: 600 clamp(23px, 4cqi, 30px)/1.3 var(--sans); letter-spacing: -.025em; text-overflow: ellipsis; }
+	.studio-document { box-sizing: border-box; width: 100%; max-width: 660px; margin: 0 auto; padding: 34px clamp(18px, 4cqi, 30px) 60px; }
+	.document-heading { margin-bottom: 30px; }
+	.document-title { box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 5px; border: 0; background: transparent; color: var(--text); font: 550 clamp(25px, 4cqi, 32px)/1.28 var(--sans); letter-spacing: -.025em; text-overflow: ellipsis; }
 	p { margin: 0; }
 	.document-caption, .document-notice { color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
 	.document-notice { margin: 0 0 var(--space-4); }
-	.document-notes { min-width: 0; margin-bottom: var(--space-6); font-size: var(--fs-sm); line-height: 1.65; }
+	.document-notes { min-width: 0; margin-bottom: 34px; font-size: var(--fs); line-height: 1.68; }
 	.document-notes > :global(button) { margin-top: var(--space-2); }
 	.add-notes { display: flex; align-items: center; gap: var(--space-2); padding: 8px 10px; margin-left: -10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-faint); cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 	.notes-label { display: grid; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.notes-input { box-sizing: border-box; width: 100%; resize: vertical; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset); color: var(--text); font: var(--fs-sm)/1.65 var(--sans); }
 	.notes-actions { display: flex; justify-content: end; margin-top: var(--space-2); }
 	.placements { list-style: none; margin: 0; padding: 0; }
-	.placement { min-width: 0; position: relative; margin-bottom: var(--space-6); padding-top: var(--space-2); }
+	.placement { min-width: 0; position: relative; margin-bottom: 32px; padding-top: 5px; }
 	.placement-controls { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
 	.position-label { color: var(--text-faint); font: 11px var(--mono); }
-	.placement-buttons { display: flex; gap: 2px; }
+	.placement-buttons { display: flex; gap: 2px; opacity:0; transition:opacity var(--dur-fast) var(--ease); }
+	.placement:hover .placement-buttons, .placement:focus-within .placement-buttons { opacity:1; }
 	.output-unavailable { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-window); background: var(--bg-inset); }
 	.output-unavailable h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.output-unavailable p[role='alert'] { color: var(--err); font-size: var(--fs-xs); overflow-wrap: anywhere; }

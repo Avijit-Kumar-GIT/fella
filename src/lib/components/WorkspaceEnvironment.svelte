@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import Icon from './Icon.svelte';
 
-	let { onopen, selectedSource = null }: { onopen: (source: SourceInfo) => void; selectedSource?: SourceInfo | null } = $props();
+	let { onopen, selectedSource = null, compact = false }: { onopen?: (source: SourceInfo) => void; selectedSource?: SourceInfo | null; compact?: boolean } = $props();
 	type Node = { id: string; name: string; kind: 'folder' | 'file' | 'sheet'; children: Node[]; sources: SourceInfo[]; source?: SourceInfo };
 	type Row = { node: Node; depth: number; parentIds: string[] };
 	type FreshnessSummary = { questions: number; findings: number; unverifiedRuns: number; checkFailed: boolean };
@@ -206,11 +206,41 @@
 	}
 </script>
 
-<section class="environment-browser" aria-label="Workspace files">
+{#snippet refreshReport()}
+	<div class="refresh-summary" role="status" aria-live="polite">
+		<strong>Workspace checked</strong>
+		<p>{refreshSummary?.added ?? 0} added · {refreshSummary?.changed ?? 0} changed · {refreshSummary?.removed ?? 0} removed{#if refreshSummary?.newlySkipped}{' '}· {refreshSummary.newlySkipped} unavailable{/if}{#if refreshSummary?.nowReadable}{' '}· {refreshSummary.nowReadable} readable{/if}</p>
+		{#if refreshSummary?.changedSources.length}<ul>{#each refreshSummary.changedSources as file (file)}<li>{file}</li>{/each}</ul>{#if refreshSummary.remainingChangedSources}<small>and {refreshSummary.remainingChangedSources} more changed source{refreshSummary.remainingChangedSources === 1 ? '' : 's'}</small>{/if}{/if}
+		{#if refreshSummary?.staleQuestions || refreshSummary?.staleFindings}
+			<p>{refreshSummary.staleQuestions} saved Question answer{refreshSummary.staleQuestions === 1 ? '' : 's'} and {refreshSummary.staleFindings} Finding{refreshSummary.staleFindings === 1 ? '' : 's'} use an older catalog revision. Their original runs and source scopes are unchanged; review the affected Question before choosing to rerun.</p>
+		{/if}
+		{#if refreshSummary?.freshnessCheckFailed || refreshSummary?.unverifiedRuns}
+			<p>Freshness could not be confirmed{refreshSummary.unverifiedRuns ? ` for ${refreshSummary.unverifiedRuns} saved run${refreshSummary.unverifiedRuns === 1 ? '' : 's'}` : ''}. Saved answers and runs were not changed; review Results before relying on or rerunning them.</p>
+		{/if}
+		{#if refreshSummary?.revision}<small>Catalog revision {refreshSummary.revision}</small>{/if}
+	</div>
+{/snippet}
+
+<section class="environment-browser" class:compact-browser={compact} aria-label={compact ? 'Refresh workspace files' : 'Workspace files'}>
+	{#if compact}
+		<div class="compact-refresh-row">
+			<Button variant="ghost" size="icon" type="button" aria-label="Refresh workspace files" title="Check this folder for file changes" disabled={refreshing || !workspacePath} onclick={() => void refreshWorkspace()}>
+				<Icon name="refresh" size={14} />
+			</Button>
+			{#if refreshing}<span class="environment-status" role="status"><span class="refresh-spinner"></span>Checking…</span>{/if}
+			{#if refreshError}<span class="environment-error" role="alert">Refresh failed: {refreshError}</span>{/if}
+			{#if refreshSummary}
+				<details class="compact-refresh-details">
+					<summary>Checked · {refreshSummary.added} added · {refreshSummary.changed} changed · {refreshSummary.removed} removed</summary>
+					{@render refreshReport()}
+				</details>
+			{/if}
+		</div>
+	{:else}
 	<header class="environment-header">
 		<div><h2>Files</h2><p>{workspacePath ? session.workspaceLabel(workspacePath) : 'Workspace files'}</p></div>
 		{#if workspacePath}
-			<Button variant="ghost" size="icon" type="button" aria-label="Refresh workspace files" title="Check for file changes" disabled={refreshing} onclick={() => void refreshWorkspace()}>
+				<Button variant="ghost" size="icon" type="button" aria-label="Refresh workspace files" title="Check for file changes" disabled={refreshing} onclick={() => void refreshWorkspace()}>
 				<Icon name="refresh" size={14} />
 			</Button>
 		{/if}
@@ -236,11 +266,11 @@
 							<Icon name={expandedWorkbooks[node.id] === true ? 'chevron-down' : 'chevron-right'} size={12} /><Icon name="file" size={14} /><span>{node.name}</span><small>{node.children.length} sheets</small>
 						</button>
 					{:else if node.kind === 'file' && node.sources[0]}
-						<button class="tree-row tree-file" type="button" aria-current={sourceIsSelected(node.sources[0]) ? 'page' : undefined} class:selected={sourceIsSelected(node.sources[0])} style={`--tree-depth:${row.depth}`} title={relativePath(node.sources[0].path, workspacePath)} onclick={() => onopen(node.sources[0])}>
+						<button class="tree-row tree-file" type="button" aria-current={sourceIsSelected(node.sources[0]) ? 'page' : undefined} class:selected={sourceIsSelected(node.sources[0])} style={`--tree-depth:${row.depth}`} title={relativePath(node.sources[0].path, workspacePath)} onclick={() => onopen?.(node.sources[0])}>
 							<Icon name="file" size={14} /><span>{node.name}</span>
 						</button>
 					{:else if node.kind === 'sheet' && node.source}
-						<button class="tree-row tree-sheet" type="button" aria-current={sourceIsSelected(node.source) ? 'page' : undefined} class:selected={sourceIsSelected(node.source)} style={`--tree-depth:${row.depth}`} title={node.source.name} onclick={() => onopen(node.source!)}>
+						<button class="tree-row tree-sheet" type="button" aria-current={sourceIsSelected(node.source) ? 'page' : undefined} class:selected={sourceIsSelected(node.source)} style={`--tree-depth:${row.depth}`} title={node.source.name} onclick={() => onopen?.(node.source!)}>
 							<Icon name="table" size={14} /><span>{node.name}</span>
 						</button>
 					{/if}
@@ -256,25 +286,19 @@
 		{/if}
 		{#if refreshing}<p class="environment-status" role="status"><span class="refresh-spinner"></span>Checking this folder…</p>{/if}
 		{#if refreshError}<p class="environment-error" role="alert">Couldn't refresh the workspace: {refreshError}</p>{/if}
-		{#if refreshSummary}
-			<div class="refresh-summary" role="status" aria-live="polite">
-				<strong>Workspace checked</strong>
-				<p>{refreshSummary.added} added · {refreshSummary.changed} changed · {refreshSummary.removed} removed{#if refreshSummary.newlySkipped}{' '}· {refreshSummary.newlySkipped} unavailable{/if}{#if refreshSummary.nowReadable}{' '}· {refreshSummary.nowReadable} readable{/if}</p>
-				{#if refreshSummary.changedSources.length}<ul>{#each refreshSummary.changedSources as file (file)}<li>{file}</li>{/each}</ul>{#if refreshSummary.remainingChangedSources}<small>and {refreshSummary.remainingChangedSources} more changed source{refreshSummary.remainingChangedSources === 1 ? '' : 's'}</small>{/if}{/if}
-				{#if refreshSummary.staleQuestions || refreshSummary.staleFindings}
-					<p>{refreshSummary.staleQuestions} saved Question answer{refreshSummary.staleQuestions === 1 ? '' : 's'} and {refreshSummary.staleFindings} Finding{refreshSummary.staleFindings === 1 ? '' : 's'} use an older catalog revision. Their original runs and source scopes are unchanged; review the affected Question before choosing to rerun.</p>
-				{/if}
-				{#if refreshSummary.freshnessCheckFailed || refreshSummary.unverifiedRuns}
-					<p>Freshness could not be confirmed{refreshSummary.unverifiedRuns ? ` for ${refreshSummary.unverifiedRuns} saved run${refreshSummary.unverifiedRuns === 1 ? '' : 's'}` : ''}. Saved answers and runs were not changed; review Results before relying on or rerunning them.</p>
-				{/if}
-				{#if refreshSummary.revision}<small>Catalog revision {refreshSummary.revision}</small>{/if}
-			</div>
-		{/if}
+			{#if refreshSummary}{@render refreshReport()}{/if}
+	{/if}
 	{/if}
 </section>
 
 <style>
 	.environment-browser { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; padding: var(--space-2) 0; }
+	.compact-browser { flex:none; width:auto; padding:0; }
+	.compact-refresh-row { position:relative; display:flex; min-width:0; align-items:center; gap:8px; }
+	.compact-refresh-row > :global(button) { width:30px; height:30px; flex:none; border-radius:50%; }
+	.compact-refresh-details { min-width:0; color:var(--text-faint); font-size:11px; }
+	.compact-refresh-details summary { overflow:hidden; cursor:pointer; text-overflow:ellipsis; white-space:nowrap; }
+	.compact-refresh-details .refresh-summary { position:absolute; z-index:15; top:24px; right:0; width:min(380px, calc(100vw - 40px)); box-shadow:var(--shadow-pop); }
 	.environment-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: 0 var(--space-2) var(--space-2); }
 	.environment-header :global(button) { width: 32px; height: 32px; }
 	.environment-header h2 { margin: 0; color: var(--text-dim); font-size: var(--fs-sm); font-weight: 600; }

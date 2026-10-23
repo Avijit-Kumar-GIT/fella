@@ -502,7 +502,7 @@
 				<div class="workspace-opening" role="status">Loading Investigation…</div>
 			{:else if activeTab.kind === 'investigation' && currentInvestigation}
 				{#key `${workspacePath}:${currentInvestigation.id}`}
-					<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} />
+					<InvestigationBriefView viewKey={`workspace:${workspacePath}:${currentInvestigation.id}`} onclose={() => session.setContentLayout('chat')} />
 				{/key}
 			{:else if activeTab.kind === 'investigation' && defaultInspector}
 				<div class="workspace-investigation-empty">

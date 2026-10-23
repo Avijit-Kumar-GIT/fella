@@ -285,7 +285,7 @@
 		flex: 1;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: var(--space-6) var(--pad) var(--space-6);
+		padding: 30px 18px var(--space-5);
 		min-height: 0;
 		transition: padding var(--dur) var(--ease);
 	}
@@ -296,7 +296,7 @@
 	/* Cap the reading column so long lines don't sprawl the "app not terminal"
 	   cue. Centred in the scroller. */
 	.stream {
-		max-width: 76ch;
+		max-width: 520px;
 		margin-inline: auto;
 		transition: max-width var(--dur) var(--ease);
 	}

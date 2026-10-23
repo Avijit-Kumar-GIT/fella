@@ -29,6 +29,10 @@
 	let toolsCompact = $state(false);
 	let sidebarMode = $state<'chat' | 'files' | 'reports'>('chat');
 	let selectedSource = $state<SourceInfo | null>(null);
+	let selectedFolder = $state('all');
+	let fileInspectorOpen = $state(true);
+	let reportInspectorOpen = $state(true);
+	let pendingSourcePrompt = $state('');
 	let inspectorConversationKey = '';
 	let windowWidth = $state(1440);
 	let narrowNavigation = $derived(windowWidth < (session.contentLayout === 'notebook' ? 1100 : 700));
@@ -38,8 +42,8 @@
 
 	let activeView = $derived(session.workspaceView);
 	let showRightPane = $derived.by(() => {
-		if (sidebarMode === 'files') return Boolean(session.catalog.workspace);
-		if (sidebarMode === 'reports') return Boolean(session.catalog.workspace);
+		if (sidebarMode === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
+		if (sidebarMode === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
 		return session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane);
 	});
 	let scopedWorkspaceActive = $derived(
@@ -74,6 +78,52 @@
 		if (selected && sources.some((source) => source.path === selected.path && source.name === selected.name)) return;
 		selectedSource = sources[0] ?? null;
 	});
+	$effect(() => {
+		const workspace = session.catalog.workspace;
+		void workspace;
+		untrack(() => { selectedFolder = 'all'; });
+	});
+	$effect(() => {
+		const mode = sidebarMode;
+		if (mode === 'files') untrack(() => { fileInspectorOpen = true; });
+		if (mode === 'reports') untrack(() => { reportInspectorOpen = true; });
+	});
+	$effect(() => {
+		const prompt = pendingSourcePrompt;
+		if (sidebarMode !== 'chat' || !prompt || !composer) return;
+		queueMicrotask(() => {
+			if (!composer || pendingSourcePrompt !== prompt) return;
+			composer.setText(prompt);
+			composer.focus();
+			pendingSourcePrompt = '';
+		});
+	});
+
+	function relativeSourcePath(path: string): string {
+		const root = session.catalog.workspace?.replace(/[/\\]+$/, '') ?? '';
+		const normalizedPath = path.replace(/\\/g, '/');
+		const normalizedRoot = root.replace(/\\/g, '/').replace(/\/$/, '');
+		return normalizedRoot && normalizedPath.toLocaleLowerCase().startsWith(`${normalizedRoot.toLocaleLowerCase()}/`)
+			? normalizedPath.slice(normalizedRoot.length + 1)
+			: normalizedPath;
+	}
+
+	function selectFolder(folder: string): void {
+		selectedFolder = folder;
+		const next = session.catalog.sources.find((source) => {
+			const segments = relativeSourcePath(source.path).split('/').filter(Boolean);
+			const id = segments.length > 1 ? segments[0] : '__root';
+			return folder === 'all' || id === folder;
+		});
+		selectedSource = next ?? null;
+		fileInspectorOpen = true;
+	}
+
+	function askAboutSource(source: SourceInfo): void {
+		sidebarMode = 'chat';
+		fileInspectorOpen = true;
+		pendingSourcePrompt = `What should I know about ${source.name}?`;
+	}
 	$effect(() => {
 		const pane = session.activeChat.companionPane;
 		if (!pane || !scopedWorkspaceActive) return;
@@ -366,8 +416,9 @@
 			<Sidebar
 				bind:mode={sidebarMode}
 				onsearch={() => (paletteOpen = true)}
-				onselectsource={(source) => (selectedSource = source)}
-				{selectedSource}
+				onsectionselect={(section) => { if (section === 'files') fileInspectorOpen = true; if (section === 'reports') reportInspectorOpen = true; }}
+				selectedFolder={selectedFolder}
+				onselectfolder={selectFolder}
 			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
@@ -403,6 +454,8 @@
 							notebook={true}
 							primaryLabel={sidebarMode === 'files' ? 'Files' : sidebarMode === 'reports' ? 'Reports' : 'Chat'}
 							secondaryLabel={sidebarMode === 'files' ? 'Preview' : sidebarMode === 'reports' ? 'Report details' : 'Investigation'}
+							defaultToolsWidth={sidebarMode === 'reports' ? 320 : 380}
+							layoutKey={sidebarMode}
 							bind:expanded={toolsExpanded}
 							bind:compact={toolsCompact}
 						>
@@ -413,7 +466,7 @@
 										<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
 									</div>
 								{:else if sidebarMode === 'files'}
-									<WorkspaceFilesList selected={selectedSource} onselect={(source) => (selectedSource = source)} />
+									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
 								{:else}
 									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} />
 								{/if}
@@ -422,9 +475,9 @@
 								{#if sidebarMode === 'chat' && scopedWorkspaceActive}
 									<WorkspaceView notebook onexpand={() => (toolsExpanded = true)} defaultInspector />
 								{:else if sidebarMode === 'files' && session.catalog.workspace}
-									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} />
+									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
 								{:else if sidebarMode === 'reports' && session.catalog.workspace}
-									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} />
+									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
 								{/if}
 								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && sidebarMode === 'chat'}
 									<div class="notebook-empty"><Icon name="folder" size={20} /><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
