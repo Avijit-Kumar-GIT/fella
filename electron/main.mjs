@@ -1,18 +1,15 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, screen, shell } from 'electron';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary, isRegularFile } from './engine.mjs';
-import { EmbeddedTerminalSessions } from './embedded-terminal.mjs';
-import { discoverTerminalShells } from './terminal-shells.mjs';
 import { checkAndApply } from './update.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 let engine;
-let terminalSessions;
 app.setName('Fella');
 
 protocol.registerSchemesAsPrivileged([
@@ -253,12 +250,6 @@ async function createWindow() {
 		}
 	});
 	setWindowAppearance(win, nativeTheme.shouldUseDarkColors);
-	win.webContents.on('did-start-navigation', (_event, details) => {
-		if (details.isMainFrame) terminalSessions.closeForOwner(win.webContents);
-	});
-	win.webContents.on('render-process-gone', () => terminalSessions.closeForOwner(win.webContents));
-	win.webContents.once('destroyed', () => terminalSessions.closeForOwner(win.webContents));
-
 	win.once('ready-to-show', () => win.show());
 	win.webContents.on('preload-error', (_event, preloadPath, error) => {
 		console.error(`Fella preload failed (${preloadPath}):`, error);
@@ -330,7 +321,6 @@ app.whenReady().then(() => {
 			mkdirSync(dataDir, { recursive: true });
 			console.info(`Fella data directory: ${dataDir}`);
 			engine = new EngineClient(binary, dataDir);
-			terminalSessions = new EmbeddedTerminalSessions({ binary });
 		} catch (error) {
 			void dialog.showErrorBox('Fella engine unavailable', String(error));
 			app.quit();
@@ -351,40 +341,6 @@ app.whenReady().then(() => {
 				}
 			})
 		);
-		ipcMain.handle('fella:terminal-shells', (event) => {
-			if (!isTrustedAppFrame(event)) throw new Error('Shell choices are only available from Fella.');
-			return discoverTerminalShells();
-		});
-		ipcMain.handle('fella:terminal-start', async (event, request) => {
-			if (!isTrustedAppFrame(event)) throw new Error('Shell sessions are only available from Fella.');
-			if (typeof request?.workspacePath !== 'string' || !request.workspacePath.trim()) {
-				throw new Error('Choose a workspace before opening a shell.');
-			}
-			const canonicalPath = await realpath(request.workspacePath);
-			if (!(await stat(canonicalPath)).isDirectory()) {
-				throw new Error('The selected workspace is no longer an available folder.');
-			}
-			const availableShells = discoverTerminalShells().shells;
-			if (!availableShells.some((item) => item.path === request?.shellPath)) {
-				throw new Error('That shell is no longer available. Choose an installed shell and try again.');
-			}
-			return terminalSessions.start(event.sender, {
-				...request,
-				workspacePath: canonicalPath
-			});
-		});
-		ipcMain.on('fella:terminal-input', (event, request) => {
-			if (!isTrustedAppFrame(event)) return;
-			terminalSessions.write(event.sender, request?.terminalId, request?.data);
-		});
-		ipcMain.on('fella:terminal-resize', (event, request) => {
-			if (!isTrustedAppFrame(event)) return;
-			terminalSessions.resize(event.sender, request?.terminalId, request?.cols, request?.rows);
-		});
-		ipcMain.on('fella:terminal-close', (event, terminalId) => {
-			if (!isTrustedAppFrame(event)) return;
-			terminalSessions.close(event.sender, terminalId);
-		});
 		ipcMain.handle('fella:set-window-appearance', (event, dark) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			if (owner) setWindowAppearance(owner, Boolean(dark));
@@ -446,6 +402,5 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-	terminalSessions?.dispose();
 	engine?.dispose();
 });

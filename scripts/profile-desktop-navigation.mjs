@@ -5,7 +5,7 @@ import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 
-const { values: options } = parseArgs({ options: { profile: { type: 'string' }, executable: { type: 'string' }, output: { type: 'string' }, 'windows-workspace': { type: 'string' }, 'close-shell-first': { type: 'boolean' }, 'switch-only': { type: 'boolean' } } });
+const { values: options } = parseArgs({ options: { profile: { type: 'string' }, executable: { type: 'string' }, output: { type: 'string' }, 'windows-workspace': { type: 'string' }, 'switch-only': { type: 'boolean' } } });
 if (!options.profile || !options.executable || !options.output) throw new Error('Required: --profile <profile> --executable <Fella> --output <directory>');
 const profile = resolve(options.profile), executable = resolve(options.executable), output = resolve(options.output);
 const fixtureRoot = join(dirname(dirname(profile)), 'workspaces');
@@ -37,13 +37,6 @@ try {
 		return observation;
 	});
 	await page.getByRole('combobox', { name: /^Ask about / }).first().waitFor({ state: 'visible', timeout: 30_000 });
-	if (options['close-shell-first']) {
-		await page.getByRole('button', { name: 'Open workspace northstar', exact: true }).click();
-		const openTools = page.getByRole('button', { name: 'Open workspace tools', exact: true });
-		if (await openTools.isVisible()) await openTools.click();
-		await measure('close-shell-control', async () => { await page.getByRole('button', { name: 'Close Shell tab', exact: true }).click(); await expect(page.locator('.terminal-view')).toHaveCount(0); });
-		await page.getByRole('button', { name: 'Close workspace tools', exact: true }).click();
-	}
 	for (let repetition = 1; repetition <= 5; repetition++) for (const workspace of ['housing', 'northstar', 'million-rows']) {
 		await measure(`switch-workspace-${workspace}`, async () => {
 			await page.getByRole('button', { name: `Open workspace ${workspace}`, exact: true }).click();
@@ -80,11 +73,6 @@ try {
 		await page.getByRole('button', { name: /^Open conversation: What was total net merchandise revenue/ }).click();
 		await expect(page.getByRole('log', { name: 'conversation' })).toContainText('45,714.32');
 	});
-	await page.getByRole('button', { name: 'Open workspace tools', exact: true }).click();
-	for (let repetition = 1; repetition <= 5; repetition++) {
-		await measure('switch-tool-data-context', async () => { await page.getByRole('tab', { name: 'Data & context', exact: true }).click(); await page.locator('.context-page').waitFor({ state: 'visible' }); }, repetition);
-		await measure('switch-tool-shell', async () => { await page.getByRole('tab', { name: 'Shell', exact: true }).click(); await page.locator('.terminal-surface .xterm').waitFor({ state: 'visible' }); }, repetition);
-	}
 	if (options['windows-workspace']) await measure('mount-windows-files-through-wsl', async () => {
 		await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, options['windows-workspace']);
 		await page.getByRole('button', { name: 'Add repository', exact: true }).click();

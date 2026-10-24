@@ -164,21 +164,19 @@
 		mode = next;
 		onsectionselect?.(next);
 		if (next !== 'reports' || !session.catalog.workspace) return;
-		const existing = session.workspaceToolTabs.find((tab) => tab.kind === 'studio');
-		if (existing) session.activateWorkspaceToolTab(existing.id);
-		else session.openStudioToolTab();
+		if (session.activeWorkspaceTool?.kind !== 'studio') session.openStudioTool();
 	}
 
 	function openReport(id: string): void {
 		mode = 'reports';
 		onsectionselect?.('reports');
-		session.openStudioToolTab(id);
+		session.openStudioTool(id);
 	}
 
 	function newReport(): void {
 		mode = 'reports';
 		onsectionselect?.('reports');
-		session.openNewReportTab();
+		session.openNewReport();
 	}
 
 	async function selectRepository(repo: Repository): Promise<boolean> {
@@ -258,9 +256,11 @@
 		}
 	}
 
-	async function open(c: ConversationSummary) {
+	async function open(c: ConversationSummary, investigation: boolean) {
 		try {
 			await openConversation(c);
+			if (investigation && session.catalog.workspace) session.setWorkspacePane('investigation');
+			else session.setWorkspacePaneOpen(false);
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
 		}
@@ -329,7 +329,7 @@
 								{#if renamingId === c.id}
 									<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
 								{:else}
-									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c)} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
+									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c, group.label === 'Investigations')} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
 										<span class="conversation-copy"><span class="conversation-title-line"><strong>{title(c)}</strong>{#if session.conversationId === c.id}<Icon name="pencil" size={11} />{/if}</span><small>{subtitle(c)}</small></span>
 									</Button>
 									<div class="row-actions">
@@ -368,7 +368,7 @@
 					{:else}
 						<div class="report-list">
 							{#each workspaceReports as report (report.id)}
-								<Button variant="ghost" class={`report-row${session.activeWorkspaceToolTab?.kind === 'studio' && session.activeWorkspaceToolTab.documentId === report.id ? ' active' : ''}`} title={report.title} onclick={() => openReport(report.id)}>
+								<Button variant="ghost" class={`report-row${session.activeWorkspaceTool?.kind === 'studio' && session.activeWorkspaceTool.documentId === report.id ? ' active' : ''}`} title={report.title} onclick={() => openReport(report.id)}>
 									<span class="report-copy"><strong>{report.title}</strong><small>Updated {relativeUpdated(report.updated_at_ms)}</small></span>
 								</Button>
 							{:else}<p class="sidebar-empty">No reports yet.</p>{/each}

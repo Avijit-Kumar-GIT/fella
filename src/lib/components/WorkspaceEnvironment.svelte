@@ -92,7 +92,7 @@
 
 	function sourceIsSelected(source: SourceInfo): boolean {
 		if (selectedSource) return selectedSource.path === source.path && selectedSource.name === source.name;
-		const active = session.activeWorkspaceToolTab;
+		const active = session.activeWorkspaceTool;
 		return active?.kind === 'source' && active.sourcePath === source.path && active.sourceName === source.name;
 	}
 

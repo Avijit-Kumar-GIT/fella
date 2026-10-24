@@ -223,7 +223,7 @@
 				onadopt={() => void adopt()}
 				onkeep={() => { compareOpen = false; notice = 'Current version kept. The proposed version remains in history.'; }}
 				onopenrevision={revision => void chooseRevision(String(revision))}
-				onopenconsumer={consumer => { if (session.catalog.workspace === displayed.artifact.workspace) session.openStudioToolTab(consumer.document_id); }} />
+				onopenconsumer={consumer => { if (session.catalog.workspace === displayed.artifact.workspace) session.openStudioTool(consumer.document_id); }} />
 			<details><summary>Exact before and after records</summary><div class="comparison-versions">
 				{#each comparisonVersions as version (version.revision.revision)}
 					<section><h4>Revision {version.revision.revision}</h4><p class="quiet-note">Run {version.run.id} · source revision {artifactSourceRevision(version)}</p><MarkdownContent text={version.run.result.text} />

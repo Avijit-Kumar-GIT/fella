@@ -95,11 +95,6 @@ statement and read-only, query results are bounded, and Python runs in a
 sandbox without filesystem, network, or subprocess access. Provider retention
 and training practices remain governed by that provider.
 
-The desktop also offers a separate, user-started system terminal at the
-selected Workspace. It runs outside Fella with the user's normal system
-permissions, is not confined to that folder, and is not available to the model.
-Fella does not read its input/output or control the terminal session.
-
 Recipient collaboration is not part of the shipped handoff. The current
 portable report and chart/data exports should be tested with actual recipients
 first. Hosted sharing, multi-user permissions, and approval workflows remain

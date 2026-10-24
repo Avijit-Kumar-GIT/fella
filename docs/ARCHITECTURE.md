@@ -215,11 +215,6 @@ The primary implementation is in `context.rs`, `memory.rs`,
   not connect to anything or add tools.
 - Workspace operations are read-only. There is no agent tool for writing,
   moving, or deleting source files. Editing `fella.md` is an explicit UI action.
-- The user may open their operating system's terminal with the selected
-  workspace as its starting directory. This is not a sandbox: shell commands
-  run with the user's normal system permissions. The terminal is external to
-  Fella; no PTY or stdin/stdout/stderr channel is created, and Fella does not
-  observe, control, or manage the terminal session after launch.
 - Provider keys are stored in `auth.json` in the application-data directory,
   separate from the settings database and transcript.
 - `/update` is user-triggered in packaged builds. The Python guest has no

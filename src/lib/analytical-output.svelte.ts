@@ -85,8 +85,8 @@ export async function saveOutputToStudio(resolved: ResolvedArtifact): Promise<vo
 	if (session.catalog.workspace !== workspace) throw new Error('Open the result’s workspace before creating a report.');
 	const documents = await ipc.studioList(workspace);
 	const existing = documents.find(document => document.placements.some(placement => placement.artifact_id === resolved.artifact.id && placement.revision === resolved.revision.revision));
-	if (existing) { session.openStudioToolTab(existing.id); return; }
+	if (existing) { session.openStudioTool(existing.id); return; }
 	const document = await ipc.studioCreate(workspace, resolved.artifact.title);
 	await ipc.studioSave(workspace, document.id, document.version, { title: document.title, body: '', placements: [{ id: `placement_${crypto.randomUUID().replaceAll('-', '')}`, artifact_id: resolved.artifact.id, revision: resolved.revision.revision, view_state: {} }] });
-	if (session.catalog.workspace === workspace) session.openStudioToolTab(document.id);
+	if (session.catalog.workspace === workspace) session.openStudioTool(document.id);
 }

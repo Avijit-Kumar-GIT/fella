@@ -229,7 +229,7 @@
 				await openConversation(result.item);
 				return;
 			case 'source':
-				session.openSourceToolTab(result.source);
+				session.openSourceTool(result.source);
 				return;
 		}
 	}

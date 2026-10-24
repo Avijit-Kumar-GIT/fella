@@ -314,10 +314,10 @@ export async function openConversation(summary: ConversationSummary): Promise<bo
 			: session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
 		if (!focused) return false;
 		// Opening a saved conversation is an explicit navigation action. Do not
-		// restore the workspace's previous Investigation/Workbench pane here: the
-		// user expects to land on the conversation they selected.
+		// restore the workspace's previous auxiliary surface here. The sidebar
+		// decides whether an Investigation's details pane should be shown.
 		session.setWorkspacePaneOpen(false);
-		if (session.contentLayout === 'notebook' && workspaceId) session.openWorkspaceToolTab('investigation', null, summary.id);
+		if (session.contentLayout === 'notebook' && workspaceId) session.setWorkspacePane('investigation');
 		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);

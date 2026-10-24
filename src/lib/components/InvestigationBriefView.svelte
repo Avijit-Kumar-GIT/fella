@@ -1883,7 +1883,7 @@
 	{:else if !investigations.length}
 		<div class="empty-state">
 			<h2>No investigations yet</h2>
-			<p>Choose “New Investigation” from the workspace menu above to start one. Each Investigation opens its own conversation.</p>
+			<p>Choose “New Investigation” from the sidebar to start one. Each Investigation opens its own conversation.</p>
 		</div>
 	{:else}
 		{#if selected}
@@ -2986,7 +2986,7 @@
 		{:else}
 			<div class="empty-state" data-testid="investigation-not-selected">
 				<h2>Choose an Investigation</h2>
-				<p>Select one from the workspace menu above to open its conversation and analysis.</p>
+				<p>Select one from Investigations in the sidebar to open its conversation and analysis.</p>
 			</div>
 		{/if}
 	{/if}

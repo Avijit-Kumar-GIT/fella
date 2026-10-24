@@ -192,18 +192,26 @@ async function rpcMeasurements(instance, path, label) {
 
 async function interactions(instance) {
 	const { page } = instance;
-	await measure('tools-open', async () => { await page.getByRole('button', { name: 'Open workspace tools', exact: true }).click(); await page.getByTestId('workspace-tool-chooser').waitFor({ state: 'visible' }); });
-	await measure('investigation-create', async () => { await page.getByTestId('workspace-tool-investigations').click(); await page.getByTestId('workspace-tool-new-investigation').click(); await page.getByRole('tablist', { name: 'Investigation sections' }).waitFor({ state: 'visible' }); });
-	for (const section of ['Data', 'Questions', 'Analysis', 'Results', 'Share', 'Brief']) await measure(`investigation-section-${section.toLowerCase()}`, async () => {
+	await measure('investigation-create', async () => {
+		await page.getByRole('button', { name: 'Investigation actions' }).click();
+		await page.getByRole('menuitem', { name: /New Investigation/ }).click();
+		await page.getByRole('dialog', { name: 'New Investigation' }).waitFor({ state: 'visible' });
+		await page.getByRole('button', { name: 'Create Investigation', exact: true }).click();
+		await page.getByRole('tablist', { name: 'Investigation sections' }).waitFor({ state: 'visible' });
+	});
+	for (const section of ['Sources', 'Questions', 'Analysis', 'Results', 'Brief']) await measure(`investigation-section-${section.toLowerCase()}`, async () => {
 		const tab = page.getByRole('tablist', { name: 'Investigation sections' }).getByRole('tab', { name: section, exact: true });
 		await tab.click(); await expect(tab).toHaveAttribute('aria-selected', 'true');
 		await page.locator(`#${await tab.getAttribute('aria-controls')}`).waitFor({ state: 'visible' });
 	});
-	await measure('data-context-open', async () => { await page.getByTestId('workspace-tool-add').click(); await page.getByTestId('workspace-tool-context').click(); await page.getByRole('heading', { name: 'Data & context', exact: true }).waitFor({ state: 'visible' }); await expect(page.locator('.context-page .loading, .context-page .knowledge-loading')).toHaveCount(0); });
-	await measure('shell-open', async () => { await page.getByTestId('workspace-tool-add').click(); await page.getByTestId('workspace-tool-terminal').click(); await page.locator('.terminal-surface .xterm-rows').waitFor({ state: 'visible' }); await expect.poll(() => page.locator('.terminal-surface .xterm-rows').innerText(), { timeout: 15_000 }).not.toBe(''); });
-	await page.screenshot({ path: join(output, 'screenshots', 'workspace-tools.png') });
-	await measure('tools-close', async () => { await page.getByRole('button', { name: 'Close workspace tools', exact: true }).click(); await page.locator('.workspace-tools-pane').waitFor({ state: 'hidden' }); });
-	await record('memory', { label: 'loaded-with-shell', ...await treeMemory(instance.app.process().pid) });
+	await measure('context-open-and-return', async () => {
+		await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+C' : 'Control+Shift+C');
+		await page.getByRole('heading', { name: 'Workspace context', exact: true }).waitFor({ state: 'visible' });
+		await page.getByRole('button', { name: 'Investigation', exact: true }).click();
+		await page.getByRole('tablist', { name: 'Investigation sections' }).waitFor({ state: 'visible' });
+	});
+	await page.screenshot({ path: join(output, 'screenshots', 'investigation-pane.png') });
+	await record('memory', { label: 'workspace-pane-loaded', ...await treeMemory(instance.app.process().pid) });
 }
 
 const tasks = [

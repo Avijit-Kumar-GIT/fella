@@ -298,7 +298,7 @@
 	.transcript.focus {
 		padding: var(--space-6) var(--pad) var(--space-6);
 	}
-	/* Cap the reading column so long lines don't sprawl the "app not terminal"
+	/* Cap the reading column so long lines don't sprawl across the app
 	   cue. Centred in the scroller. */
 	.stream {
 		width:100%;

@@ -30,7 +30,7 @@
 			if (!output) { error = 'Could not open the saved result.'; return; }
 			resolved = output;
 			if (review) reviewing = !reviewing;
-			else { session.setContentLayout('notebook'); session.openResultToolTab(output.artifact.id, output.revision.revision, output.artifact.title); }
+			else { session.setContentLayout('notebook'); session.openResultTool(output.artifact.id, output.revision.revision, output.artifact.title); }
 		} catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
 	}
 	let sequence = 0;

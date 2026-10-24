@@ -32,7 +32,6 @@
 	let fileInspectorOpen = $state(true);
 	let reportInspectorOpen = $state(true);
 	let pendingSourcePrompt = $state('');
-	let inspectorConversationKey = '';
 	let windowWidth = $state(1440);
 	let narrowNavigation = $derived(windowWidth < ((session.workspacePaneOpen || session.workspaceSection !== 'chat') ? 980 : 700));
 	$effect(() => {
@@ -43,34 +42,12 @@
 	let showRightPane = $derived.by(() => {
 		if (session.workspaceSection === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
 		if (session.workspaceSection === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
-		return session.contentLayout === 'notebook' || session.workspacePaneOpen || Boolean(session.activeChat.companionPane);
+		return session.workspacePaneOpen || Boolean(session.activeChat.companionPane) ||
+			(session.contentLayout === 'notebook' && !session.catalog.workspace);
 	});
 	let scopedWorkspaceActive = $derived(
 		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
 	);
-	$effect(() => {
-		const conversationId = session.activeChat.id;
-		if (session.contentLayout === 'notebook' && scopedWorkspaceActive) {
-			untrack(() => { if (!session.workspacePaneOpen) session.openWorkspaceToolTab('investigation', null, conversationId); });
-		}
-	});
-	$effect(() => {
-		const section = session.workspaceSection;
-		const conversation = session.activeChat;
-		const scoped = Boolean(conversation.workspaceScope && session.catalog.workspace === conversation.workspaceScope);
-		if (section !== 'chat' || !scoped) {
-			inspectorConversationKey = '';
-			return;
-		}
-		const key = `${conversation.workspaceScope}:${conversation.id}`;
-		if (key === inspectorConversationKey) return;
-		inspectorConversationKey = key;
-		untrack(() => {
-			const existing = session.workspaceToolTabs.find((tab) => tab.kind === 'investigation' && tab.conversationId === conversation.id);
-			const tab = existing ?? session.openWorkspaceToolTab('investigation', null, conversation.id);
-			if (tab) session.activateWorkspaceToolTab(tab.id);
-		});
-	});
 	$effect(() => {
 		const sources = session.catalog.sources;
 		const selected = selectedSource;
@@ -127,7 +104,7 @@
 		const pane = session.activeChat.companionPane;
 		if (!pane || !scopedWorkspaceActive) return;
 		untrack(() => {
-			if (session.openPreviewToolTab(pane)) {
+			if (session.openPreviewTool(pane)) {
 				session.activeChat.companionPane = null;
 				session.persist();
 			}
@@ -466,17 +443,17 @@
 								{#if session.workspaceSection === 'files'}
 									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
 								{:else if session.workspaceSection === 'reports'}
-									<WorkspaceView notebook hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
+									<WorkspaceView hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
 								{/if}
 								</div>
 							{/snippet}
 							{#snippet tools()}
 								{#if session.workspaceSection === 'chat' && scopedWorkspaceActive}
-									<WorkspaceView notebook expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
+									<WorkspaceView expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
 								{:else if session.workspaceSection === 'files' && session.catalog.workspace}
 									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
 								{:else if session.workspaceSection === 'reports' && session.catalog.workspace}
-									<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceToolTab?.kind === 'studio' ? session.activeWorkspaceToolTab.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
+										<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceTool?.kind === 'studio' ? session.activeWorkspaceTool.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
 								{/if}
 								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && session.workspaceSection === 'chat'}
 									<div class="notebook-empty"><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>

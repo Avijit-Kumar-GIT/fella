@@ -14,9 +14,7 @@
 		session.workspaceView === 'ask' ||
 		session.workspaceView === 'workspace'
 	);
-	let panelActionLabel = $derived(session.contentLayout === 'notebook'
-		? 'Add a tool tab'
-		: session.workspacePaneOpen ? 'Close the panel' : 'Open the panel');
+	let panelActionLabel = $derived(session.workspacePaneOpen ? 'Close the panel' : 'Open the panel');
 </script>
 
 {#if isWorkspaceView}
@@ -55,7 +53,7 @@
 					aria-controls="workspace-tools-pane"
 					aria-label={panelActionLabel}
 					title={panelActionLabel}
-					onclick={() => session.contentLayout === 'notebook' ? session.openWorkspaceToolChooser() : session.toggleWorkspacePane()}
+					onclick={() => session.toggleWorkspacePane()}
 				>
 					<Icon name="panel-right" size={16} />
 				</Button>

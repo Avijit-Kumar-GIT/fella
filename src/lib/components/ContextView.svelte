@@ -193,7 +193,8 @@
 				() => session.catalog.workspace === loadedWorkspace
 			);
 			if (!linked || session.catalog.workspace !== loadedWorkspace) return;
-			session.openWorkspaceToolTab('investigation', linked.id, linked.conversation_id ?? session.activeChat.id);
+			session.setActiveInvestigation(linked.id);
+			session.setWorkspacePane('investigation');
 			session.investigationsVersion += 1;
 		} catch (cause) {
 			knowledgeError = cause instanceof Error ? cause.message : String(cause);
@@ -333,7 +334,6 @@
 			{#if guideEditing || error}<div class="editor-foot" role={error ? 'alert' : 'status'}><span>{error || (saving ? 'Saving…' : contents === savedContents ? 'Saved in fella.md' : 'Changes save automatically')}</span></div>{/if}
 			{#if path}<details class="guide-location"><summary>File location</summary><p>{path}</p></details>{/if}
 		</div>
-		{#if session.workspaceToolTabs.filter(tab => tab.kind === 'context').length > 1}<p class="shared-context-note">All context tabs show this workspace’s shared guide and knowledge.</p>{/if}
 
 		<section class="knowledge-section" aria-labelledby="learned-knowledge-title" data-testid="workspace-knowledge">
 			<header class="knowledge-section-intro">
@@ -456,7 +456,7 @@
 
 <style>
 	.guide-reading { padding: 12px 0; font-size: var(--fs-sm); }
-	.guide-location, .shared-context-note { color: var(--text-faint); font-size: var(--fs-xs); }
+	.guide-location { color: var(--text-faint); font-size: var(--fs-xs); }
 	.guide-location > summary { cursor: pointer; }
 	.guide-location p { overflow-wrap: anywhere; font-family: var(--mono); }
 	.context-page {

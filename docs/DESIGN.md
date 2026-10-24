@@ -76,17 +76,17 @@ colors are not confused with success or failure.
 
 ## Workspace panels
 
-- Chat is the default work surface. Tools uses the same pane frame for
-  Investigations, workspace context, files, charts, and user-only Shell tabs.
-  Opening a preview never changes analytical scope or re-executes an answer.
+- Chat is the default work surface. The adjacent pane shows the selected
+  Investigation or one workspace surface at a time. Opening a preview never
+  changes analytical scope or re-executes an answer.
   Preserve source/answer identity and older-revision warnings.
 - The split has a draggable, keyboard-operable divider and a locally remembered
   Tools width. Tools can expand. Below 900px of available workspace width,
   the active Tools pane uses the working area instead of becoming a small
-  lower panel. Conversation/Tools navigation preserves drafts and open tabs.
-- Investigation tabs own their associated conversations. Selecting workspace
-  context or a file does not silently select another Investigation. Keep the
-  selected tab in view when opening or switching tabs.
+  lower panel. Conversation and pane navigation preserve drafts.
+- The selected Investigation in the sidebar owns its conversation and details
+  pane. Investigation section tabs remain inside that pane. Selecting workspace
+  context or a file does not silently select another Investigation.
 - Use 18px compact pane titles, a shared 20px content inset, and single-line
   section navigation. Long Investigation names may occupy at most two lines;
   the full goal belongs in Brief. Do not repeat an Open conversation action

@@ -1,8 +1,6 @@
 // Keep the sidecar process from opening a separate console window on Windows.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod terminal;
-
 fn main() {
     let mut args = std::env::args_os().skip(1);
     match args
@@ -10,20 +8,6 @@ fn main() {
         .and_then(|arg| arg.into_string().ok())
         .as_deref()
     {
-        Some("--terminal-session") => {
-            let (shell, cwd, cols, rows) = match terminal::parse_args(args) {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    eprintln!("fella terminal: {error}");
-                    std::process::exit(2);
-                }
-            };
-            if let Err(error) = terminal::run(shell, cwd, cols, rows) {
-                eprintln!("fella terminal: {error}");
-                std::process::exit(1);
-            }
-            return;
-        }
         Some("--engine-stdio") => {
             let Some(flag) = args.next() else {
                 eprintln!("fella: --engine-stdio requires --data-dir <path>");
@@ -45,6 +29,6 @@ fn main() {
         }
         _ => {}
     }
-    eprintln!("fella: launch with --engine-stdio --data-dir <path> or --terminal-session");
+    eprintln!("fella: launch with --engine-stdio --data-dir <path>");
     std::process::exit(2);
 }

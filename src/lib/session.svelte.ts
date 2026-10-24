@@ -113,22 +113,18 @@ export interface WorkspaceContext {
 	workspaceId: string | null;
 	conversationId: string;
 	workspacePane?: WorkspacePane;
-	/** Whether the optional workspace tools pane is open beside the conversation. */
+	/** Whether the Investigation details pane is visible beside the conversation. */
 	workspacePaneOpen?: boolean;
 	investigationId?: string | null;
-	/** Tool surfaces opened in this workspace pane. Investigation tabs own chats. */
-	workspaceToolTabs?: WorkspaceToolTab[];
-	activeWorkspaceToolTabId?: string | null;
+	/** One replaceable auxiliary surface; the active conversation owns its Investigation. */
+	activeTool?: WorkspaceTool | null;
 }
 
-export interface WorkspaceToolTab {
+export interface WorkspaceTool {
 	id: string;
 	kind: WorkspaceToolKind;
-	/** Present for an Investigation tab once its durable record is known. */
-	investigationId?: string | null;
-	/** The canonical conversation associated with this Investigation tab. */
+	/** Conversation that owns an immutable answer preview. */
 	conversationId?: string | null;
-	/** Catalog identity for a read-only source preview tab. */
 	sourcePath?: string | null;
 	sourceName?: string | null;
 	/** An immutable reference to an existing answer artifact or older source snapshot. */
@@ -178,6 +174,29 @@ function workspaceContextKey(workspaceId: string | null): string {
 	return workspaceId === null ? '\u0000general' : workspaceId;
 }
 
+function normalizeWorkspaceTool(value: unknown): WorkspaceTool | null {
+	if (!value || typeof value !== 'object') return null;
+	const tool = value as Record<string, unknown>;
+	if (typeof tool.id !== 'string' || !tool.id || !['context', 'source', 'preview', 'studio', 'result'].includes(String(tool.kind))) return null;
+	if (tool.kind === 'result' && (typeof tool.artifactId !== 'string' || !Number.isSafeInteger(tool.artifactRevision) || Number(tool.artifactRevision) < 1)) return null;
+	const preview = parseCompanionPane(tool.preview);
+	if (tool.kind === 'preview' && !preview) return null;
+	return {
+		id: tool.id,
+		kind: tool.kind as WorkspaceToolKind,
+		conversationId: typeof tool.conversationId === 'string' ? tool.conversationId : null,
+		sourcePath: typeof tool.sourcePath === 'string' ? tool.sourcePath : null,
+		sourceName: typeof tool.sourceName === 'string' ? tool.sourceName : null,
+		documentId: typeof tool.documentId === 'string' ? tool.documentId : null,
+		title: typeof tool.title === 'string' ? tool.title : undefined,
+		initialArtifactId: typeof tool.initialArtifactId === 'string' ? tool.initialArtifactId : null,
+		artifactId: typeof tool.artifactId === 'string' ? tool.artifactId : null,
+		artifactRevision: typeof tool.artifactRevision === 'number' ? tool.artifactRevision : null,
+		newReport: tool.newReport === true,
+		preview
+	};
+}
+
 function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 	if (!value || typeof value !== 'object') return null;
 	const source = value as Record<string, unknown>;
@@ -185,53 +204,27 @@ function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
 	const workspaceId = source.workspaceId as string | null;
 	const legacyKind: WorkspacePane = source.workspacePane === 'context' ? 'context' : 'investigation';
 	const legacyInvestigationId = typeof source.investigationId === 'string' ? source.investigationId : null;
-	const savedTabs = Array.isArray(source.workspaceToolTabs)
-		? source.workspaceToolTabs.flatMap((rawTab): WorkspaceToolTab[] => {
-			if (!rawTab || typeof rawTab !== 'object') return [];
-			const tab = rawTab as Record<string, unknown>;
-			if (typeof tab.id !== 'string' || !tab.id || !['context', 'investigation', 'source', 'terminal', 'preview', 'studio', 'result'].includes(String(tab.kind))) return [];
-			if (tab.kind === 'result' && (typeof tab.artifactId !== 'string' || !Number.isSafeInteger(tab.artifactRevision) || Number(tab.artifactRevision) < 1)) return [];
-			const preview = parseCompanionPane(tab.preview);
-			if (tab.kind === 'preview' && !preview) return [];
-			return [{
-				id: tab.id,
-				kind: tab.kind as WorkspaceToolKind,
-				investigationId: typeof tab.investigationId === 'string' ? tab.investigationId : null,
-				conversationId: typeof tab.conversationId === 'string' ? tab.conversationId : null,
-				sourcePath: typeof tab.sourcePath === 'string' ? tab.sourcePath : null,
-				sourceName: typeof tab.sourceName === 'string' ? tab.sourceName : null,
-				documentId: typeof tab.documentId === 'string' ? tab.documentId : null,
-				title: typeof tab.title === 'string' ? tab.title : undefined,
-				initialArtifactId: typeof tab.initialArtifactId === 'string' ? tab.initialArtifactId : null,
-				artifactId: typeof tab.artifactId === 'string' ? tab.artifactId : null,
-				artifactRevision: typeof tab.artifactRevision === 'number' ? tab.artifactRevision : null,
-				preview
-			}];
-		}).filter((tab, index, all) => all.findIndex((candidate) => candidate.id === tab.id) === index)
-		: [];
-	// Upgrade old single-selection state. Keep a closed pane closed; if it was
-	// open, retain its selected tool as a tab in the new workspace context.
-	if (!savedTabs.length && (
-		source.workspacePaneOpen === true ||
-		(legacyKind === 'investigation' && legacyInvestigationId !== null)
-	)) {
-		savedTabs.push({
-			id: legacyKind === 'context' ? 'context' : `investigation:${legacyInvestigationId ?? String(source.conversationId ?? 'legacy')}`,
-			kind: legacyKind,
-			investigationId: legacyKind === 'investigation' ? legacyInvestigationId : null,
-			conversationId: legacyKind === 'investigation' && typeof source.conversationId === 'string' ? source.conversationId : null
-		});
+	let activeTool = normalizeWorkspaceTool(source.activeTool);
+	if (!activeTool && Array.isArray(source.workspaceToolTabs)) {
+		const savedActiveId = typeof source.activeWorkspaceToolTabId === 'string' ? source.activeWorkspaceToolTabId : null;
+		const legacyTabs = source.workspaceToolTabs as unknown[];
+		const selected = savedActiveId
+			? legacyTabs.find((tab) => tab && typeof tab === 'object' && (tab as Record<string, unknown>).id === savedActiveId)
+			: undefined;
+		activeTool = normalizeWorkspaceTool(selected);
 	}
-	const savedActiveId = typeof source.activeWorkspaceToolTabId === 'string' ? source.activeWorkspaceToolTabId : null;
-	const activeTabId = savedTabs.some((tab) => tab.id === savedActiveId) ? savedActiveId : savedTabs[0]?.id ?? null;
+	// An older workspace could persist Context without a selected item. Restore
+	// that surface in place. Investigation selection now follows the active chat.
+	if (!activeTool && !Array.isArray(source.workspaceToolTabs) && legacyKind === 'context' && source.workspacePaneOpen === true) {
+		activeTool = { id: 'context', kind: 'context' };
+	}
 	return {
 		workspaceId,
 		conversationId: typeof source.conversationId === 'string' ? source.conversationId : '',
-		workspacePane: savedTabs.find((tab) => tab.id === activeTabId)?.kind === 'investigation' ? 'investigation' : legacyKind,
+		workspacePane: activeTool ? 'context' : legacyKind,
 		workspacePaneOpen: source.workspacePaneOpen === true,
 		investigationId: typeof source.investigationId === 'string' ? source.investigationId : null,
-		workspaceToolTabs: savedTabs,
-		activeWorkspaceToolTabId: activeTabId
+		activeTool
 	};
 }
 
@@ -261,8 +254,7 @@ function readWorkspaceContextState(): SavedWorkspaceContextState {
 		}
 
 		// One-time migration from environment compositions. The active environment
-		// wins when older copies contain different state for the same workspace;
-		// tool tabs from other copies are retained when they have distinct owners.
+		// wins when older copies contain different selections for the same workspace.
 		const raw = localStorage.getItem(LEGACY_ENVIRONMENTS_KEY);
 		if (raw) {
 			const parsed: unknown = JSON.parse(raw);
@@ -286,21 +278,7 @@ function readWorkspaceContextState(): SavedWorkspaceContextState {
 								byWorkspace.set(key, candidate);
 								continue;
 							}
-							const knownTabs = new Set(existing.workspaceToolTabs?.map((tab) =>
-								tab.kind === 'context' ? 'context' : tab.investigationId ? `investigation:${tab.investigationId}` : tab.conversationId ? `conversation:${tab.conversationId}` : `id:${tab.id}`
-							));
-							const usedIds = new Set(existing.workspaceToolTabs?.map((tab) => tab.id));
-							for (const incoming of candidate.workspaceToolTabs ?? []) {
-								const identity = incoming.kind === 'context' ? 'context' : incoming.investigationId ? `investigation:${incoming.investigationId}` : incoming.conversationId ? `conversation:${incoming.conversationId}` : `id:${incoming.id}`;
-								if (knownTabs.has(identity)) continue;
-								let id = incoming.id;
-								let suffix = 2;
-								while (usedIds.has(id)) id = `${incoming.id}:migrated-${suffix++}`;
-								usedIds.add(id);
-								knownTabs.add(identity);
-								existing.workspaceToolTabs ??= [];
-								existing.workspaceToolTabs.push({ ...incoming, id });
-							}
+							if (!existing.activeTool && candidate.activeTool) existing.activeTool = candidate.activeTool;
 						}
 					}
 					const contexts = [...byWorkspace.values()];
@@ -611,7 +589,7 @@ export class Conversation {
 
 export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
 export type WorkspacePane = 'context' | 'investigation';
-export type WorkspaceToolKind = WorkspacePane | 'source' | 'terminal' | 'preview' | 'studio' | 'result';
+export type WorkspaceToolKind = 'context' | 'source' | 'preview' | 'studio' | 'result';
 
 export interface InvestigationNavigationTarget {
 	workspaceId: string;
@@ -650,17 +628,10 @@ class Session {
 		this.contentLayout = layout;
 		if (layout === 'chat') { this.setWorkspacePaneOpen(false); return; }
 		if (layout !== 'notebook' || !this.catalog.workspace) return;
-		// Reuse the current tab/chat identity. Opening a layout is not permission
-		// to create an Investigation or start an analytical run.
-		const tab = this.activeWorkspaceToolTab;
-		if (!tab || tab.kind === 'investigation' && tab.conversationId !== this.activeChat.id) {
-			this.openWorkspaceToolTab('investigation', null, this.activeChat.id);
-		} else this.setWorkspacePaneOpen(true);
+		this.setWorkspacePaneOpen(true);
 	}
 	/** The active pane inside Workspace. */
 	workspacePane = $state<WorkspacePane>('investigation');
-	/** The tool chooser is a transient entry state, not a persisted workspace tool. */
-	workspaceToolChooserOpen = $state(false);
 	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
 	investigationNavigationTarget = $state<InvestigationNavigationTarget | null>(null);
 	conversationAnalysisFocus = $state<ConversationAnalysisFocus | null>(null);
@@ -753,86 +724,14 @@ class Session {
 	setActiveInvestigation(id: string | null): void {
 		const pane = this.activeWorkspaceContext;
 		if (pane) {
-			const activeTab = pane.workspaceToolTabs?.find((item) => item.id === pane.activeWorkspaceToolTabId);
-			if (id) {
-				const conversationId = this.activeChat.id;
-				const tabByInvestigation = pane.workspaceToolTabs?.find((item) =>
-					item.kind === 'investigation' && item.investigationId === id
-				);
-				// Ignore a late selection that no longer belongs to the focused chat
-				// or to the selected Investigation tab. Never let an old view refresh
-				// transfer a durable tab to whichever conversation happens to be active.
-				if (
-					(activeTab?.kind === 'investigation' && (
-						(activeTab.investigationId && activeTab.investigationId !== id) ||
-						(activeTab.conversationId && activeTab.conversationId !== conversationId)
-					)) ||
-					(tabByInvestigation?.conversationId && tabByInvestigation.conversationId !== conversationId)
-				) return;
-
-				let tab = activeTab?.kind === 'investigation'
-					? activeTab
-					: tabByInvestigation ?? pane.workspaceToolTabs?.find((item) =>
-						item.kind === 'investigation' &&
-						item.conversationId === conversationId &&
-						!item.investigationId
-					);
-				if (tab) {
-					if (!tab.investigationId) tab.investigationId = id;
-					if (!tab.conversationId) tab.conversationId = conversationId;
-				}
-				this.activeInvestigationId = id;
-				pane.investigationId = id;
-				// A new chat must not inherit the old Investigation's selected tab.
-				// A workspace-wide Context tab also stays selected while its chat is active.
-				if (tab && (!activeTab || activeTab === tab)) {
-					pane.activeWorkspaceToolTabId = tab.id;
-					pane.workspacePane = 'investigation';
-					this.workspacePane = 'investigation';
-					if (pane.workspacePaneOpen) this.workspaceToolChooserOpen = false;
-				}
-			} else {
-				this.activeInvestigationId = null;
-				pane.investigationId = null;
+			this.activeInvestigationId = id;
+			pane.investigationId = id;
+			if (!pane.activeTool) {
+				pane.workspacePane = 'investigation';
+				this.workspacePane = 'investigation';
 			}
 		} else {
 			this.activeInvestigationId = id;
-		}
-		this.#writeWorkspaceState();
-	}
-
-	/** Repair a saved tab label from its canonical conversation when that link is
-	 *  unambiguous. Conversation ownership is the source of truth if an older
-	 *  stale selection overwrote the tab's Investigation ID. */
-	reconcileWorkspaceToolTabs(records: readonly { id: string; conversation_id?: string | null }[]): void {
-		const pane = this.activeWorkspaceContext;
-		if (!pane?.workspaceToolTabs?.length) return;
-		const investigationByConversation = new Map<string, string | null>();
-		for (const record of records) {
-			const conversationId = record.conversation_id;
-			if (!conversationId) continue;
-			if (investigationByConversation.has(conversationId)) {
-				investigationByConversation.set(conversationId, null);
-			} else {
-				investigationByConversation.set(conversationId, record.id);
-			}
-		}
-
-		let changed = false;
-		for (const tab of pane.workspaceToolTabs) {
-			if (tab.kind !== 'investigation' || !tab.conversationId) continue;
-			const investigationId = investigationByConversation.get(tab.conversationId);
-			if (investigationId && tab.investigationId !== investigationId) {
-				tab.investigationId = investigationId;
-				changed = true;
-			}
-		}
-		if (!changed) return;
-
-		const activeTab = pane.workspaceToolTabs.find((tab) => tab.id === pane.activeWorkspaceToolTabId);
-		if (activeTab?.kind === 'investigation') {
-			pane.investigationId = activeTab.investigationId ?? null;
-			this.activeInvestigationId = pane.investigationId;
 		}
 		this.#writeWorkspaceState();
 	}
@@ -863,20 +762,14 @@ class Session {
 			conversationId: conversation?.id ?? '',
 			workspacePane: 'investigation',
 			workspacePaneOpen: false,
-			workspaceToolTabs: [],
-			activeWorkspaceToolTabId: null
+			activeTool: null
 		};
 		this.workspaceContexts.push(context);
 		return context;
 	}
 
-	get workspaceToolTabs(): WorkspaceToolTab[] {
-		return this.activeWorkspaceContext?.workspaceToolTabs ?? [];
-	}
-
-	get activeWorkspaceToolTab(): WorkspaceToolTab | null {
-		const context = this.activeWorkspaceContext;
-		return context?.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId) ?? null;
+	get activeWorkspaceTool(): WorkspaceTool | null {
+		return this.activeWorkspaceContext?.activeTool ?? null;
 	}
 
 	workspaceLabel(workspaceId: string | null): string {
@@ -963,29 +856,17 @@ class Session {
 		}
 		const conversation = this.conversations[conversationIndex];
 		if (conversationId && requestedConversation && context.conversationId !== requestedConversation.id) {
-			// Selecting another saved conversation must not leave a different
-			// Investigation's transcript selected in the Tools pane.
-			const activeTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId);
-			if (activeTab?.kind === 'investigation' && activeTab.conversationId !== requestedConversation.id) {
-				const matchingTab = context.workspaceToolTabs?.find((tab) =>
-					tab.kind === 'investigation' && tab.conversationId === requestedConversation.id
-				);
-				context.activeWorkspaceToolTabId = matchingTab?.id ?? null;
-			}
 			context.investigationId = null;
 		}
 		context.conversationId = conversation.id;
 		if (workspace) workspace.conversationId = conversation.id;
 		this.activeConversationIndex = conversationIndex;
 		this.activeWorkspaceId = scope;
-		const activeToolTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId) ?? null;
-		const conversationToolTab = activeToolTab?.kind === 'investigation' && activeToolTab.conversationId === conversation.id
-			? activeToolTab
-			: null;
-		this.activeInvestigationId = conversationToolTab?.investigationId ?? context.investigationId ?? null;
+		const activeTool = context.activeTool ?? null;
+		if (activeTool?.kind === 'preview' && activeTool.conversationId !== conversation.id) context.activeTool = null;
+		this.activeInvestigationId = context.investigationId ?? null;
 		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
-		this.workspacePane = activeToolTab?.kind === 'investigation' ? 'investigation' : activeToolTab ? 'context' : context.workspacePane ?? 'investigation';
-		this.workspaceToolChooserOpen = context.workspacePaneOpen === true && !activeToolTab;
+		this.workspacePane = context.activeTool ? 'context' : context.workspacePane ?? 'investigation';
 		this.#writeWorkspaceState();
 		return true;
 	}
@@ -1203,7 +1084,6 @@ class Session {
 	}
 
 	setWorkspaceView(view: WorkspaceView): void {
-		if (view !== 'ask') this.workspaceToolChooserOpen = false;
 		if (view === 'workspace' && !this.catalog.workspace) {
 			this.workspaceView = 'ask';
 			return;
@@ -1220,213 +1100,129 @@ class Session {
 			this.workspaceView = 'ask';
 			return;
 		}
-		const tab = this.openWorkspaceToolTab(
-			pane,
-			pane === 'investigation' ? this.activeInvestigationId : null,
-			pane === 'investigation' ? this.activeChat.id : null
-		);
-		if (tab) this.activateWorkspaceToolTab(tab.id);
-	}
-
-	/** Open a workspace tool as a durable pane-level tab. Reusable navigation
-	 *  selects an existing workspace-wide tool; the Tools add menu can request an
-	 *  independent second instance. Each Investigation remains tied to its own
-	 *  canonical conversation. */
-	openWorkspaceToolTab(
-		kind: WorkspaceToolKind,
-		investigationId: string | null = null,
-		conversationId: string | null = kind === 'investigation' ? this.activeChat.id : null,
-		newInstance = false
-	): WorkspaceToolTab | null {
-		if (kind === 'studio') return this.openStudioToolTab();
 		const context = this.activeWorkspaceContext;
-		if (!context || !this.catalog.workspace) return null;
-		if (kind === 'investigation' && conversationId && conversationId !== this.activeChat.id) return null;
-		context.workspaceToolTabs ??= [];
-		const activeTab = context.workspaceToolTabs.find((item) => item.id === context.activeWorkspaceToolTabId);
-		const tabByInvestigation = investigationId
-			? context.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.investigationId === investigationId)
-			: null;
-		const tabByConversation = conversationId
-			? context.workspaceToolTabs.find((item) => item.kind === 'investigation' && item.conversationId === conversationId)
-			: null;
-		// A blank Investigation tab may acquire its durable record from the chat.
-		// A tab already owned by a different Investigation is never a fallback.
-		let tab: WorkspaceToolTab | null | undefined;
-		if (kind === 'context') {
-			tab = newInstance ? null : context.workspaceToolTabs.find((item) => item.kind === 'context');
-		} else if (kind === 'terminal') {
-			tab = newInstance ? null : context.workspaceToolTabs.find((item) => item.kind === 'terminal');
+		if (!context) return;
+		if (pane === 'investigation') {
+			context.activeTool = null;
+			context.investigationId = this.activeInvestigationId;
+			context.workspacePane = 'investigation';
 		} else {
-			tab = tabByInvestigation;
-			if (!tab && tabByConversation && (!investigationId || !tabByConversation.investigationId)) {
-				tab = tabByConversation;
-			}
+			context.activeTool = { id: 'context', kind: 'context' };
+			context.investigationId = null;
+			context.workspacePane = 'context';
 		}
-		if (
-			kind === 'investigation' && investigationId &&
-			activeTab?.kind === 'investigation' &&
-			activeTab.conversationId === conversationId &&
-			activeTab.investigationId &&
-			activeTab.investigationId !== investigationId
-		) return null;
-		if (!tab) {
-			const hasSameKind = context.workspaceToolTabs.some((item) => item.kind === kind);
-			tab = {
-				id: kind === 'context'
-					? hasSameKind ? `context:${uid()}` : 'context'
-					: kind === 'terminal'
-						? hasSameKind ? `terminal:${uid()}` : 'terminal'
-						: `investigation:${uid()}`,
-				kind,
-				investigationId: kind === 'investigation' ? investigationId : null,
-				conversationId: kind === 'investigation' ? conversationId : null
-			};
-			context.workspaceToolTabs.push(tab);
-		}
-		if (kind === 'investigation') {
-			if (investigationId && !tab.investigationId) tab.investigationId = investigationId;
-			if (conversationId) tab.conversationId = conversationId;
-		}
-		context.activeWorkspaceToolTabId = tab.id;
-		context.workspacePane = kind === 'investigation' ? 'investigation' : 'context';
-		context.investigationId = kind === 'investigation' ? tab.investigationId ?? null : null;
 		context.workspacePaneOpen = true;
 		this.workspacePane = context.workspacePane;
-		this.workspaceToolChooserOpen = false;
 		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
-		return tab;
 	}
 
-	openStudioToolTab(documentId: string | null = null, artifactId: string | null = null): WorkspaceToolTab | null {
+	/** Replace the Investigation details pane with a workspace-owned surface. */
+	openWorkspaceTool(kind: 'context'): WorkspaceTool | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
+		const tool: WorkspaceTool = { id: 'context', kind };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	openStudioTool(documentId: string | null = null, artifactId: string | null = null): WorkspaceTool | null {
 		this.workspaceSection = 'reports';
 		const context = this.activeWorkspaceContext;
 		if (!context || !this.catalog.workspace) return null;
-		context.workspaceToolTabs ??= [];
-		let tab = documentId ? context.workspaceToolTabs.find((item) => item.kind === 'studio' && item.documentId === documentId) : undefined;
-		if (!tab) {
-			tab = { id: `studio:${uid()}`, kind: 'studio', documentId, initialArtifactId: artifactId };
-			context.workspaceToolTabs.push(tab);
-		} else if (artifactId) tab.initialArtifactId = artifactId;
-		this.activateWorkspaceToolTab(tab.id);
-		return tab;
+		const tool: WorkspaceTool = { id: 'studio', kind: 'studio', documentId, initialArtifactId: artifactId };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.#writeWorkspaceState();
+		return tool;
 	}
 
-	openNewReportTab(): void {
-		const tab = this.openStudioToolTab();
-		if (tab) tab.newReport = true;
+	openNewReport(): void {
+		const tool = this.openStudioTool();
+		if (tool) { tool.newReport = true; this.#writeWorkspaceState(); }
 	}
 
-	openResultToolTab(artifactId: string, revision: number, title: string): WorkspaceToolTab | null {
+	openResultTool(artifactId: string, revision: number, title: string): WorkspaceTool | null {
 		const context = this.activeWorkspaceContext;
 		if (!context || !this.catalog.workspace || !artifactId || !Number.isSafeInteger(revision) || revision < 1) return null;
-		context.workspaceToolTabs ??= [];
-		let tab = context.workspaceToolTabs.find(item => item.kind === 'result' && item.artifactId === artifactId && item.artifactRevision === revision);
-		if (!tab) {
-			tab = { id: `result:${uid()}`, kind: 'result', artifactId, artifactRevision: revision, title };
-			context.workspaceToolTabs.push(tab);
-		}
-		this.activateWorkspaceToolTab(tab.id);
-		return tab;
+		const tool: WorkspaceTool = { id: `result:${artifactId}:${revision}`, kind: 'result', artifactId, artifactRevision: revision, title };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.#writeWorkspaceState();
+		return tool;
 	}
 
-	setStudioTabDocument(tabId: string, documentId: string, title?: string): void {
-		const tab = this.workspaceToolTabs.find((item) => item.id === tabId && item.kind === 'studio');
-		if (!tab) return;
-		tab.documentId = documentId;
-		tab.newReport = false;
-		if (title) tab.title = title;
-		tab.initialArtifactId = null;
+	setStudioToolDocument(documentId: string, title?: string): void {
+		const tool = this.activeWorkspaceTool;
+		if (!tool || tool.kind !== 'studio') return;
+		tool.documentId = documentId;
+		tool.newReport = false;
+		if (title) tool.title = title;
+		tool.initialArtifactId = null;
 		this.reportsVersion++;
 		this.#writeWorkspaceState();
 	}
 
 	/** Open a read-only catalog source preview in Tools without changing the
 	 *  active Conversation, Investigation scope, or next-message context. */
-	openSourceToolTab(source: SourceInfo): WorkspaceToolTab | null {
+	openSourceTool(source: SourceInfo): WorkspaceTool | null {
 		const context = this.activeWorkspaceContext;
 		const workspace = this.catalog.workspace;
 		if (!context || !workspace || !this.catalog.sources.some((item) => item.path === source.path && item.name === source.name)) return null;
-		context.workspaceToolTabs ??= [];
-		const existing = context.workspaceToolTabs.find((tab) =>
-			tab.kind === 'source' && tab.sourcePath === source.path && tab.sourceName === source.name
-		);
-		const tab = existing ?? {
-			id: `source:${uid()}`,
-			kind: 'source' as const,
+		const tool: WorkspaceTool = {
+			id: `source:${source.path}:${source.name}`,
+			kind: 'source',
 			sourcePath: source.path,
 			sourceName: source.name
 		};
-		if (!existing) context.workspaceToolTabs.push(tab);
-		context.activeWorkspaceToolTabId = tab.id;
+		context.activeTool = tool;
 		context.workspacePane = 'context';
 		context.investigationId = null;
 		context.workspacePaneOpen = true;
 		this.workspacePane = 'context';
-		this.workspaceToolChooserOpen = false;
 		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
-		return tab;
+		return tool;
 	}
 
-	activateWorkspaceToolTab(tabId: string): boolean {
-		const context = this.activeWorkspaceContext;
-		const tab = context?.workspaceToolTabs?.find((item) => item.id === tabId);
-		if (!context || !tab) return false;
-		context.activeWorkspaceToolTabId = tab.id;
-		context.workspacePane = tab.kind === 'investigation' ? 'investigation' : 'context';
-		context.investigationId = tab.kind === 'investigation' ? tab.investigationId ?? null : null;
-		context.workspacePaneOpen = true;
-		this.workspacePane = tab.kind === 'investigation' ? 'investigation' : 'context';
-		this.workspaceToolChooserOpen = false;
-		this.workspaceView = 'ask';
-		if (tab.kind === 'investigation') this.activeInvestigationId = tab.investigationId ?? null;
-		this.#writeWorkspaceState();
-		return true;
-	}
-
-	/** Display an existing artifact in the same tabbed Tools frame. References
-	 * retain their original workspace revision; opening a tab never reruns it. */
-	openPreviewToolTab(preview: CompanionPane): WorkspaceToolTab | null {
+	/** Display an existing artifact in the auxiliary pane. References
+	 * retain their original workspace revision; opening one never reruns it. */
+	openPreviewTool(preview: CompanionPane): WorkspaceTool | null {
 		const context = this.activeWorkspaceContext;
 		if (!context || !this.catalog.workspace) return null;
-		context.workspaceToolTabs ??= [];
-		const identity = JSON.stringify(preview);
-		let tab = context.workspaceToolTabs.find((item) => item.kind === 'preview' && item.conversationId === this.activeChat.id && JSON.stringify(item.preview) === identity);
-		if (!tab) {
-			tab = { id: `preview:${uid()}`, kind: 'preview', conversationId: this.activeChat.id, preview };
-			context.workspaceToolTabs.push(tab);
-		}
-		this.activateWorkspaceToolTab(tab.id);
-		return tab;
+		const tool: WorkspaceTool = { id: `preview:${uid()}`, kind: 'preview', conversationId: this.activeChat.id, preview };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return tool;
 	}
 
-	closeWorkspaceToolTab(tabId: string): boolean {
+	closeWorkspaceTool(): boolean {
 		const context = this.activeWorkspaceContext;
-		if (!context?.workspaceToolTabs) return false;
-		const index = context.workspaceToolTabs.findIndex((item) => item.id === tabId);
-		if (index < 0) return false;
-		const wasActive = context.activeWorkspaceToolTabId === tabId;
-		context.workspaceToolTabs.splice(index, 1);
-		if (wasActive) {
-			const next = context.workspaceToolTabs[Math.min(index, context.workspaceToolTabs.length - 1)] ?? null;
-			context.activeWorkspaceToolTabId = next?.id ?? null;
-			context.workspacePane = next?.kind === 'investigation' ? 'investigation' : next ? 'context' : 'investigation';
-			context.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
-			this.workspacePane = context.workspacePane;
-			this.activeInvestigationId = context.investigationId ?? null;
-		}
+		if (!context?.activeTool) return false;
+		context.activeTool = null;
+		context.workspacePane = 'investigation';
+		context.investigationId = this.activeInvestigationId;
 		context.workspacePaneOpen = true;
-		this.workspaceToolChooserOpen = context.workspaceToolTabs.length === 0;
+		this.workspacePane = 'investigation';
+		this.workspaceView = 'ask';
 		this.#writeWorkspaceState();
 		return true;
-	}
-
-	openWorkspaceToolChooser(): void {
-		if (!this.catalog.workspace || !this.activeWorkspaceContext) return;
-		this.setWorkspacePaneOpen(true);
-		this.workspaceToolChooserOpen = true;
 	}
 
 	setWorkspacePaneOpen(open: boolean): void {
@@ -1435,7 +1231,6 @@ class Session {
 		if (!context) return;
 		context.workspacePaneOpen = open;
 		this.workspaceView = 'ask';
-		this.workspaceToolChooserOpen = open && !this.activeWorkspaceToolTab;
 		this.#writeWorkspaceState();
 	}
 
@@ -1480,7 +1275,7 @@ class Session {
 		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
 		if (this.activeChat.workspaceScope === workspace) {
 			this.activeChat.companionPane = null;
-			this.openSourceToolTab(source);
+			this.openSourceTool(source);
 			this.persist();
 			return;
 		}
@@ -1517,7 +1312,7 @@ class Session {
 		};
 		if (this.catalog.workspace && this.activeChat.workspaceScope === this.catalog.workspace) {
 			this.activeChat.companionPane = null;
-			this.openPreviewToolTab(preview);
+			this.openPreviewTool(preview);
 		} else {
 			this.setWorkspacePaneOpen(false);
 			this.activeChat.companionPane = preview;
@@ -1629,7 +1424,7 @@ class Session {
 		this.conversations.push(conversation);
 		context.conversationId = conversation.id;
 		context.investigationId = null;
-		context.activeWorkspaceToolTabId = null;
+		context.activeTool = null;
 		this.activeInvestigationId = null;
 		// A deliberate New conversation action starts in chat with the optional
 		// workspace tools pane closed.
@@ -1701,8 +1496,7 @@ class Session {
 	}
 
 
-	/** Remove a deleted conversation from live state and remove its
-	 *  conversation-owned Investigation/preview tabs. */
+	/** Remove a deleted conversation and any preview that belongs to it. */
 	removeConversationWithoutArchiving(id: string): void {
 		delete this.investigationNames[id];
 		const i = this.conversations.findIndex((conversation) => conversation.id === id);
@@ -1716,28 +1510,13 @@ class Session {
 			this.conversations.splice(i, 1);
 		}
 
-		let removedToolState = false;
+		let changedWorkspaceState = false;
 		for (const context of this.workspaceContexts) {
-			const tabs = context.workspaceToolTabs ?? [];
-			const removedTabs = tabs.filter((tab) =>
-				tab.conversationId === id ||
-				(tab.kind === 'investigation' && !tab.conversationId && context.conversationId === id)
-			);
-			if (removedTabs.length) {
-				const removedIds = new Set(removedTabs.map((tab) => tab.id));
-				context.workspaceToolTabs = tabs.filter((tab) => !removedIds.has(tab.id));
-				const activeTabWasRemoved = Boolean(context.activeWorkspaceToolTabId && removedIds.has(context.activeWorkspaceToolTabId));
-				if (activeTabWasRemoved) {
-					const next = context.workspaceToolTabs[Math.min(tabs.findIndex((tab) => removedIds.has(tab.id)), context.workspaceToolTabs.length - 1)] ?? null;
-					context.activeWorkspaceToolTabId = next?.id ?? null;
-					context.workspacePane = next?.kind === 'investigation' ? 'investigation' : 'context';
-					context.investigationId = next?.kind === 'investigation' ? next.investigationId ?? null : null;
-					context.workspacePaneOpen = Boolean(next);
-				} else if (context.investigationId && removedTabs.some((tab) => tab.investigationId === context.investigationId)) {
-					const activeTab = context.workspaceToolTabs.find((tab) => tab.id === context.activeWorkspaceToolTabId);
-					context.investigationId = activeTab?.kind === 'investigation' ? activeTab.investigationId ?? null : null;
-				}
-				removedToolState = true;
+			if (context.activeTool?.kind === 'preview' && context.activeTool.conversationId === id) {
+				context.activeTool = null;
+				context.workspacePane = 'investigation';
+				context.workspacePaneOpen = true;
+				changedWorkspaceState = true;
 			}
 			if (context.conversationId === id) {
 				const replacement = this.conversations.findLast((item) => item.workspaceScope === context.workspaceId);
@@ -1748,12 +1527,8 @@ class Session {
 					this.conversations.push(blank);
 					context.conversationId = blank.id;
 				}
-				const activeTab = context.workspaceToolTabs?.find((tab) => tab.id === context.activeWorkspaceToolTabId);
-				if (activeTab?.kind === 'investigation') {
-					context.investigationId = activeTab.investigationId ?? null;
-					if (activeTab.conversationId) context.conversationId = activeTab.conversationId;
-				} else context.investigationId = null;
-				removedToolState = true;
+				context.investigationId = null;
+				changedWorkspaceState = true;
 			}
 		}
 		const owner = ownerId ? this.workspaceAt(ownerId) : null;
@@ -1762,11 +1537,10 @@ class Session {
 			if (replacement) owner.conversationId = replacement.id;
 		}
 		this.investigationsVersion++;
-		if (removedToolState) {
+		if (changedWorkspaceState) {
 			if (this.activeWorkspaceContext) {
 				this.activeInvestigationId = this.activeWorkspaceContext.investigationId ?? null;
 				this.workspacePane = this.activeWorkspaceContext.workspacePane ?? 'investigation';
-				if (!this.activeWorkspaceContext.workspacePaneOpen) this.workspaceToolChooserOpen = false;
 			}
 			this.#writeWorkspaceState();
 		}

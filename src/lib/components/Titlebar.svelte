@@ -31,7 +31,7 @@
 	<div class="titlebar-workspace"><WorkspaceSwitcher compact onselect={onworkspaceselect} /></div>
 	<div class="titlebar-actions">
 		{#if session.activeChat.workspaceScope}
-			<button class="chrome-action" aria-label={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} title={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} aria-expanded={session.workspacePaneOpen} onclick={() => session.setContentLayout(session.workspacePaneOpen ? 'chat' : 'notebook')}><Icon name="panel-right" size={14} /></button>
+			<button class="chrome-action" aria-label={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} title={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} aria-expanded={session.workspacePaneOpen} onclick={() => session.toggleWorkspacePane()}><Icon name="panel-right" size={14} /></button>
 		{/if}
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger class="chrome-action" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
@@ -39,9 +39,6 @@
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onpalette}><Icon name="search" size={14} />Search Fella</DropdownMenu.Item>
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { session.setContentLayout('chat'); if (expanded) ontoggleexpand?.(); }}>Chat view</DropdownMenu.Item>
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.setContentLayout('notebook')}>Notebook view</DropdownMenu.Item>
-				{#if session.catalog.workspace}
-					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.openWorkspaceToolChooser()}><Icon name="plus" size={14} />Open another tool</DropdownMenu.Item>
-				{/if}
 				{#if session.workspacePaneOpen && !compact}
 					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => ontoggleexpand?.()}><Icon name={expanded ? 'columns-2' : 'arrow-up-right'} size={14} />{expanded ? 'Restore split view' : 'Expand panel'}</DropdownMenu.Item>
 				{/if}
