@@ -334,6 +334,7 @@ export async function openContext(): Promise<void> {
 		session.addSystem('Open a folder first with /open — fella.md saves into it.');
 		return;
 	}
+	session.workspaceSection = 'chat';
 	session.setWorkspacePane('context');
 }
 

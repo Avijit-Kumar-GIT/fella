@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { session } from '$lib/session.svelte';
+	import { openContext } from '$lib/commands';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
 	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import Icon from './Icon.svelte';
@@ -37,6 +38,10 @@
 			<DropdownMenu.Trigger class="chrome-action" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
 			<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end" sideOffset={6}>
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onpalette}><Icon name="search" size={14} />Search Fella</DropdownMenu.Item>
+				{#if session.catalog.workspace}
+					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void openContext()}><Icon name="notebook-pen" size={14} />Workspace context</DropdownMenu.Item>
+					<DropdownMenu.Separator class="workspace-context-separator" />
+				{/if}
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { session.setContentLayout('chat'); if (expanded) ontoggleexpand?.(); }}>Chat view</DropdownMenu.Item>
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.setContentLayout('notebook')}>Notebook view</DropdownMenu.Item>
 				{#if session.workspacePaneOpen && !compact}
@@ -65,4 +70,5 @@
 	@media (max-width:640px) { .titlebar-overlay.integrated-menu .titlebar-workspace { display:none; } }
 	:global(.chrome-action) { display:grid; width:28px; height:28px; place-items:center; padding:0; border:0; border-radius:50%; background:transparent; color:var(--text-faint); cursor:pointer; }
 	:global(.chrome-action:hover), :global(.chrome-action[data-state='open']) { background:var(--bg-raised); color:var(--text); }
+	:global(.workspace-context-separator) { height:1px; margin:6px 0; background:var(--border); }
 </style>

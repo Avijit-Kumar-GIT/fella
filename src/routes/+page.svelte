@@ -14,7 +14,7 @@
 	import WorkspaceSourceView from '$lib/components/WorkspaceSourceView.svelte';
 	import StudioDetailsView from '$lib/components/StudioDetailsView.svelte';
 	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
-	import { dispatch, loadStartupCatalog, openFolder, openRepository, stop } from '$lib/commands';
+	import { dispatch, loadStartupCatalog, openContext, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
@@ -270,7 +270,7 @@
 			session.setWorkspacePane('investigation');
 		} else if (commandKey && e.shiftKey && key === 'c') {
 			e.preventDefault();
-			session.setWorkspacePane('context');
+			void openContext();
 		} else if (commandKey && key === ',') {
 			e.preventDefault();
 			session.setWorkspaceView('settings');
