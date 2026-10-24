@@ -153,7 +153,7 @@
 		<div class="workspace-content" id="workspace-tool-content" aria-label={toolTitle(activeTool)}>
 			{#if defaultInspector && !hideToolBar}
 				<header class="workspace-tool-heading">
-					<span class="workspace-tool-title">{toolTitle(activeTool)}</span>
+					<span class="workspace-tool-title" role="heading" aria-level="1" title={activeTool.kind === 'studio' ? 'Reports' : toolTitle(activeTool)}>{activeTool.kind === 'studio' ? 'Reports' : toolTitle(activeTool)}</span>
 					<Button variant="ghost" size="sm" onclick={() => session.closeWorkspaceTool()}>
 						<Icon name="chevron-right" size={14} /> Investigation
 					</Button>
@@ -171,6 +171,7 @@
 							workspace={workspacePath}
 							documentId={ownerTool.documentId}
 							newReport={ownerTool.newReport}
+							embedded={defaultInspector}
 							initialArtifactId={ownerTool.initialArtifactId}
 							onopen={(id, title) => session.setStudioToolDocument(id, title)}
 							onrequestchange={async (artifact, instruction) => { await requestArtifactChange(artifact, instruction); }}

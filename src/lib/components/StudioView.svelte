@@ -13,11 +13,12 @@
 	import MarkdownContent from './MarkdownContent.svelte';
 	import Icon from './Icon.svelte';
 
-	let { workspace, documentId = null, onopen, initialArtifactId = null, onrequestchange, newReport = false }: {
+	let { workspace, documentId = null, onopen, initialArtifactId = null, onrequestchange, newReport = false, embedded = false }: {
 		workspace: string;
 		documentId?: string | null;
 		onopen?: (id: string, title?: string) => void;
 		newReport?: boolean;
+		embedded?: boolean;
 		initialArtifactId?: string | null;
 		onrequestchange?: (artifact: ResolvedArtifact, instruction: string) => void | Promise<void>;
 	} = $props();
@@ -180,7 +181,7 @@
 				requestedKey = JSON.stringify([root, document.id]);
 				for (const placement of target.placements) void resolvePlacement(root, placement);
 				if (artifactId) await addInitial(target, artifactId);
-				if (!disposed && request === navigation && id !== document.id) onopen?.(document.id);
+				if (!disposed && request === navigation) onopen?.(document.id, target.title);
 			}
 		} catch (cause) { if (!disposed && request === navigation) loadError = message(cause); }
 		finally { if (!disposed && request === navigation) loading = false; }
@@ -213,7 +214,7 @@
 		if (current?.document.id === id) return;
 		const root = workspace;
 		void open(root, id);
-		onopen?.(id);
+		onopen?.(id, documents.find(document => document.id === id)?.title);
 	}
 
 	async function create(): Promise<void> {
@@ -229,7 +230,7 @@
 			current = makeDraft(document); notesEditing = true;
 			requestedKey = JSON.stringify([root, document.id]);
 			remember(document); createOpen = false; newTitle = '';
-			onopen?.(document.id);
+			onopen?.(document.id, document.title);
 		} catch (cause) { if (!disposed && workspace === root) createError = message(cause); }
 		finally { if (!disposed && workspace === root) creating = false; }
 	}
@@ -440,10 +441,10 @@
 	});
 </script>
 
-<section class="studio" aria-label="Report editor" aria-busy={loading}>
+<section class="studio" class:embedded aria-label="Report editor" aria-busy={loading}>
 	<header class="studio-toolbar">
 		<div class="studio-breadcrumb">
-			<span>Reports</span><span class="studio-breadcrumb-separator">/</span>
+			{#if !embedded}<span>Reports</span><span class="studio-breadcrumb-separator">/</span>{/if}
 			<DropdownMenu.Root>
 				<DropdownMenu.Trigger class="studio-document-trigger" aria-label="Choose report"><span>{current?.title.trim() || 'Choose a report'}</span><Icon name="chevron-down" size={12} /></DropdownMenu.Trigger>
 				<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content studio-document-menu" align="start">
@@ -454,12 +455,12 @@
 		</div>
 		<div class="toolbar-actions">
 			{#if current}
-				<Button class="studio-action" variant="ghost" size="sm" disabled={current.locked} onclick={() => {
+				<Button class="studio-action" variant="ghost" size="sm" aria-label={notesEditing ? 'Done editing report' : 'Edit report'} title={notesEditing ? 'Done editing report' : 'Edit report'} disabled={current.locked} onclick={() => {
 					if (notesEditing) { notesEditing = false; if (current) void saveDraft(current); }
 					else notesEditing = true;
-				}}>{#if notesEditing}<Icon name="check" size={14} />Done{:else}<Icon name="pencil" size={12} />Edit{/if}</Button>
+				}}>{#if notesEditing}<Icon name="check" size={14} />{#if !embedded}Done{/if}{:else}<Icon name="pencil" size={12} />{#if !embedded}Edit{/if}{/if}</Button>
 				<span class="save-status" role="status" aria-live="polite">{status}</span>
-				<Button class="studio-action" variant="ghost" size="sm" disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={12} />{exportBusy ? 'Exporting…' : 'Export'}</Button>
+				<Button class="studio-action" variant="ghost" size="sm" aria-label="Export report" title={exportBusy ? 'Exporting report' : 'Export report'} disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={12} />{#if !embedded}{exportBusy ? 'Exporting…' : 'Export'}{/if}</Button>
 			{/if}
 			<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="More report actions" title="More report actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
 				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { reportManagerOpen = true; reportPreview = null; reportJson = ''; reportError = ''; void refreshReportList(); }}>Import snapshot…</DropdownMenu.Item>
@@ -479,10 +480,12 @@
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>
 				<div class="document-heading">
-					{#if notesEditing}
-						<input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" />
-					{:else}
-						<h1 class="document-title">{target.title.trim() || 'Untitled report'}</h1>
+					{#if !embedded || notesEditing}
+						{#if notesEditing}
+							<input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" />
+						{:else}
+							<h1 class="document-title">{target.title.trim() || 'Untitled report'}</h1>
+						{/if}
 					{/if}
 					<p class="document-caption">Report · Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(target.document.updated_at_ms))}</p>
 				</div>
@@ -623,5 +626,19 @@
 	.output-picker-list strong { font-weight: 500; font-size: var(--fs-sm); overflow-wrap: anywhere; }
 	.output-picker-list span { color: var(--text-faint); font-size: var(--fs-xs); grid-row: 2; }
 	.output-picker-list :global(svg) { grid-column: 2; grid-row: 1 / 3; color: var(--text-faint); }
+	.studio.embedded { background: var(--workspace-canvas); }
+	.studio.embedded .studio-toolbar { box-sizing:border-box; min-height:44px; padding:4px 12px; gap:8px; border-bottom:1px solid var(--border); }
+	.studio.embedded .studio-breadcrumb { flex:1; overflow:hidden; }
+	.studio.embedded :global(.studio-document-trigger) { width:100%; max-width:100%; min-height:32px; padding:4px 8px; border-radius:var(--radius-chip); background:var(--bg-raised); }
+	.studio.embedded .toolbar-actions { flex:none; gap:2px; }
+	.studio.embedded :global(.studio-action) { box-sizing:border-box; width:30px; min-width:30px; min-height:30px; justify-content:center; gap:0; padding:0; border-radius:var(--radius-chip); }
+	.studio.embedded .save-status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+	.studio.embedded .studio-scroll { min-width:0; overflow-x:hidden; padding:0 16px 36px; }
+	.studio.embedded .studio-document { max-width:none; padding:18px 0 0; overflow-wrap:anywhere; }
+	.studio.embedded .document-heading { margin-bottom:18px; }
+	.studio.embedded .document-title { font-size:20px; line-height:1.35; overflow-wrap:anywhere; }
+	.studio.embedded .document-notes { margin-bottom:24px; font-size:14px; line-height:1.65; }
+	.studio.embedded .placement { margin-bottom:24px; }
+	.studio.embedded :global(.artifact), .studio.embedded :global(.artifact-presentation) { min-width:0; max-width:100%; }
 	@container (max-width: 480px) { .save-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .studio-toolbar { padding-inline: 10px; } .studio-document { padding-top: var(--space-4); } :global(.studio-document-trigger) { max-width:34vw; } :global(.studio-action) { gap:4px; padding-inline:8px; } }
 </style>
