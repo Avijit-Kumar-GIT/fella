@@ -4,10 +4,17 @@ description: "Connect a hosted provider or custom OpenAI-compatible endpoint wit
 icon: "cpu"
 ---
 
-Fella is BYOK-only. It supports hosted Ollama Cloud, OpenAI, gateway choices,
-and custom OpenAI-compatible endpoints. Switching providers changes where
-prompts and tool results are sent, but not the local ingestion engine or
-verification code.
+Fella is BYOK-only. It supports hosted Ollama Cloud, OpenAI, Vercel AI Gateway,
+xAI, OpenRouter, and custom OpenAI-compatible endpoints. Switching providers
+changes where prompts and tool results are sent, but not the local ingestion
+engine or verification code.
+
+Each conversation uses one selected model for its model turns. Fella does not
+automatically route tasks among providers or specialist models; the selected
+model directs the tool loop, while Fella's local engine executes analytical
+tools and verification. The built-in provider defaults are starting choices,
+not fixed model requirements. When a provider exposes a catalog, `/model` lists
+the models currently available to your account.
 
 ## Ollama Cloud
 
@@ -88,6 +95,12 @@ If you have connected to multiple providers before, specify the provider:
 ## Provider and tab behavior
 
 Provider credentials and the active provider are shared by the app. Each conversation tab can select a different model with `/model <name>`. A new tab inherits the current model. Changing the provider or base URL clears per-tab selections so a stale model ID is not reused.
+
+The current app does not provide a Fella-managed model bundle or automatically
+combine models for different stages of an Investigation. It uses the provider
+and model selected for that conversation; a warning-triggered consistency check
+uses that same model. See [The model layer](/concepts/model-layer) for the
+curated model-portfolio direction currently being evaluated.
 
 ## Credential storage
 

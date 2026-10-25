@@ -61,6 +61,33 @@ Provider API keys are kept in `auth.json` under Fella's application data directo
 
 Document search remains local and direct through `grep_files` and `read_file`, so it works even when the provider has no embeddings endpoint.
 
+## Evaluated direction: a curated model portfolio
+
+Fella is exploring whether a small, team-selected set of models can improve
+analytical quality, efficiency, or both. Possible roles include a general
+reasoning model for understanding and explaining the request, a tabular
+prediction model for a specifically defined supervised task, and a decision
+model that recommends a tool or escalation path when evaluation shows it helps.
+
+These roles have different boundaries. Nori and TabFM are examples of models
+for supervised tabular prediction: they need a target and labeled context, so
+they do not replace Fella's SQL engine or answer arbitrary descriptive
+questions by themselves. Nori's public package focuses on regression; TabFM
+supports classification and regression. See the [Nori project](https://github.com/Synthefy/synthefy-nori)
+and [TabFM project](https://github.com/google-research/tabfm).
+
+This is an evaluation direction, not a shipped feature. The current app has no
+Fella-managed inference service, no automatic routing among different models,
+and no Nori or TabFM integration. Any future bundle would need to outperform
+the single-model agent loop on complete Fella tasks, including evidence quality,
+uncertainty handling, total token and service cost, and latency. A model's
+self-reported confidence alone would not establish calibrated uncertainty.
+
+Model rights are part of that evaluation. The [TabFM repository](https://github.com/google-research/tabfm)
+states that its default pretrained weights are licensed for non-commercial,
+non-production use, separately from its Apache-2.0 code; a paid service would
+need suitable weight terms or another checkpoint.
+
 The wire choice is independent of which hosted service you choose:
 
 ```rust
