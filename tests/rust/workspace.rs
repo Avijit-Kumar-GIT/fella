@@ -457,7 +457,8 @@ fn ingests_excel_sheets() {
 
     let ws = scratch("xlsx-ws");
     let data = scratch("xlsx-data");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/fixtures/budget.xlsx");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/fixtures/budget.xlsx");
     fs::copy(&fixture, ws.join("budget.xlsx")).unwrap();
 
     let engine = EngineState::new(&data).unwrap();
@@ -977,7 +978,8 @@ fn a_workbook_with_no_usable_sheet_gives_a_specific_reason() {
     // regression this test guards).
     let ws = scratch("empty-sheet-ws");
     let data = scratch("empty-sheet-data");
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/fixtures/empty_sheet.xlsx");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/rust/fixtures/empty_sheet.xlsx");
     fs::copy(&fixture, ws.join("empty_sheet.xlsx")).unwrap();
 
     let engine = EngineState::new(&data).unwrap();
