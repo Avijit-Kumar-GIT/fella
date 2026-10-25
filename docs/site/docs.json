@@ -9,9 +9,9 @@
     }
   },
   "colors": {
-    "primary": "#3fc7bc",
-    "light": "#74d8cf",
-    "dark": "#3fc7bc"
+    "primary": "#008080",
+    "light": "#008080",
+    "dark": "#0f7f78"
   },
   "favicon": "/favicon.svg",
   "logo": {
