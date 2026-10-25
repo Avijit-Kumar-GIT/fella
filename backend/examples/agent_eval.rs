@@ -239,7 +239,9 @@ async fn run_case_with_clarification(
                 context_refs: &[],
                 clarification_reply,
                 investigation_id: None,
+                question_id: None,
                 investigation_context: None,
+                rerun_of: None,
             },
             move |e: AskEvent| {
                 let kind = match &e {
@@ -3991,6 +3993,7 @@ mod tests {
             python_input_trace: None,
             ms: 1,
             error: err.map(str::to_string),
+            error_kind: None,
             verifier_disposition: None,
         }
     }
