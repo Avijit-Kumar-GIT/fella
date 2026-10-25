@@ -24,8 +24,7 @@ up to 1,000 points, with longer ranges expected to use a coarser time period or 
 narrower date range.
 
 The hosted cases describe user-visible outcomes and do not assert a particular internal
-row-cap implementation. Capacity boundaries are covered separately by deterministic
-tests in `backend/tests/chart_tool.rs`.
+row-cap implementation.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
 and Gemma 4 31B; it never starts or calls a model server on the machine.
@@ -55,11 +54,6 @@ FELLA_EVAL_ITERS=3 EVAL_SHOW_ANSWERS=1 \
   ./scripts/test-visualizations.sh --only monthly --json /tmp/visualization.json
 ```
 
-The deterministic checks do not need a provider. They live in `chart.rs`,
-`tests/chart_tool.rs`, and the agent-loop integration tests. `pnpm test:chart-renderer`
-server-renders every supported chart kind and checks rendered marks, accessible names,
-exact-value tables, theme-token contrast, and responsive overflow rules. This is a
-structural renderer check, not a substitute for human review in the desktop webview.
 The benchmark cases require a real BYOK model because they measure
 question-to-answer behavior. Record model/provider, iteration count, task-set SHA-256,
 answer/chart gold, runtime status, failed tool calls, and token/time cost in every live

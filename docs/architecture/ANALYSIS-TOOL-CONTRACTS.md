@@ -71,9 +71,9 @@ Relevant automated coverage lives beside the contracts:
   `prior_analysis_is_conversation_scoped_and_revision_checked`.
 - `backend/src/engine/analytics/verify.rs`:
   SQL/Python evidence replay checks and lineage validation.
-- `tests/e2e/workspace.spec.mjs`:
-  refresh-diff, freshness-failure, stale-result preservation, and
-  source-scope UI journeys.
+- Historical Electron journey coverage included refresh-diff,
+  freshness-failure, stale-result preservation, and source-scope UI journeys.
+  The test implementation is no longer included in the public checkout.
 
 The audit checklist item [#286](../audits/FELLA-DESKTOP-AUDIT-2026-10-14.md)
 tracks this contract work.

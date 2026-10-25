@@ -7,6 +7,8 @@
 > have since changed. Use the current [product contract](../product/PRODUCT.md),
 > [product model](../product/PRODUCT-MODEL.md), and
 > [interaction model](../product/INTERACTION-MODEL.md) for present behavior.
+> The test results below are historical; standalone test sources cited in this
+> report have since been removed from the public checkout.
 
 ## Executive assessment
 
@@ -201,7 +203,7 @@ The test saves a parent Question, “Measure conversion by channel,” and child
 
 The explicit Analyze action has a different, intentionally structured path: it loads the saved Question, sends that Question’s text, and carries the Investigation and Question IDs into the run. Ordinary chat uses the ordinary ask path. The failure therefore exposes a real unresolved product contract: should a freeform follow-up automatically bind to the currently selected Question, or should it remain unlinked unless the user explicitly invokes Analyze? The latter is consistent with the principle of preserving the user's actual message and analyzing Questions individually; the former is what this test currently asserts. Do not resolve this by silently appending a plan to chat or by weakening the test. Adjudicate the intended interaction, then update behavior or test contract with an explicit rationale.
 
-Evidence: [test](../../tests/e2e/workspace.spec.mjs#L2211), [explicit Question-run path](../../src/lib/commands.ts#L1101).
+Evidence: historical test source `tests/e2e/workspace.spec.mjs` (line 2211), [explicit Question-run path](../../src/lib/commands.ts#L1101).
 
 ### Failure 2: Project curation expects an internal status enum
 
@@ -211,7 +213,7 @@ The fixture Question’s internal answer state is `incomplete`, with the reason 
 
 This appears to be a vocabulary/contract mismatch rather than evidence that the canonical Question reference was lost: the app deliberately maps an internal state to a human-readable label. Yet “Partial answer” is a sensitive label in this product because it can be mistaken for a broken result. The correct resolution is a product-language decision: preserve an internal enum in a diagnostic surface, use the human-readable status with its reason, or choose a more neutral visible label. The failure remains a failure in this run; it should not be regraded as passed on the basis of this interpretation.
 
-Evidence: [test](../../tests/e2e/workspace.spec.mjs#L5383), [failing label assertion](../../tests/e2e/workspace.spec.mjs#L5465), [shared status labels](../../src/lib/investigation-question-status.ts#L1), [curation mapping](../../src/lib/components/ProjectCuration.svelte#L153).
+Evidence: historical test source `tests/e2e/workspace.spec.mjs` (lines 5383 and 5465), [shared status labels](../../src/lib/investigation-question-status.ts#L1), [curation mapping](../../src/lib/components/ProjectCuration.svelte#L153).
 
 ### What the test run does not prove
 

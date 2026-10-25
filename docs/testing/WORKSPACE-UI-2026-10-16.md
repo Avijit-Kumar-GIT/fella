@@ -3,6 +3,8 @@
 > Historical desktop validation record. Some labels and surfaces below
 > describe the earlier Tools/Shell UI. Use the current
 > [interaction model](../product/INTERACTION-MODEL.md) for present navigation.
+> The automated test sources and commands cited here are no longer included in
+> the public checkout.
 
 Recorded before implementation. This changes presentation and navigation, not
 analysis, permissions, coverage grading, provenance, or stored user records.

@@ -200,7 +200,7 @@ Useful verification commands:
 ```sh
 pnpm check
 pnpm build
-cargo test --manifest-path backend/Cargo.toml --locked
+cargo check --manifest-path backend/Cargo.toml --locked
 ```
 
 The Electron shell and its line-delimited JSON bridge are described in

@@ -1,9 +1,9 @@
 # Generative workspace contract v2.1
 
-Defined before running the migrated implementation. Values are fixed from the
-local fixture, not inferred from model output or from the candidate renderer.
-The deterministic suite uses real Electron and the Rust sidecar but a local
-provider fixture; it makes no claim about real-model analytical quality.
+Behavior contract for generated analytical presentations. Values are fixed
+from fixtures, not inferred from model output or from the candidate renderer.
+This document describes intended behavior; its automated test implementation
+is not included in the public repository.
 
 ## Acceptance criteria
 
@@ -35,38 +35,20 @@ provider fixture; it makes no claim about real-model analytical quality.
    reopening saved work do not call a model or rerun analytics unless the
    specific user action requests it.
 
-This version adds the user-approved fail-open answer contract after live model
-tests showed that presentation-generation failures could erase or block a
-useful answer. Existing rich-presentation assertions remain unchanged.
+This version adds the user-approved fail-open answer contract after model
+evaluation showed that presentation-generation failures could erase or block a
+useful answer.
 
 ## Independent value oracle
 
-The test fixture includes `Q3 = 10`, `Q4 = 20`, explicit zero and null values,
-and identifiers beyond JavaScript's safe integer range. Export assertions use
-the exact saved string values, not rounded display numbers.
+The contract's reference values include `Q3 = 10`, `Q4 = 20`, explicit zero
+and null values, and identifiers beyond JavaScript's safe integer range.
+Reports should preserve exact saved string values, not rounded display
+numbers.
 
-## Real-model acceptance
+## Evaluation notes
 
-`tests/e2e/json-render-answer.live.spec.mjs` exercises configured hosted models
-against a local quarterly dataset. It checks for a same-turn JSON component
-tree, a result-bound Chart for a multi-period comparison, successful rendering,
-and persistence of the same spec. A passing case establishes only that task
-and model run; it is not a general quality score. Failures remain visible and
-must not be repaired by changing the expected output after observing it.
-
-## Focused commands
-
-- `pnpm test:json-render` — catalog, schema, renderer, binding, state, and export
-  contract.
-- `node scripts/test-presentation-layout.mjs` — cached synchronous render,
-  responsive layout, chart mount, and horizontal-overflow check.
-- `pnpm test:studio-report` — deterministic saved-report conversion.
-- `pnpm test:e2e:generative` — Electron/Rust artifact, answer, persistence, and
-  report journeys.
-- `pnpm exec playwright test --config=playwright.live.config.mjs tests/e2e/json-render-answer.live.spec.mjs --workers=1 --retries=0`
-  — opt-in real-model acceptance; requires credentials in the app auth file
-  and a built Electron engine sidecar.
-
-Failures, unsupported visual conversions, and model differences are reported
-as such. Mock-provider results and real-model results are never combined into
-one score.
+The model benchmark task sets live under `bench/`. They evaluate model
+behavior and are separate from the presentation contract described here.
+Keep benchmark task versions and observed failures intact when reporting a
+change.

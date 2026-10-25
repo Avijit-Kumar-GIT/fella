@@ -49,11 +49,11 @@ pnpm electron:dev
   <Step title="Choose the smallest general implementation">
     Preserve the model-directed loop and read-only analytics path. Prefer a general capability improvement over a production rule for one fixture or phrase.
   </Step>
-  <Step title="Add the matching test">
-    Use deterministic fixtures for engine behavior and predeclared evaluation cases when behavior depends on model interpretation. Do not treat one live response as a regression test.
+  <Step title="Keep the behavior contract clear">
+    Describe the expected user-visible behavior and the boundaries it must preserve. Keep model-evaluation criteria separate from implementation details.
   </Step>
   <Step title="Run the relevant gates">
-    Use the full command list in the [testing guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/testing/TESTING.md). Run with the default SQLite features.
+    Run `pnpm check`, `pnpm build`, `cargo check --locked --manifest-path backend/Cargo.toml`, and `cargo fmt --manifest-path backend/Cargo.toml --all -- --check`. CI uses the default SQLite features.
   </Step>
   <Step title="Update the source of truth">
     Update maintained product or architecture documentation when its claims change. Keep benchmark fixtures, generators, graders, and task-contract versions together.
@@ -63,12 +63,8 @@ pnpm electron:dev
 DuckDB is optional and is not part of the normal release/CI path. Do not add
 `--features duckdb` to default validation.
 
-The test and benchmark surface is BYOK-only. Run this guard when adding a
-model fixture or evaluation entry point:
-
-```bash filename="from repository root"
-bash scripts/check-byok-test-surface.sh
-```
+Model benchmarks use credentials configured by the person running them. Never
+commit credentials or include them in benchmark output.
 
 ## Security review prompts
 
@@ -81,8 +77,8 @@ Before opening a PR, ask:
 - Does a read-only claim need qualification for Python or user-authored context?
 - Does a verification change detect semantic errors, or only execution/grounding patterns?
 
-State the actual boundary in documentation and tests rather than broadening a
-guarantee.
+State the actual boundary in documentation and contributor verification
+notes rather than broadening a guarantee.
 
 ## Experimental boundary
 

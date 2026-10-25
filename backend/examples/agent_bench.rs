@@ -1,6 +1,6 @@
 //! Agent-loop latency benchmark against a real provider.
 //!
-//! Not built by `cargo test` / CI. It reads settings + credentials from a data
+//! Not built by CI. It reads settings + credentials from a data
 //! dir you point it at (copy your real `fella.db` + `auth.json` into a scratch
 //! dir first so it never touches live state), builds a workspace of fixtures at
 //! several sizes, and times a battery of questions end to end.

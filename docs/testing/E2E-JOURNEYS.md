@@ -1,33 +1,26 @@
 # Fella desktop journeys: filesystem analytics
 
-These are workflow-focused Electron tests. They check that the real app can
-accept a sequence of questions, complete turns, expose Analysis Details,
-render a chart without clipping, retain conversation context, and carry a
-clarification through to a resumed turn. They do **not** grade whether answers
-or calculations are correct. Answer correctness belongs to FQA-Bench and is
-not being scored by this journey suite.
+This is a manual journey guide for checking that the app can accept a sequence
+of questions, complete turns, expose Analysis Details, render a chart without
+clipping, retain conversation context, and carry a clarification through to a
+resumed turn. It does **not** grade whether answers or calculations are
+correct. Answer correctness belongs to FQA-Bench.
 
-The questions are drawn unchanged from the FQA-Bench v0.1 task files. The
-journey runner reads prompts and task labels, not answer keys. Its JSONL audit
-records model outputs for later inspection without comparing their values to
-gold answers.
+The questions are drawn unchanged from the FQA-Bench v0.1 task files. They
+provide repeatable manual scenarios; this guide does not include or invoke an
+automated journey runner.
 
 ## Before you start
 
-- Build the Electron app and run
-  `pnpm exec playwright test --config=playwright.live.config.mjs --grep=journey`
-  for the complete automated journey. `pnpm test:e2e:release:live` also
-  includes the existing focused release smoke tests.
+- Build the Electron app before starting the manual journey.
 - For manual visual testing, choose OpenAI / `gpt-5.6-luna` and mount
   `bench/fqa-bench/suites/uci-bike-sharing/workspaces/capital-bikeshare`.
 - Ask the Bike Sharing questions below in one conversation, in order. The
   follow-up intentionally relies on the prior question in that same thread.
 - Mount `bench/fqa-bench/suites/clarification-housing/workspaces/housing` in a
   second conversation for the clarification journey.
-- The suite uses the actual Electron window, Rust sidecar, provider, and
-  mounted synthetic/public fixtures. Only native folder selection is stubbed.
-  The API credential is read from the existing auth file and is never written
-  to the audit output. No real personal files are included.
+- Use the actual Electron window, Rust sidecar, provider, and mounted
+  synthetic/public fixtures. No real personal files are included.
 
 ## Journey A — one analyst session in Bike Sharing
 
@@ -71,7 +64,7 @@ that one titled visualization appears, its exact-values disclosure opens, and
 the plot/labels stay inside the answer column in both themes. For the
 follow-up, keep the earlier turns in the same conversation. The final two
 questions are useful for seeing how Fella communicates data limitations; this
-suite records that response but does not judge its correctness.
+guide does not judge their correctness.
 
 ## Journey B — clarify, then continue
 
@@ -87,18 +80,3 @@ accepts the reply, the reply appears as a user turn, and Fella resumes in the
 same conversation. Open Analysis Details on the resumed turn to inspect its
 clarification lineage and source trail. The answer amount and interpretation
 are deliberately not graded here.
-
-## Audit output
-
-The live suite writes one JSON object per line to
-`test-results/e2e-journeys/<run-id>.jsonl` (or the path set in
-`FELLA_E2E_AUDIT_FILE`). Each turn record includes the exact submitted prompt,
-rendered response, typed clarification if present, visible Analysis Details,
-step names and outputs, chart table rows and geometry, elapsed time, and
-workflow-only pass/fail checks. It explicitly marks `answer_correctness_scored`
-as false. The final line summarizes workflow outcomes. Chart screenshots are
-saved beside the JSONL file in `<run-id>-screenshots/`.
-
-The suite does not change questions or expectations in response to a model
-output. A workflow failure means the interaction did not complete as designed;
-it does not mean the model's analytic answer was numerically incorrect.
