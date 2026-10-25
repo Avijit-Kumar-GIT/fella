@@ -170,6 +170,17 @@ source metadata, schema, ingest notes, skipped files, or root context changes.
 
 `verify.rs` belongs in the analytics module because its checks are deterministic operations over the catalog, SQL, answers, contracts, and recorded evidence. It receives only `AnalyticsSource`, never the full `EngineState`, and never calls a model. The agent owns bounded, model-driven repair; each verifier finding specifies its effect and target so the harness can preserve unrelated work. The [verification page](/concepts/verification) documents that authority boundary and its known false-negative/false-positive limits.
 
+### JSON-render presentations
+
+The answer presentation layer consumes accepted results from the analysis
+record. The model composes a JSON-render tree using a registered component
+catalog; chart and table components bind to saved result IDs and fields. This
+is separate from the make_chart analysis tool: the presentation layer decides
+how to arrange and explain available results, while the analytics engine
+remains responsible for producing them. The renderer cannot execute arbitrary
+code or query the workspace. Invalid presentation output does not remove the
+saved answer or evidence.
+
 ## Limits
 
 - SQLite is the default and shipped analytics backend. Parquet is unavailable in that build; DuckDB support is feature-gated, not an automatically selected runtime mode.

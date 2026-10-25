@@ -1,0 +1,96 @@
+---
+title: "Fella’s product model"
+description: "How Chat, workspaces, Investigations, analysis runs, findings, artifacts, and reports fit together."
+icon: "layers"
+---
+
+Fella keeps the conversation easy to start while giving analytical work a durable, inspectable home.
+
+## The interface
+
+The app has three sidebar destinations: **Chat**, **Files**, and **Reports**. Here, **window workspace** means how Chat and the optional Notebook are arranged in the window. The title-bar switcher chooses a **mounted folder** (called a workspace in saved records); that folder is the data boundary and does not determine the window layout.
+
+| Surface | What it is for |
+| --- | --- |
+| Chat | Ask questions, continue a conversation, and read generated answers. |
+| Notebook | An optional view beside Chat for the selected Investigation. It organizes the work without starting another analysis. |
+| Files | Browse the mounted folder, inspect cataloged files, and preview supported content. |
+| Reports | Create and reopen saved reports that collect narrative and pinned analytical outputs. |
+
+Notebook stays in the same app window. On a narrow window, the panes adapt to the available width; opening Notebook does not change source scope or analytical state.
+
+## The durable work
+
+| Object | Responsibility |
+| --- | --- |
+| Mounted folder (data workspace) | The explicitly selected local folder, its file catalog, context, and observed revision. |
+| Workspace knowledge | The user-authored `fella.md` guide and reusable facts learned during analysis. Learned facts retain their evidence, provenance, authority, freshness, and scope. |
+| Conversation | The message history used to ask and refine requests. A general conversation can remain unbound to a folder. |
+| Investigation | A named, persistent effort in one mounted-folder workspace. Creating one also creates its linked conversation. A normal new conversation does not automatically create an Investigation. |
+| Question | A root question or a smaller work item within an Investigation. Questions have explicit answer and coverage states. |
+| Analysis run | One execution of a question. It records the request, workspace revision, source scope, context used, tool trace, results, and verification. |
+| Evidence | The recorded source references, computations, outputs, and checks for a run. Evidence is not a guarantee that the interpretation was right. |
+| Finding | A saved conclusion linked to a Question, run, and evidence, with caveats, assumptions, and revision history. |
+| Artifact | A reusable, result-bound visualization or analytical output. Each revision points to its saved run and exact source results. |
+| Report | A document in the mounted-folder workspace with authored notes and references to exact artifact revisions. Updating an artifact does not silently change a report that pins an earlier revision. |
+
+The normal path is lightweight: ask in Chat, then open Notebook when the work benefits from a brief, a Question plan, source choices, run history, or saved Findings. The Investigation can be named, edited, resumed, and reviewed independently of the transcript.
+
+## Workspace context and knowledge
+
+Choose **Workspace context** from the title-bar workspace actions to edit `fella.md` and review knowledge built from analysis. The guide contains user-authored definitions and instructions. Analysis-derived facts retain their supporting run and evidence; a proposal can stay within its originating Investigation, be edited, be shared across the workspace, or be dismissed. Investigation definitions remain scoped to their Investigation unless the user explicitly promotes a fact.
+
+## Notebook organization
+
+An Investigation’s main sections are:
+
+- **Brief** — its title, objective, and working context.
+- **Sources** — what the workspace contains, source readiness, and the files chosen for the work.
+- **Questions** — the root question, its subquestions, and their answer states.
+- **Analysis** — saved runs, methods, source revisions, evidence, and checks.
+- **Results** — the current answers, saved Findings, caveats, and coverage.
+
+The separate **Share** action opens a reviewable report preview and Markdown export for the Investigation. The selected Question and source scope are recorded on the run. Editing the current Investigation later does not rewrite the context or evidence of an earlier run.
+
+## Analytical changes
+
+An analytical diff compares a saved output revision with another revision of that same output. It answers five questions:
+
+1. **Meaning:** Did the question, definition, filter, or assumption change?
+2. **Inputs:** Did the source selection or source revision change?
+3. **Method:** Did the saved computation or presentation change?
+4. **Results:** What values changed, when the two result sets can be safely aligned?
+5. **Impact:** Which explicit report placements or checkpoints refer to the earlier revision?
+
+Fella withholds numeric deltas when the comparison cannot establish compatible keys, grain, units, periods, source boundaries, and complete results. Missing values are not treated as zero; integer deltas remain exact and floating-point deltas are marked approximate. Comparing or opening a revision does not rerun analysis or adopt it. Adoption is an explicit action.
+
+Impact discovery is limited to indexed report placements and checkpoints. It does not find every prose mention, Finding, Question, or external copy. A source refresh marks older work for review; it does not silently recompute saved answers.
+
+## Generated answers
+
+When a question has useful structured results, Fella asks the model to compose a responsive JSON-render presentation using registered components such as prose, metrics, tables, charts, callouts, and presentation-only controls. The model chooses a layout suited to the question and results. It does not get to invent a new data source or execute code in the renderer: analytical values bind to saved result IDs and fields, and the client validates the presentation before rendering it.
+
+Plain-language answers remain valid when a structured view is unnecessary or cannot be composed. Reopening a saved answer uses its saved presentation and results rather than rerunning the analysis.
+
+## Retention and deletion
+
+Deleting a conversation removes its transcript and linked Investigation. Saved artifacts, reports, their revisions, and the analysis records needed to support saved work remain in that workspace. The confirmation dialog explains this before deletion. Removing a workspace from the sidebar also leaves its folder and files untouched; reconnect the folder to open its saved reports and results.
+
+## Current boundary
+
+The app currently uses one selected provider model for a conversation. Fella does not provide automatic model routing or a Fella-hosted inference service. The Rust engine remains responsible for data access, computation, evidence, and verification; the model directs the investigation and composes the explanation and presentation.
+
+<CardGroup cols={2}>
+  <Card title="Investigations" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Create and review a persistent analytical investigation.
+  </Card>
+  <Card title="Reports and saved outputs" icon="files" href="/developer-platform/using-fella/reports">
+    Preserve results, compare revisions, and export a report.
+  </Card>
+  <Card title="Models and providers" icon="cpu" href="/developer-platform/using-fella/models">
+    Connect a provider and choose a model for the conversation.
+  </Card>
+  <Card title="Architecture" icon="workflow" href="/concepts/architecture">
+    See how the model, Rust engine, persistence, and renderer fit together.
+  </Card>
+</CardGroup>

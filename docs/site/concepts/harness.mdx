@@ -1,125 +1,61 @@
 ---
 title: "The harness"
-description: "How Fella controls model context, tool calls, evidence, verification, and stopping."
+description: "How Fella coordinates model requests, tool execution, evidence, verification, and presentation."
 icon: "workflow"
 ---
 
-> The harness turns model responses into a bounded, inspectable loop.
+The harness is the control layer around the selected model. It assembles context, exposes approved tools, validates and executes tool calls, records evidence, and finishes the answer.
 
-## Definition
+## Context and scope
 
-The harness is the control layer around the model. It decides what context and tool schemas to send, executes requested tools through the registry, returns results to the model, and records the work shown with the answer.
+For a workspace conversation, the request can include the active folder catalog, relevant source profiles, the immediate user message, recent conversation context, workspace context, and—when the conversation belongs to an Investigation—the selected Question, source scope, and saved definitions or assumptions.
 
-It is a linear loop, not a planner graph, critic swarm, or sub-agent hierarchy.
+The harness records the workspace revision and Investigation context used by each run. Later edits do not rewrite the saved run.
 
-## Architecture
+Without a mounted workspace, data-analysis tools are unavailable. The model can still answer general questions, but those answers have no workspace evidence.
 
-For each question, the harness builds a system prompt from the workspace catalog and schema, optional root `fella.md`, recent conversation context, and learned folder notes. The user question follows as a separate message.
+## Tool loop
 
-If no workspace is available, the model receives no tool schemas. With a
-workspace, it receives only the fixed built-in registry for that run; the
-registry has no runtime connector or plugin expansion path.
+1. The selected model returns text or a request to use one or more registered tools.
+2. The harness validates tool names and arguments, then sends approved calls to the Rust engine.
+3. The engine returns bounded results or an explicit error.
+4. The harness records the result as evidence and supplies it to the next model turn.
+5. When the model finishes, deterministic verification checks the answer against available evidence and execution records.
 
-## Flow
+The model can inspect, calculate, revise its interpretation, and combine tools as needed. SQL and sandboxed Python are both available; document search and reading are separate paths. The harness is model-directed but the engine enforces execution scope.
 
-<Steps>
-  <Step title="Ask the model">
-    Fella streams the response. The model can return text, tool calls, or both.
-  </Step>
-  <Step title="Execute calls">
-    Exact duplicate built-in calls reuse their result within the run. Other calls from the same response execute concurrently and are returned in call order.
-  </Step>
-  <Step title="Record evidence">
-    Each call produces an evidence item with its arguments, summary, timing, result data, and error where applicable.
-  </Step>
-  <Step title="Repeat or finish">
-    Tool results enter the next model turn. A response with no tool calls moves to verification and completion.
-  </Step>
-</Steps>
+## Presentation composition
 
-The control flow is intentionally linear. This abbreviated excerpt shows the important ordering without the error-handling branches:
+When accepted analysis results support a useful structured view, the model composes a JSON-render document using the registered component catalog. It can choose a prose, metric, table, chart, or mixed layout that fits the question. It is not required to produce the same visualization for every result.
 
-```rust
-for step in 0..max_steps() {
-    let response = llm.chat(&messages, &schemas, &notify, &on_delta).await?;
+Analytical values reference saved result IDs and fields. The validator rejects unknown components, invalid props, missing results, and unsupported bindings. The renderer does not execute model-authored code and cannot independently access workspace files. Presentation failure leaves the canonical answer and analysis evidence available.
 
-    if response.tool_calls.is_empty() {
-        let checks = verify::run(engine, question, &response.content, &evidence);
-        return Ok(finish_with(
-            engine, response.content, evidence, usage, checks, emit,
-        ));
-    }
+Saved presentation snapshots allow the interface to restore an answer without calling the model or recomputing the analysis merely to reopen the conversation.
 
-    messages.push(ChatMessage::Assistant {
-        content: response.content.clone(),
-        tool_calls: response.tool_calls.clone(),
-    });
-
-    // The production code handles exact duplicates separately, then joins
-    // non-duplicate calls and stitches them back into call order.
-    let outcomes = join_all(
-        response
-            .tool_calls
-            .iter()
-            .map(|call| run_tool_call(engine, registry, call)),
-    )
-    .await;
-
-    for (call, (item, llm_text)) in response.tool_calls.iter().zip(outcomes) {
-        emit(AskEvent::ToolEnd { item: Box::new(item.clone()) });
-        evidence.push(item);
-        messages.push(ChatMessage::Tool {
-            call_id: call.id.clone(),
-            name: call.name.clone(),
-            content: llm_text,
-        });
-    }
-
-    trim_history(&mut messages);
-}
-```
-
-This is a documentation excerpt, not a drop-in function: the production loop also races model calls against cancellation, handles partial model failures, memoizes exact duplicate built-in calls, emits UI events, and performs the final no-tool turn after the step cap. The implementation is in [`agent::run`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/agent.rs).
-
-`EngineState::ask_once` and `ask_once_usage` are separate evaluation helpers.
-They make one tool-free model call for judge/baseline measurements and are not
-used by the interactive product path; they do not create evidence or run
-verification.
-
-## Behavior
-
-The prompt guides the model to inspect, interpret, decompose, and choose among the available read-only tools. It may use SQL, sandboxed Python, document search, or charts, and can revise its plan as new observations arrive. Forecasts and scenarios are allowed, with observed data kept distinct from estimates and assumptions. These are behavior instructions, not enforcement boundaries.
-
-Deterministic verification always runs when the harness finishes an answer. Findings carry an explicit effect and target; the agent can make up to three tool-backed repairs without discarding unrelated accepted evidence. Only an explicit answer-scoped integrity finding blocks the answer. A separate cost-gated same-model consistency check may run after a warning; disagreement is informational, not independent proof. Set `FELLA_SELF_CHECK=0` to opt out. See [Verification and evidence](/concepts/verification) for the current authority policy.
-
-### Guidance versus enforcement
+## Guidance and enforcement
 
 | Layer | Example | Enforced by |
 | --- | --- | --- |
-| Prompt guidance | Inspect and choose a suitable route; qualify forecasts; explain actual evidence limits | `PromptProfile` text in `agent.rs`; a model can still misunderstand it |
-| Tool boundary | The model can call only schemas in the registry; built-in SQL and document tools resolve through the engine | `Registry`, tool implementations, and catalog lookup |
-| SQL boundary | One guarded, read-only statement with blocked mutation/file-reading operations | `analytics::data::ensure_read_only` plus the backend connection |
-| Python boundary | Embedded `wasm32-unknown-unknown` RustPython guest; no OS imports; fuel, memory, stack, source, output, SQL-row, and SQL-response caps | `analytics::pyexec` + `python-sandbox`; stronger capability isolation with Wasmi/RustPython in the trusted base |
-| Answer checks | Reruns, number grounding, query-shape heuristics, and label checks | `analytics::verify`; warnings are not semantic proof |
+| Prompt guidance | Inspect relevant files and explain uncertainty | Model instructions; guidance can be misunderstood |
+| Tool access | Call only registered tools | Rust dispatcher and schemas |
+| Data boundary | Read cataloged sources and run bounded queries | Workspace catalog and analytics engine |
+| Python boundary | Run in an embedded WASM guest without filesystem, network, or subprocess access | Wasmi host interface and resource limits |
+| Verification | Check replay, grounding, and known result risks | Deterministic verifier |
+| Presentation | Render a validated tree bound to supplied results | Presentation schema, result binder, and Svelte component registry |
 
 ## Limits
 
-- The default hard cap is 20 tool-calling iterations (`FELLA_MAX_STEPS`). At the cap, the harness requests one final answer with tools disabled.
-- Soft stop pressure begins after the normal three-round-trip budget (`FELLA_SOFT_STOP`).
-- Older tool results are elided as history grows and can be queried again.
-- Stop cancels the active model request, keeps collected evidence, and returns `Stopped.`
-- Prompt rules still do not define the Python capability boundary. The embedded WASM guest has no OS imports; Wasmi limits the guest and the host exposes only output, entropy for interpreter startup, and bounded read-only SQL.
-- Verification can identify evidence and query-shape problems, not resolve every ambiguous interpretation.
-
-The major loop changes were introduced incrementally: [PR #39](https://github.com/Avijit-Kumar-GIT/fella/pull/39) added the scored evaluation harness, [PR #95](https://github.com/Avijit-Kumar-GIT/fella/pull/95) added escalating stop pressure, [PR #97](https://github.com/Avijit-Kumar-GIT/fella/pull/97) added the cost-gated second opinion, and [PR #134](https://github.com/Avijit-Kumar-GIT/fella/pull/134) added the current depth/aside prompt behavior. The current code, not any one historical PR description, is authoritative.
-
-## Next steps
+- The model may misunderstand a question or choose a semantically wrong query.
+- Tool success is not proof that a query answered the intended question.
+- Verification can identify concrete inconsistencies but cannot guarantee correctness.
+- JSON-render validates what is shown; it does not validate the meaning of the model’s prose by itself.
+- No model output can add a shell, filesystem write operation, web tool, or connector.
 
 <CardGroup cols={2}>
   <Card title="Built-in tools" icon="wrench" href="/concepts/tools">
-    See what the harness can execute and which boundaries each tool enforces.
+    See the local operations the harness can call.
   </Card>
   <Card title="Verification" icon="badge-check" href="/concepts/verification">
-    Separate deterministic checks from model-based second opinions.
+    Understand deterministic checks and their limits.
   </Card>
 </CardGroup>

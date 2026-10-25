@@ -1,0 +1,60 @@
+---
+title: "Changes since v0.3.0"
+description: "A guide to the product and architecture work added after the v0.3.0 release."
+icon: "sparkles"
+---
+
+The latest release tag in this repository is **v0.3.0**, dated October 7, 2026. The current branch has moved well beyond that release. This page describes the current source tree; the v0.3.0 installers do not include all of these changes.
+
+## A clearer desktop workspace
+
+- The left sidebar is organized around **Chat**, **Files**, and **Reports**.
+- A mounted folder is selected from the title bar and remains the explicit source boundary.
+- Notebook can sit beside Chat to show the active Investigation. Its panes adapt to narrower windows, and the app retains native operating-system window controls.
+- The file view includes a folder hierarchy, catalog status, and supported source previews.
+- The shell/terminal feature has been removed from the product.
+
+## Workspace knowledge
+
+The Workspace context view brings the user-authored `fella.md` guide together with reusable knowledge derived from analysis and Investigation definitions. Learned facts keep their provenance, evidence, freshness, and scope. The user can keep a proposal within its Investigation, edit it, share it across the workspace, or dismiss it; Investigation-local definitions do not silently become workspace-wide rules.
+
+## Persistent Investigations
+
+Investigations are now durable, named records with a linked conversation. They can hold an editable brief, an ordered Question plan, per-Question source choices, definitions and assumptions, answer status, saved runs, and Findings.
+
+Each run records its workspace revision, actual sources, context snapshot, execution trace, results, and verification. Results distinguish answered work from incomplete, unsupported, blocked, outdated, or still-unstarted Questions. A completed run does not automatically mean the whole Investigation has complete coverage.
+
+## Result-bound generative presentations
+
+The default structured-answer path now uses JSON-render. The model can compose prose, cards, metrics, tables, charts, and supported interactive controls in a response-specific layout. A chart is used when it explains the result better than a table; the system does not force every result into one presentation form.
+
+Generated presentations reference saved analytical results. The renderer validates the component tree, fields, and bindings and does not execute model-authored code. A presentation failure leaves the canonical answer and analysis available as text. Saved presentations can be restored without rerunning the analysis.
+
+## Reusable results and reports
+
+- Analytical outputs have workspace-scoped identities and revisions tied to the run that produced them.
+- Users can revise a saved result, compare its meaning, inputs, method, results, and known report impact, then explicitly adopt a revision.
+- Reports can combine authored narrative with exact pinned output revisions.
+- Reports can be exported as Markdown or as a portable Fella snapshot. Imported snapshots are read-only and cannot query the original files.
+- Saved outputs and their supporting analysis records survive deletion of their conversation; the transcript and linked Investigation are deleted.
+
+## Model choice and app navigation
+
+Provider credentials remain user supplied. A conversation’s selected model is visible and changeable from the composer; the current app does not automatically route between specialist models. The existing provider options and defaults are listed in [Models and providers](/developer-platform/using-fella/models).
+
+The guide pages now follow the current product model: Chat is the conversational surface, Investigations own persistent analysis, and Reports preserve selected work for review and handoff.
+
+<CardGroup cols={2}>
+  <Card title="Product model" icon="layers" href="/product-model">
+    Understand the current objects and how they relate.
+  </Card>
+  <Card title="Investigations" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Use the Brief, Sources, Questions, Analysis, and Results views.
+  </Card>
+  <Card title="Reports" icon="files" href="/developer-platform/using-fella/reports">
+    Save, revise, compare, and export analytical outputs.
+  </Card>
+  <Card title="Getting started" icon="play" href="/getting-started">
+    Set up a provider and open a folder in the desktop app.
+  </Card>
+</CardGroup>

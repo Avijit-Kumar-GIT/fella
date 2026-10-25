@@ -1,0 +1,54 @@
+---
+title: "Reports and saved outputs"
+description: "Save analytical results, compose reports, compare revisions, and export portable work."
+icon: "files"
+---
+
+Fella separates an analysis from the report that presents it. A saved output keeps the exact run and result it came from; a report can arrange selected outputs with narrative and notes.
+
+## Create a report
+
+- Choose **Create report** below an analytical answer to start a report with that saved output.
+- Or select **Reports** in the sidebar and use the plus button to create a report.
+- Add narrative notes and choose other saved outputs to include.
+
+Reports belong to the mounted workspace. Each placement pins a specific output revision. Opening or rearranging a placement displays that saved revision; it does not rerun the analysis.
+
+## Revise an output
+
+Ask for a change to a saved result, such as changing its comparison period or filtering rule. Fella records a candidate revision tied to the new analysis run. You can inspect the candidate and compare it with the current revision before explicitly adopting it.
+
+An **analytical diff** explains the change across five dimensions:
+
+| Dimension | What is compared |
+| --- | --- |
+| Meaning | Question, recorded definition, filter, or assumption semantics. |
+| Inputs | Selected sources and the observed source revision. |
+| Method | Saved computation and presentation specification. |
+| Results | Aligned values and deltas, only when the result sets are compatible. |
+| Impact | Explicit report placements and checkpoints found in the workspace index. |
+
+The numeric comparison requires compatible keys, grain, units, periods, source boundaries, and complete results. If alignment is unsafe, Fella reports why and does not display numerical deltas. Missing values are not zero. Integer differences are exact; floating-point differences are labeled approximate.
+
+Inspecting a candidate does not adopt it, alter verification, move report placements, or recompute results. A report that pins the old revision continues to show it until you choose to update the placement. The impact view finds indexed report placements and checkpoints; it does not search prose, every Finding or Question, or files outside Fella.
+
+## Export and import
+
+- **Markdown export** creates a portable narrative from saved report content and results. Fella preserves exact values and adds a note when a visual cannot be faithfully represented as Markdown.
+- **Portable snapshot export** packages the report, pinned outputs, saved runs, and supporting data into a Fella report file.
+- **Snapshot import** stores a read-only copy. Imported data cannot query the original workspace files, and imported presentations do not execute code.
+
+An Investigation’s **Share** action offers a separate Markdown handoff focused on that Investigation’s brief, Questions, Findings, analysis methods, and coverage.
+
+## Deletion and retention
+
+Deleting a conversation removes its transcript and linked Investigation. Saved outputs, reports, revisions, and the analysis records that support saved work remain available in the workspace. Deleting a workspace entry from the sidebar also leaves the folder and its files untouched; reconnect that folder to reopen the retained work.
+
+<CardGroup cols={2}>
+  <Card title="Investigations" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Review the Question plan, coverage, and Investigation handoff.
+  </Card>
+  <Card title="Product model" icon="layers" href="/product-model">
+    See how saved artifacts and reports fit into Fella’s work model.
+  </Card>
+</CardGroup>

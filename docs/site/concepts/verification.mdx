@@ -33,6 +33,12 @@ source result, prose, and other artifacts remain available. An unsupported
 claim can be repaired or omitted without discarding the evidence that supports
 the rest of the answer.
 
+Structured presentation validation is a separate boundary. If a JSON-render
+tree or result binding is invalid, Fella can withhold that view while keeping
+the canonical answer, saved analysis run, and evidence. A valid presentation
+only establishes that its registered components and data bindings are
+well-formed; it does not prove that the prose or interpretation is correct.
+
 ## Flow
 
 1. The model answers from its gathered evidence; the verifier runs deterministic

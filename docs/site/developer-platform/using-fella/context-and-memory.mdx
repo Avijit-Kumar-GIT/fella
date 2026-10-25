@@ -1,66 +1,38 @@
 ---
 title: "Context and memory"
-description: "Teach Fella your vocabulary and understand what it remembers about a workspace."
+description: "Provide workspace conventions and distinguish context from evidence."
 icon: "brain"
 ---
 
-Fella can use context you write, verified field bindings, and definitions it proposes while analyzing. Context can guide interpretation, but it is not evidence and cannot grant a tool or permission.
+Workspace context helps Fella interpret your information. It does not prove a value, change source files, or grant the model new capabilities. Open **Workspace context** from the title-bar workspace actions, or use `/context`.
 
-## `fella.md`
+## The workspace guide
 
-<Steps>
-  <Step title="Open the context editor">
-    Type `/context`, or create `fella.md` at the workspace root.
-  </Step>
-  <Step title="Describe stable conventions">
+The root `fella.md` file is user-authored guidance for one mounted folder. Edit it in the Workspace context view or create it directly in the folder. It is included as context, not treated as an evidence source.
 
-```markdown filename="fella.md"
-Statements are one file per month, named statement-YYYY-MM.csv.
-Amounts are in GBP. "Spending" excludes transfers between my own accounts.
-The category called housing is part of rent for my reports.
-```
+You might explain that amounts use GBP, transfers are not spending, or that one category should be grouped with another. Fella can use those conventions to interpret a question. Numbers in an answer still need evidence from the workspace.
 
-  </Step>
-  <Step title="Ask with the new context">
-    Fella reads the file at the start of each question. It can use the conventions to interpret a request, but figures still need tool evidence from workspace data.
-  </Step>
-</Steps>
+## Knowledge learned from analysis
 
-## Folder memory
+Fella can surface reusable facts while analyzing the workspace. Each fact keeps its origin, evidence references, source revision, authority, and current state. A proposed fact can remain provisional to its Investigation, be edited, be shared across the workspace, or be dismissed. Superseded facts remain available in the history. Review the provenance and freshness before relying on a learned fact.
 
-Folder memory lives as human-readable Markdown in Fella's application data directory, separate from the workspace. It is keyed to the folder path and re-read for each question.
+## Investigation definitions and assumptions
 
-```text filename="fella commands"
-/memory
-/memory forget
-```
+An Investigation can store explicit definitions and assumptions for its own work. These are separate from folder-wide context and learned workspace facts. Each run records the exact definitions and revisions it received, so later edits do not rewrite its history. Definitions stay local to that Investigation unless the user explicitly promotes a fact to workspace scope.
 
-Learning is limited to reusable semantics, not cached query plans. After an analysis, Fella can retain assumptions, value meanings, missing-value policies, denominators, derived metrics, and verified field bindings with the source turn and workspace revision. Contract-derived notes stay provisional in the Investigation that produced them and are presented back only as hypotheses to validate; other Investigations do not receive them. You can keep a suggestion local, edit it, dismiss it, or accept it for the whole workspace. A follow-up recognized as a correction can also add, update, or deduplicate a vocabulary note. Fella records a bounded local episode log, but does not read that log back as memory or cache old query results as facts.
+Model-suggested meaning is not automatically authoritative. Review proposed definitions before relying on them in a later analysis or handoff.
 
-<Warning>
-  A correction may trigger an additional model request to reconcile vocabulary. With a hosted provider, that correction and the existing vocabulary notes are sent to the provider. Model-proposed analysis notes are not a confirmation of business meaning; validate them before sharing them across the workspace.
-</Warning>
+## Existing folder memory
 
-## Context is not permission
+Earlier versions also saved lightweight vocabulary notes and reusable semantics as folder memory. This is not a cache of query results and should not replace source verification. Existing notes remain visible in Workspace context; use the memory controls to clear them when they no longer match your files.
 
-`fella.md` and memory can influence how the model interprets a question, but
-they cannot grant it a new tool or a write capability. The read-only boundary
-comes from the registry and engine.
+## Context is not evidence or permission
 
-## When to use which
+| Information | What it can do | What it cannot do |
+| --- | --- | --- |
+| `fella.md` guide | Explain stable vocabulary, file conventions, or metric meaning. | Establish a numeric result without source evidence. |
+| Learned workspace facts | Carry reviewed, provenance-linked facts at their accepted scope. | Make stale evidence current or grant file access. |
+| Investigation definitions | Guide one Investigation and preserve revisions per run. | Rewrite the context of prior runs or silently become workspace rules. |
+| Source data | Support an observed result when selected and analyzed. | Automatically establish that the selected population is complete. |
 
-| Need | Use |
-| --- | --- |
-| Stable file conventions | `fella.md` |
-| An explicit vocabulary correction that should carry across conversations | Folder memory |
-| Provider-specific or domain-wide guidance | `fella.md` plus the normal question |
-| New external data | Mount the files in the workspace |
-
-<CardGroup cols={2}>
-  <Card title="Experimental MCP" icon="puzzle" href="/extensions-and-mcp">
-    Read the inert extension boundary for future forks.
-  </Card>
-  <Card title="The model prompt" icon="scroll-text" href="/concepts/harness">
-    See where context enters the reasoning loop.
-  </Card>
-</CardGroup>
+The Rust tool registry and engine enforce data access and execution boundaries. Context text cannot add a shell, write operation, network tool, or arbitrary renderer code.

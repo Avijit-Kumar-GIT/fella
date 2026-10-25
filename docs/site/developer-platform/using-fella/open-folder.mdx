@@ -1,76 +1,37 @@
 ---
 title: "Open a folder"
-description: "Choose the workspace Fella can inspect and understand how the catalog is built."
+description: "Choose a local workspace and understand what Fella catalogs."
 icon: "folder-open"
 ---
 
-The selected folder defines the workspace available to built-in file and table tools.
+The mounted folder is Fella’s explicit file-access boundary. The workspace switcher in the title bar lets you open or change that folder. The window’s panel arrangement is a separate presentation choice.
 
-## Open a workspace
+## Open and inspect a workspace
 
-<Steps>
-  <Step title="Choose the folder">
-    Click **choose a folder** below the composer, drag a folder into the window, or use `/open`.
+1. Choose a folder with the workspace switcher, or drag a folder into the app.
+2. Select **Files** in the sidebar and review usable and skipped items.
+3. Open a file preview or ask a question in Chat.
+4. After changing files, refresh or reindex the workspace before relying on a new result.
 
-```text filename="fella command"
-/open /path/to/your/files
-```
+Fella scans to a bounded depth, skips hidden paths, does not follow symbolic links, and applies root .fellaignore rules. A root fella.md file is user-authored context and is not ingested as data.
 
-  </Step>
-  <Step title="Review the catalog">
-    Run `/files` to see loaded tables and documents plus noticed files that could not be used.
-  </Step>
-  <Step title="Ask or refine the scan">
-    Ask a question, or add `.fellaignore` and run `/reindex` to change what is catalogued.
-  </Step>
-</Steps>
+## Keep the workspace boundary clear
 
-## What the scan does
+Opening a workspace makes its catalog available to built-in tools. It does not send every file to the model. When a question calls for file-derived content, the model can request specific table results or document passages; those requests may be sent to your selected provider.
 
-Fella walks to a bounded depth, silently skips hidden entries, does not follow symlinks, and applies `.fellaignore` from the workspace root. A root `fella.md` is skipped as data because it is user-authored context.
+Source files are read-only to the agent. Fella can create local catalogs, analysis records, saved outputs, and reports in its own application-data directory.
 
-The default scan depth is eight directories. `FELLA_SCAN_DEPTH` can override it for a controlled environment.
+## Source names and folders
 
-After scanning, Fella reports both usable sources and files it noticed but could not load. Use `/files` to inspect the catalog and `/reindex` after changing the folder.
+Use **Files** to browse folders and select a source. Tabular files become queryable tables with generated names; sheets in a workbook are listed separately. The catalog and small previews help you verify what was loaded, but do not establish that a file covers the requested population or period.
 
-## Workspace names
-
-Tabular files become table names derived from their filename:
-
-```text filename="catalog naming"
-Bank Statement 2024.csv -> bank_statement_2024
-123 transactions.json   -> t_123_transactions
-report.csv + report.json -> report and report_2
-```
-
-Names are lowercased, punctuation becomes underscores, leading digits get a `t_` prefix, and collisions get a numeric suffix. Multi-sheet workbooks append the sheet name to the file stem. `/schema <name>` shows row count, columns, types, and null percentages.
-
-## Ignore a path
-
-Create `.fellaignore` in the workspace root. Put one filename or workspace-relative path prefix on each line:
-
-```text filename=".fellaignore"
-private/
-old-export.csv
-receipts/archive/
-# comments are allowed
-```
-
-Blank lines and lines starting with `#` are ignored. Other entries match an exact filename, an exact workspace-relative path, or a workspace-relative directory prefix. Glob patterns are not supported.
-
-## Reopen safely
-
-Fella starts without mounting the last workspace. The welcome screen can offer a one-click reopen; pressing `Enter` with an empty composer can also reopen it. Reopening a conversation from history mounts its saved workspace when that folder still exists.
-
-<Warning>
-  The built-in workspace tools stay within the catalogued folder, and `run_python` runs in an embedded guest without filesystem access. See [privacy and security](/developer-platform/using-fella/privacy).
-</Warning>
+A root .fellaignore file accepts file names and workspace-relative path prefixes, one per line. Glob patterns are not supported.
 
 <CardGroup cols={2}>
-  <Card title="Understand file types" icon="files" href="/developer-platform/using-fella/files">
-    See which files become tables and which stay documents.
+  <Card title="Supported files" icon="files" href="/developer-platform/using-fella/files">
+    See the formats and catalog behavior.
   </Card>
-  <Card title="Add workspace context" icon="file-pen-line" href="/developer-platform/using-fella/context-and-memory">
-    Explain your own vocabulary with `fella.md`.
+  <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
+    Review local storage and provider egress.
   </Card>
 </CardGroup>

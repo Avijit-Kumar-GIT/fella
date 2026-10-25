@@ -85,6 +85,8 @@ For tables, the expected path is inspection when needed followed by `run_sql`. F
 
 ## Behavior
 
+The final answer can include a separate JSON-render composition step. It is not an eighth data tool: it cannot inspect files, run SQL, or create analytical values. It receives accepted result bindings and composes a validated presentation from the registered component catalog.
+
 The model selects tools to fit the analytical question: inspect tabular structure and values, query relational data, use Python for statistical work, search/read documents, or combine them when evidence spans formats. No language or tool sequence is the universal route. `run_sql` accepts a single guarded read-only query, and the SQLite query connection is opened read-only. Direct file-reading SQL functions are blocked.
 
 There is no MCP execution path in the personal release. A future connector
@@ -97,7 +99,7 @@ an official feature.
 - The Python guest's fuel, memory, stack, source, output, SQL-row, and SQL-response limits are cross-platform; the host SQL watchdog applies to each SQL call.
 - Tool outputs are capped, so evidence can contain a sample rather than every returned row or character.
 
-Direct `/sql` is deliberately outside this registry path: it calls the engine directly, prints a system result, and does not create an assistant evidence fold or invoke post-answer verification.
+Direct `/sql` is deliberately outside this registry path: it calls the engine directly, prints a system result, and does not create an assistant analysis record or invoke post-answer verification.
 
 ## Next steps
 

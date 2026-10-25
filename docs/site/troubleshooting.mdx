@@ -13,8 +13,8 @@ Start with the smallest direct check. A source problem, provider problem, and in
 | A file is missing | `/files` | Check format, hidden path, scan depth, permissions, and `.fellaignore` |
 | A total looks wrong | `/schema <table>` | Check type inference, units, casing, nulls, and totals rows |
 | The model cannot answer | `/login`, then `/model` | Sign in again or choose a tool-capable model |
-| A query times out | Inspect working or use `/sql` | Add a date filter, narrower columns, grouping, or `LIMIT` |
-| Python fails | Inspect stderr in working | Fix the snippet, reduce its input, or use SQL only if SQL is the better fit for that analysis |
+| A query times out | Open **How this was analyzed** or use `/sql` | Add a date filter, narrower columns, grouping, or `LIMIT` |
+| Python fails | Open **How this was analyzed** and inspect the run details | Reduce its input or clarify the calculation; use SQL when it better fits the analysis |
 | A PDF has no useful text | Open the PDF outside Fella | OCR it and reopen or `/reindex` the folder |
 | You typed `/mcp` | `/mcp` | It is an inert experimental command in this release |
 | Changes do not appear | `/reindex`, then `/files` | Refresh the catalog after external edits |
@@ -52,7 +52,7 @@ HTTP `429` and transient server failures may be retried, but quota, billing, pri
 
 ## An answer is plausible but wrong
 
-Open the working fold and check, in order:
+Open **How this was analyzed** and check, in order:
 
 1. Correct files and tables.
 2. Correct date range, units, category spelling, and status filters.
@@ -63,9 +63,9 @@ Open the working fold and check, in order:
 
 A query can run successfully and return a grounded number while answering the wrong interpretation. Restate the rule explicitly, ask Fella to show intermediate totals, or run direct `/sql`. A green check is not a semantic correctness guarantee.
 
-## There is no working fold
+## There are no analysis details
 
-Fella can answer general or conversational questions without a tool call. No call means no workspace evidence. Ask a source-bound question such as "Using `transactions.csv`, calculate..." or request the relevant file/table explicitly.
+Fella can answer general or conversational questions without a tool call. In that case there is no recorded workspace analysis or source evidence to inspect. Ask a source-bound question such as "Using `transactions.csv`, calculate..." or request the relevant file/table explicitly.
 
 ## Python fails or feels unsafe
 

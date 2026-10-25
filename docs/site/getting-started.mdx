@@ -1,126 +1,64 @@
 ---
 title: "Getting started"
-description: "Install Fella, connect a model, open a folder, and inspect a tool-backed answer."
+description: "Install Fella, connect a provider, open a folder, and inspect your first answer."
 icon: "play"
 ---
 
-# Get an inspectable answer
-
-By the end of this guide, Fella will have scanned a folder, answered a question from its contents, and shown you the computation behind the result.
+## Start with one question
 
 <Steps>
-  <Step title="Install the desktop app">
-    Download the current unsigned build from [GitHub Releases](https://github.com/Avijit-Kumar-GIT/fella/releases/latest). Releases provide a universal macOS `.dmg`, Windows installers, and x86_64 Linux `.AppImage` and `.deb` artifacts.
-
-    ```bash filename="macOS or Linux"
-    curl -fsSL https://lilfella.app/install.sh | sh
-    ```
-
-    ```powershell filename="Windows PowerShell"
-    irm https://lilfella.app/install.ps1 | iex
-    ```
-
-    Current builds are unsigned. Review a script before piping it to a shell, or download an installer and compare it with the release's `SHA256SUMS`.
+  <Step title="Install Fella">
+    Download the latest published installer from [GitHub Releases](https://github.com/Avijit-Kumar-GIT/fella/releases/latest). The documentation on this site follows the current repository branch, which is ahead of the v0.3.0 release.
   </Step>
-
-  <Step title="Connect a tool-capable model">
-    Fella is BYOK-only. Connect a hosted provider with your own API key before
-    asking a question.
-
-    ```bash filename="terminal"
-    /login ollama-cloud key [api-key]
-    /model gemma4:31b
-    ```
-
-    Run `/login`, choose OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter,
-    or a custom OpenAI-compatible endpoint, then use `/model` to inspect the
-    provider's current model list.
-
-    ```text filename="fella commands"
-    /login
-    /model
-    ```
-
-    The provider receives prompts and any context or tool results used for the answer; tool results can include document text or data rows from your folder. Keys are stored in local `auth.json`, not in the settings database, browser storage, or transcript. Read [Privacy and security](/developer-platform/using-fella/privacy) before using sensitive files.
+  <Step title="Connect a model provider">
+    Open **Settings**, choose a provider, and add your own API key. Fella is BYOK-only. After connecting, the composer shows the selected model; choose a different available model there when needed.
   </Step>
-
-  <Step title="Open a focused folder">
-    Choose **Open folder**, drag a folder into the window, or enter:
-
-    ```text filename="fella command"
-    /open /path/to/your/files
-    ```
-    or to open the file explorer:
-    ```text filename="fella command"
-    /open
-    ```
-
-    Start with a small folder containing only relevant files. Fella scans up to eight levels deep, skips hidden paths, does not follow links, and applies root `.fellaignore` name or path-prefix rules. A root `fella.md` supplies context and is not treated as evidence data.
+  <Step title="Open a folder">
+    Use the workspace switcher in the title bar to choose a folder. This folder is the explicit data boundary for file-backed analysis. Fella catalogs supported sources locally.
   </Step>
-
-  <Step title="Confirm what loaded">
-    Run `/files`.
-
-    ```text filename="fella commands"
-    /files
-    ```
-
-    Check skipped files, inferred types, units, date shapes, nulls, and ingest notes before trusting an aggregate. This catches the most common source problems earlier than a natural-language question does.
+  <Step title="Review Files">
+    Select **Files** in the left sidebar to browse the folder hierarchy, see which files were cataloged, and open supported previews. Check skipped files before relying on an answer.
   </Step>
-
-  <Step title="Ask and inspect">
-    Ask for a bounded outcome that names the measure and time range.
-
-    ```text filename="first question"
-    Using transactions.csv, compare total grocery spending in January and February 2025. Show both totals and the difference.
-    ```
-
-    Open the **working** fold under the response. Confirm the right source was selected, the query filters match your wording, units are correct, returned rows support the answer, and no verification warning needs attention.
+  <Step title="Ask in Chat">
+    Return to **Chat** and ask a specific question. For example: “Using orders.csv, compare net sales by month for 2024 and 2025, and explain the largest change.”
+  </Step>
+  <Step title="Inspect or preserve the work">
+    Open **How this was analyzed** below a response for the run details. Open Notebook to create or review a persistent Investigation, or choose **Create report** to save a useful output.
   </Step>
 </Steps>
 
-## What the shipped app can use
+## Supported inputs
 
-| Capability | Current support | Qualification |
+| Kind | Formats | Current behavior |
 | --- | --- | --- |
-| Desktop platforms | macOS 13+, Windows x64, Linux x86_64 | Electron 44; macOS build is universal, Windows and Linux release builds target x64 |
-| Delimited tables | `.csv`, `.tsv`, `.tab` | Loaded into SQLite; up to 2,000,000 rows per delimited file by default |
-| JSON tables | `.json`, `.ndjson`, `.jsonl` | Expected to contain tabular records |
-| Spreadsheets | `.xlsx`, `.xlsm`, `.xlsb`, `.xls` | Each usable sheet becomes a table |
-| Documents | `.pdf`, `.txt`, `.text`, `.md`, `.markdown`, `.log` | Documents are searched/read as text; PDFs need an extractable text layer; there is no OCR |
-| Parquet | `.parquet`, `.pq` | Requires a custom `--features duckdb` build; not in release builds or CI |
-| Built-in tools | File listing, table inspection, read-only SQL, text search/read, Python, charts | The model chooses tools; general answers can use none |
-| Charts | Bar, line, area, stacked area, pie/donut, scatter, histogram, box plot, heatmap, forecast | Category and point counts are bounded; line charts support up to 1,000 time points and 5 series |
+| Delimited tables | CSV, TSV, TAB | Loaded as queryable tables in the local analytics database. |
+| JSON records | JSON, NDJSON, JSONL | Tabular objects become queryable tables. |
+| Spreadsheets | XLSX, XLSM, XLSB, XLS | Usable sheets are loaded as separate tables; this is not a full workbook editor. |
+| Text documents | TXT, TEXT, MD, MARKDOWN, LOG | Searchable and readable by analysis tools. |
+| PDF documents | PDF | Text-layer extraction only; scanned pages need OCR elsewhere. |
+| Parquet | PARQUET, PQ | Requires an optional DuckDB build and is not available in standard release installers. |
 
-Tabular source previews show at most five rows; this is not a full spreadsheet
-or document viewer. Fella can export an Investigation report as Markdown and a
-chart as PNG or CSV data. Source files are read-only and are not edited or
-round-tripped. DOCX and PPTX ingestion/viewing are not shipped.
+Fella does not edit, move, or delete source files. It does not currently provide DOCX or PPTX ingestion, OCR, or general-purpose previews for every file format. A table preview is a small sample, not a workbook viewer.
 
-SQL result materialization is capped at 1,000 rows by default and a query is interrupted after 15 seconds. These are guardrails, not target dataset sizes.
+## What answers can contain
 
-## A good first-question pattern
+For data-backed questions, the model chooses analysis steps and then composes a view suited to the saved results. The JSON-render component catalog supports narrative, metrics, tables, charts, callouts, and presentation-only controls. Charts are not required for every answer; they are appropriate when they make a trend, comparison, ranking, distribution, or relationship easier to understand.
 
-```text
-Using [source], calculate [measure] for [scope].
-Compare/group it by [dimension]. Show [specific outputs].
-```
+The answer remains useful if the model cannot produce a valid structured view: Fella keeps the canonical answer and the analysis details available. See [Ask questions](/developer-platform/using-fella/asking-questions) and [Reports](/developer-platform/using-fella/reports).
 
-However, the goal of fella is to eventually support looser question patterns such as
+## A useful question pattern
 
-```
-Did my spending go up or down from 2023 to 2024? How much and what caused it?
-```
+State the measure, population, period, and comparison when they matter. You do not need to choose SQL, Python, or a chart:
 
-Specific wording reduces interpretation errors. If the answer matters, inspect the query rather than relying only on a green verification label.
+> Compare net merchandise revenue for Q3 and Q4. Explain the metric, identify the largest category changes, and note any source limitations.
 
-## Next steps
+If the answer matters, inspect its source scope, computations, and verification checks. A successful query is not proof that its definition matched your intent.
 
 <CardGroup cols={2}>
-  <Card title="Use task recipes" icon="list-checks" href="/examples">
-    Adapt tested prompt shapes to your own files.
+  <Card title="Investigations" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Turn a larger objective into persistent, reviewable work.
   </Card>
-  <Card title="Read the limits" icon="triangle-alert" href="/limitations">
-    Understand verification, Python, formats, and scale before relying on a result.
+  <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
+    Learn what stays local and what a connected provider receives.
   </Card>
 </CardGroup>
