@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { after, test } from 'node:test';
 
 import { assetCandidates } from '../../../electron/update.mjs';
-import { checkReleaseArtifacts, expectedReleaseArtifacts } from './check-release-artifacts.mjs';
+import { checkReleaseArtifacts, expectedReleaseArtifacts } from '../../../scripts/check-release-artifacts.mjs';
 
 const directories = [];
 const packageManifest = JSON.parse(
