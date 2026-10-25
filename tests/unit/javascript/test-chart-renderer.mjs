@@ -122,7 +122,8 @@ try {
 		}
 	}).body;
 	assert.equal(count(openableChartMessage, /class="[^"]*\bchart-card\b[^"]*"/g), 1);
-	assert.match(openableChartMessage, />Open beside<\/button>/);
+	assert.match(openableChartMessage, /class="[^"]*\bopen-beside\b[^"]*"/);
+	assert.match(openableChartMessage, /Open beside/);
 
 	// In the composable Ask layout, opening a chart beside the conversation
 	// moves the full visual into the companion pane and leaves a compact
@@ -439,7 +440,7 @@ try {
 	const archive = renderChart(
 		generic('line', archiveDates, archiveSeries, { x_label: 'Date', y_label: 'Visits' })
 	);
-	assert.equal(count(archive, /<path\b/g), 4, 'one complete line path is rendered per series');
+	assert.equal(count(archive, /class="line(?:\s|\")/g), 4, 'one complete line path is rendered per series');
 	assert.equal(count(archive, /class="line-dot"/g), 0);
 	assert.ok(count(archive, /class="axis-label"/g) <= 10, 'daily x-axis labels are thinned');
 	assert.match(archive, /2024-01-01/);

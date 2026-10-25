@@ -169,7 +169,8 @@ async function mount(instance, path, label) {
 	const { page, app } = instance;
 	await app.evaluate(({ dialog }, selected) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [selected] }); }, path);
 	return measure('ui-mount', async () => {
-		await page.getByRole('button', { name: 'Add repository', exact: true }).click();
+		await page.getByRole('button', { name: /^Switch workspace\. Current:/ }).click();
+		await page.getByRole('menuitem', { name: 'Add workspace', exact: true }).click();
 		await page.getByRole('combobox', { name: `Ask about ${basename(path)}`, exact: true }).waitFor({ state: 'visible', timeout: 120_000 });
 		return catalogSummary(await page.evaluate((workspaceId) => window.fella.invoke('get_catalog', { workspaceId }), path));
 	}, { label });
@@ -206,7 +207,7 @@ async function interactions(instance) {
 	});
 	await measure('context-open-and-return', async () => {
 		await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+C' : 'Control+Shift+C');
-		await page.getByRole('heading', { name: 'Workspace context', exact: true }).waitFor({ state: 'visible' });
+		await page.locator('#context-title').waitFor({ state: 'visible' });
 		await page.getByRole('button', { name: 'Investigation', exact: true }).click();
 		await page.getByRole('tablist', { name: 'Investigation sections' }).waitFor({ state: 'visible' });
 	});

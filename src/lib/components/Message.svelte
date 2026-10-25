@@ -8,7 +8,10 @@
 	import Logo from './Logo.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalAnswer from './AnalyticalAnswer.svelte';
+	import Chart from './Chart.svelte';
 	import { enterUp } from '$lib/motion';
+	import { isRenderableChartEvidence } from '$lib/workbench';
+	import { transcriptPresentation } from '$lib/presentation/snapshot';
 
 	let {
 		message,
@@ -16,14 +19,25 @@
 		ontoggle,
 		onrerun,
 		onopeninvestigationrun,
+		onopenchart,
+	openChartIndex = null,
 	}: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
 		onrerun?: () => Promise<void>;
 		onopeninvestigationrun?: (turnId: string) => void;
+		onopenchart?: (evidenceIndex: number) => void;
+		openChartIndex?: number | null;
 	} = $props();
 	let presentationPrimary = $derived(!!message.answer?.workspace && !message.answer?.clarification);
+	let fallbackCharts = $derived.by(() => {
+		const answer = message.answer;
+		if (message.role !== 'assistant' || !answer || message.artifact_id || transcriptPresentation(message)) return [];
+		return answer.evidence.flatMap((evidence, evidenceIndex) =>
+			isRenderableChartEvidence(evidence, answer.verification ?? []) ? [{ evidence, evidenceIndex }] : []
+		);
+	});
 	let needsAttention = $derived(!!message.answer && answerNeedsReview(message.answer)
 		&& message.answer.status !== 'failed' && message.answer.status !== 'insufficient_data');
 
@@ -48,6 +62,8 @@
 				return 'General answer';
 			case 'workspace_inspect':
 				return 'Inspection details';
+			case 'workspace_ask':
+				return 'Analysis details';
 			default:
 				return 'How this was analyzed';
 		}
@@ -121,6 +137,26 @@
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
+	{#if fallbackCharts.length}
+		<div class="fallback-charts" aria-label="Charts from analysis">
+			{#each fallbackCharts as { evidence, evidenceIndex } (`${message.id}-${evidence.id ?? evidenceIndex}`)}
+				{#if evidence.chart}
+					{#if openChartIndex === evidenceIndex}
+						<div class="chart-open-reference" role="status">Chart open beside conversation</div>
+					{:else}
+						<Chart
+							spec={evidence.chart}
+							source={evidence.chart.metadata?.source_label ?? ''}
+							sourceEvidence={evidence}
+							sourceRunId={message.answer?.turn_id}
+							originLabel="Model-produced visualization"
+							onopen={onopenchart ? () => onopenchart?.(evidenceIndex) : undefined}
+						/>
+					{/if}
+				{/if}
+			{/each}
+		</div>
+	{/if}
 	{#if message.answer && answerCaveat}
 		<div
 			class="answer-caveat"
@@ -155,6 +191,14 @@
 	:global(.answer-review) { padding:2px 8px; border:0; border-radius:999px; background:color-mix(in srgb,var(--warn) 10%,transparent); color:var(--warn); font-size:12px; font-weight:400; line-height:18px; }
 	.msg {
 		padding: 8px 0;
+	}
+	.fallback-charts { min-width: 0; }
+	.chart-open-reference {
+		padding: 10px 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		color: var(--text-dim);
+		font-size: 12px;
 	}
 	.investigation-run-link {
 		margin-top: var(--space-1);

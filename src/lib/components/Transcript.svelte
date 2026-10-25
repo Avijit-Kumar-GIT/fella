@@ -256,6 +256,10 @@
 							onopeninvestigationrun={session.activeChat.workspaceScope === session.catalog.workspace
 								? (turnId) => session.openInvestigationRun(turnId)
 								: undefined}
+							onopenchart={(evidenceIndex) => session.openChartPane(m.id, evidenceIndex)}
+							openChartIndex={session.activeChat.companionPane?.kind === 'chart' && session.activeChat.companionPane.messageId === m.id
+								? session.activeChat.companionPane.evidenceIndex
+								: null}
 							onrerun={() => rerun(m)}
 						/>
 						{#if m.role === 'assistant' && (m.pending || m.answer?.trace?.steps.length || m.run_steps?.length)}
