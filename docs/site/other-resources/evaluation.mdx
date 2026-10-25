@@ -1,39 +1,66 @@
 ---
-title: "Evaluation and validation"
-description: "Build checks and model evaluation for contributors."
-icon: "chart-no-axes-combined"
+title: "Evaluation and testing"
+description: "Run contributor checks and evaluate model behavior."
+icon: "test-tube"
 ---
 
-# Validate the change at the right layer
+# Test the claim at the right layer
 
-The public repository keeps build checks and model evaluation guidance.
-Standalone unit, integration, and Playwright test suites are not published.
-Build checks catch compilation and packaging problems; they do not establish
-that every interactive flow works correctly.
+Fella's tests are organized under [`tests/`](https://github.com/Avijit-Kumar-GIT/fella/tree/main/tests): JavaScript and Python unit suites, Rust integration tests, Electron journeys, and provider-backed evaluations. Rust unit tests that need private module details stay beside the source they cover.
 
 ## Contributor checks
 
-```bash filename="from repository root"
-pnpm run check
-pnpm run build
-cargo check --locked --manifest-path backend/Cargo.toml
+From the repository root:
+
+```bash filename="terminal"
+pnpm check
+pnpm build
 cargo fmt --manifest-path backend/Cargo.toml --all -- --check
-cargo clippy --manifest-path backend/Cargo.toml --lib --locked -- -D warnings
+cargo clippy --manifest-path backend/Cargo.toml --all-targets --features eval --locked -- -D warnings
+cargo test --manifest-path backend/Cargo.toml --locked
+python3 -m unittest discover -s tests/unit/python
 ```
 
-CI runs frontend diagnostics, the production app build, Rust formatting, and
-Clippy over the Rust library on Ubuntu 22.04. It uses the default SQLite
+CI also runs the Electron bridge, updater, chart renderer, release metadata,
+FQA-Bench adapter, and packaged-app smoke checks. It uses the default SQLite
 backend with the default PDF and XLSX features.
 
 <Warning>
-  DuckDB is not a CI path. CI explicitly avoids `--features duckdb` because the bundled build exhausts available resources, and the DuckDB backend has unverified ingestion-parity gaps. Do not describe it as CI-tested.
+  DuckDB is not a CI path. CI avoids `--features duckdb` because the bundled build is resource intensive and the DuckDB backend has ingestion-parity gaps. Do not describe it as CI-tested.
 </Warning>
 
-## Run model evaluation
+## Desktop journeys
 
-Model evaluation needs a provider and a copied app-data directory. It grades
-final-answer closeness, tool shape, calls, token use, refusal behavior, and
-whether verification surfaced a problem.
+Playwright configurations and Electron support code are in
+[`tests/e2e/`](https://github.com/Avijit-Kumar-GIT/fella/tree/main/tests/e2e).
+Build the app first, then run the suite relevant to your change:
+
+```bash filename="terminal"
+pnpm electron:build
+pnpm test:e2e:generative
+pnpm test:e2e:desktop-ui
+pnpm test:e2e:workspace
+```
+
+Credentialed real-model journeys use the configured app provider and incur
+usage charges:
+
+```bash filename="terminal"
+pnpm test:e2e:release:live
+pnpm test:e2e:charts:journey
+pnpm test:e2e:analysis-families:real
+```
+
+The last command covers chart families against Luna and Gemma 4 31B. Use
+Ollama Cloud for Gemma unless the local Ollama server actually hosts that
+model. Journey completion does not grade numerical correctness or chart
+suitability.
+
+## Model evaluation
+
+FQA-Bench and the model tasks under `bench/` capture analytical outcomes and
+grading criteria. They do not require a particular internal tool order or
+wording. Run a real provider evaluation with a copied app-data directory:
 
 ```bash filename="terminal"
 cd backend
@@ -46,31 +73,8 @@ AGENT_EVAL_DATA_DIR=/tmp/fella-eval \
   --json ../bench/folder-qa/out/fella.json
 ```
 
-Provider output is stochastic. Use multiple iterations, report both majority accuracy and all-iteration consistency, and inspect minority failures that the rollup hides. Compare the same model under the same endpoint and battery before attributing a change to the harness.
-
-## Reproducibility checklist
-
-1. Record commit, date, provider, endpoint, exact model ID, harness, and parameters.
-2. Keep fixture data, generator, and grader in the same change.
-3. Use a copied data directory and isolate concurrent runs.
-4. Compare accuracy, consistency, token use, wasted calls, refusal behavior, and errors.
-5. Inspect tool evidence and wrong-answer categories, not only aggregate scores.
-6. Update maintained architecture or decision records when the underlying claim changes.
-
-## Limits
-
-The benchmark results describe only the recorded models and fixtures. They do
-not establish correctness for arbitrary user data. Building an installer is
-not the same as exercising install, launch, provider login, answer flow, stop,
-update, and relaunch on that operating system.
-
-## Next steps
-
-<CardGroup cols={2}>
-  <Card title="Run the paired benchmark" icon="flask-conical" href="/other-resources/benchmarks">
-    Compare the same model with and without the Fella harness.
-  </Card>
-  <Card title="Prepare a contribution" icon="git-pull-request" href="/other-resources/contributing">
-    Choose the correct repository and run the contributor checks.
-  </Card>
-</CardGroup>
+Provider output is stochastic. Use multiple iterations, report majority
+accuracy and consistency, and inspect minority failures. Keep model, endpoint,
+task set, and harness fixed when comparing a change. Never tune grading
+criteria after seeing candidate output; version approved changes and report
+the baseline separately.

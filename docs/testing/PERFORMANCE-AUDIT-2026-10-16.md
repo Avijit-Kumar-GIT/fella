@@ -4,8 +4,8 @@
 > terminal and earlier Tools/Workbench surfaces; do not use its timings as a
 > current startup baseline. The referenced screenshots were local-only and are
 > not included in this repository.
-> Test source files cited in this report are no longer included in the public
-> checkout.
+> Test source files cited in this report have since been consolidated under
+> the root `tests/` directory.
 
 ## Protocol v1 (registered before measurement)
 

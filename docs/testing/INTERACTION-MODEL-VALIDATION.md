@@ -5,8 +5,8 @@
 > does not specify or verify the current Chat/Notebook experience. See the
 > [current interaction model](../product/INTERACTION-MODEL.md) and
 > [Chat/Notebook contract](CHAT-NOTEBOOK-v1.md).
-> The test implementation and commands cited below are no longer included in
-> the public checkout.
+> Test sources and commands cited below have since been consolidated under
+> the root `tests/` directory; recorded results remain historical.
 
 This record covers the automated portion of UX issue #251, “Validate the new
 interaction model with novice and analyst workflows.” It is an engineering

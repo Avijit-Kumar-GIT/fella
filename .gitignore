@@ -47,18 +47,6 @@ vite.config.ts.timestamp-*
 /test-results/e2e-analysis-families/
 /test-results/performance/
 
-# Local-only test suites; intentionally excluded from the public repository.
-/tests/
-/backend/tests/
-/backend/examples/python_e2e.rs
-/playwright.*.config.mjs
-/scripts/test-*
-!/scripts/test-visualizations.sh
-/scripts/check-byok-test-surface.sh
-/scripts/review-reference-workspace.mjs
-/bench/fqa-bench/test_report_slices.py
-/bench/product-eval/test_*.py
-
 # Personal notes
 /STUDY.md
 

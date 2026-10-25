@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 data_dir="${AGENT_EVAL_DATA_DIR:-${BENCH_DATA_DIR:-}}"
 model="${FELLA_EVAL_MODEL:-ollama-cloud/gemma4:31b}"
 iters="${FELLA_EVAL_ITERS:-1}"

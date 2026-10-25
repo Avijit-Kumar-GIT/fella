@@ -6,6 +6,7 @@ authors = ["Avijit Kumar and contributors"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.93"   # RustPython 0.5 (the embedded Python guest) needs 1.93
+autotests = false
 
 [lib]
 name = "fella_lib"
@@ -30,6 +31,86 @@ eval = []
 [[example]]
 name = "agent_eval"
 required-features = ["eval"]
+
+[[example]]
+name = "python_e2e"
+path = "../tests/evals/python_e2e.rs"
+
+[[test]]
+name = "agent_loop"
+path = "../tests/rust/agent_loop.rs"
+
+[[test]]
+name = "auth"
+path = "../tests/rust/auth.rs"
+
+[[test]]
+name = "capability_policy"
+path = "../tests/rust/capability_policy.rs"
+
+[[test]]
+name = "chart_tool"
+path = "../tests/rust/chart_tool.rs"
+
+[[test]]
+name = "conversations"
+path = "../tests/rust/conversations.rs"
+
+[[test]]
+name = "electron_sidecar"
+path = "../tests/rust/electron_sidecar.rs"
+
+[[test]]
+name = "fs_tools"
+path = "../tests/rust/fs_tools.rs"
+
+[[test]]
+name = "ingest_cap"
+path = "../tests/rust/ingest_cap.rs"
+
+[[test]]
+name = "max_steps"
+path = "../tests/rust/max_steps.rs"
+
+[[test]]
+name = "messy_fixture"
+path = "../tests/rust/messy_fixture.rs"
+
+[[test]]
+name = "mount_scale"
+path = "../tests/rust/mount_scale.rs"
+
+[[test]]
+name = "python_tool"
+path = "../tests/rust/python_tool.rs"
+
+[[test]]
+name = "qc"
+path = "../tests/rust/qc.rs"
+
+[[test]]
+name = "recovery"
+path = "../tests/rust/recovery.rs"
+
+[[test]]
+name = "semantic_filters"
+path = "../tests/rust/semantic_filters.rs"
+
+[[test]]
+name = "session_memory"
+path = "../tests/rust/session_memory.rs"
+
+[[test]]
+name = "sql_timeout"
+path = "../tests/rust/sql_timeout.rs"
+
+[[test]]
+name = "workspace"
+path = "../tests/rust/workspace.rs"
+
+[[test]]
+name = "workspace_inventory"
+path = "../tests/rust/workspace_inventory.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -84,3 +165,6 @@ inherits = "release"
 opt-level = "z"
 lto = "fat"
 strip = true
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }

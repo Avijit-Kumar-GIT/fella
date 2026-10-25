@@ -41,7 +41,7 @@ Current runner compatibility:
     python3 bench/fqa-bench/build_runner_cases.py \
       --suite-dir bench/fqa-bench/suites/clarification-housing --check
     python3 bench/fqa-bench/suites/clarification-housing/validate_suite.py
-    python3 bench/fqa-bench/test_report_slices.py
+    python3 -m unittest discover -s tests/unit/python -p 'test_report_slices.py'
 
 To run a suite against Fella, first make an isolated copy of the app data
 directory (including `fella.db` and `auth.json`) and point the evaluator at

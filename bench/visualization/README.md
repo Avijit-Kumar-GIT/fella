@@ -24,7 +24,8 @@ up to 1,000 points, with longer ranges expected to use a coarser time period or 
 narrower date range.
 
 The hosted cases describe user-visible outcomes and do not assert a particular internal
-row-cap implementation.
+row-cap implementation. Capacity boundaries are covered by deterministic
+checks in `tests/rust/chart_tool.rs`.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
 and Gemma 4 31B; it never starts or calls a model server on the machine.
@@ -34,7 +35,7 @@ the provider credential to a scratch location, then run:
 
 ```bash
 AGENT_EVAL_DATA_DIR=/path/to/copied-data-dir \
-  ./scripts/test-visualizations.sh
+  pnpm test:visualizations
 ```
 
 The model and iteration count are configurable. A focused/full model run can be
@@ -43,7 +44,7 @@ started with:
 ```bash
 FELLA_EVAL_MODEL=openai/gpt-5.6-luna FELLA_EVAL_ITERS=1 \
   AGENT_EVAL_DATA_DIR=/path/to/copied-data-dir \
-  ./scripts/test-visualizations.sh --json /tmp/fella-visualization.json
+  pnpm test:visualizations -- --json /tmp/fella-visualization.json
 ```
 
 Useful options are passed through to `agent_eval`:
@@ -51,11 +52,14 @@ Useful options are passed through to `agent_eval`:
 ```bash
 FELLA_EVAL_ITERS=3 EVAL_SHOW_ANSWERS=1 \
   AGENT_EVAL_DATA_DIR=/path/to/copied-data-dir \
-  ./scripts/test-visualizations.sh --only monthly --json /tmp/visualization.json
+  pnpm test:visualizations -- --only monthly --json /tmp/visualization.json
 ```
 
-The benchmark cases require a real BYOK model because they measure
-question-to-answer behavior. Record model/provider, iteration count, task-set SHA-256,
+Deterministic checks do not need a provider. The Rust checks are in
+`tests/rust/chart_tool.rs` and `tests/rust/agent_loop.rs`; the renderer check is
+`pnpm test:chart-renderer`. The benchmark cases require a real BYOK model
+because they measure question-to-answer behavior. Record model/provider,
+iteration count, task-set SHA-256,
 answer/chart gold, runtime status, failed tool calls, and token/time cost in every live
 report. Do not edit tasks or gold after observing output; preserve failures and review
 any proposed task-set revision separately.

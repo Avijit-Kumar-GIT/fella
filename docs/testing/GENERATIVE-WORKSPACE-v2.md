@@ -2,8 +2,8 @@
 
 Behavior contract for generated analytical presentations. Values are fixed
 from fixtures, not inferred from model output or from the candidate renderer.
-This document describes intended behavior; its automated test implementation
-is not included in the public repository.
+Automated coverage is organized under `tests/e2e/` and
+`tests/unit/javascript/`.
 
 ## Acceptance criteria
 
@@ -46,9 +46,28 @@ and null values, and identifiers beyond JavaScript's safe integer range.
 Reports should preserve exact saved string values, not rounded display
 numbers.
 
-## Evaluation notes
+## Real-model acceptance
 
-The model benchmark task sets live under `bench/`. They evaluate model
-behavior and are separate from the presentation contract described here.
-Keep benchmark task versions and observed failures intact when reporting a
-change.
+`tests/e2e/json-render-answer.live.spec.mjs` exercises configured hosted models
+against a local quarterly dataset. It checks for a same-turn JSON component
+tree, a result-bound Chart for a multi-period comparison, successful rendering,
+and persistence of the same spec. A passing case establishes only that task
+and model run; it is not a general quality score. Keep failures visible and do
+not change expected output after observing a candidate response.
+
+## Focused commands
+
+- `pnpm test:json-render` — catalog, schema, renderer, binding, state, and export
+  contract.
+- `node tests/unit/javascript/test-presentation-layout.mjs` — cached synchronous
+  render, responsive layout, chart mount, and horizontal-overflow check.
+- `pnpm test:studio-report` — deterministic saved-report conversion.
+- `pnpm test:e2e:generative` — Electron/Rust artifact, answer, persistence, and
+  report journeys.
+- `pnpm exec playwright test --config=tests/e2e/playwright.live.config.mjs tests/e2e/json-render-answer.live.spec.mjs --workers=1 --retries=0`
+  — opt-in real-model acceptance; requires credentials in the app auth file
+  and a built Electron engine sidecar.
+
+Failures, unsupported visual conversions, and model differences are reported
+as such. Mock-provider results and real-model results are never combined into
+one score.

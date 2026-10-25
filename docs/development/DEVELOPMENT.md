@@ -10,7 +10,8 @@ pnpm, or Rust; packaged apps include the Electron runtime and Rust sidecar.
 - Platform libraries required by Electron. Optional DuckDB builds may require
   additional native build tools. The standard app no longer depends on
   `node-pty` and does not require Visual Studio C++ Build Tools.
-- A connected model provider is needed to use Fella's model features.
+- A connected model provider is needed for live model journeys, not for
+  deterministic Rust and frontend tests.
 
 ## Run the app
 
@@ -26,10 +27,10 @@ Electron. It is a single-terminal workflow on Windows, macOS, and Linux. For a
 renderer-only development server, run `pnpm dev` and launch Electron in a
 second terminal with `FELLA_ELECTRON_URL=http://127.0.0.1:1420` set.
 
-The Rust backend can be checked without opening the UI:
+The Rust backend can be tested without opening the UI:
 
 ```sh
-cargo check --locked --manifest-path backend/Cargo.toml
+cargo test --locked --manifest-path backend/Cargo.toml
 ```
 
 ## Providers and local state
@@ -40,10 +41,10 @@ model ID copied into this guide. Provider credentials are held in `auth.json`
 under the Fella application-data directory, separate from settings and
 conversation databases.
 
-For isolated benchmarks or profiling, set `FELLA_DATA_DIR` to a disposable
+For isolated UI tests or benchmarks, set `FELLA_DATA_DIR` to a disposable
 directory. Do not run two instances that write to the same data directory.
-Copy credentials into an isolated data directory only when a live model run
-requires them; never include them in benchmark output or committed artifacts.
+Copy credentials into an isolated test directory only when a real-provider
+test requires them; never include them in test output or committed artifacts.
 
 ## Code and documentation conventions
 
@@ -55,9 +56,9 @@ requires them; never include them in benchmark output or committed artifacts.
   motion, and accessible names when changing UI. See [Design](../design/DESIGN.md).
 - Update [Architecture](../architecture/ARCHITECTURE.md) in the same change when a runtime
   boundary changes. Keep user-facing product scope in [Product](../product/PRODUCT.md).
-- Keep benchmark criteria independent of the implementation. Record the exact
-  task-set version and preserve failed evaluation results; see
-  [benchmarks](../../bench/README.md).
+- Never change a test or benchmark expectation simply to match candidate
+  output. Preserve the failure and flag a suspected specification or grader
+  issue for review; see [Testing](../testing/TESTING.md).
 
 ## Useful links
 

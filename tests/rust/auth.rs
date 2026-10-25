@@ -1,0 +1,316 @@
+//! Provider selection + credential storage: the keychain-free `auth.json`
+//! store, the one-shot migration of a legacy plaintext key, and the
+//! `/login` / `/logout` surface.
+
+use std::fs;
+use std::path::PathBuf;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use fella_lib::engine::EngineState;
+
+fn scratch(tag: &str) -> PathBuf {
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let p = std::env::temp_dir().join(format!("fella-{tag}-{n}"));
+    fs::create_dir_all(&p).unwrap();
+    p
+}
+
+#[test]
+fn set_key_switches_provider_and_persists_outside_the_db() {
+    let data = scratch("auth-set");
+    let engine = EngineState::new(&data).unwrap();
+
+    // nothing configured yet
+    assert_eq!(
+        engine.settings().provider,
+        fella_lib::engine::provider::DEFAULT_ID
+    );
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "vercel" && !p.authed));
+
+    let s = engine.set_api_key("vercel", "  vk-123  ").unwrap();
+    assert_eq!(s.provider, "vercel");
+    assert_eq!(s.base_url, "https://ai-gateway.vercel.sh/v1");
+    assert!(s.has_credential);
+    // switching moves to the target provider's defaults
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("vercel")
+            .unwrap()
+            .default_model
+    );
+    assert!(!s.model.is_empty());
+
+    // the key lives in auth.json, not fella.db
+    let auth = fs::read_to_string(data.join("auth.json")).unwrap();
+    assert!(auth.contains("vk-123"));
+    let db = fs::read(data.join("fella.db")).unwrap();
+    assert!(!String::from_utf8_lossy(&db).contains("vk-123"));
+
+    // a fresh engine over the same dir still sees it
+    let again = EngineState::new(&data).unwrap();
+    assert!(again.settings().has_credential);
+    assert!(again
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "vercel" && p.authed && p.current));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn logout_keeps_the_key_unless_forget_and_touches_only_that_provider() {
+    let data = scratch("auth-logout");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine.set_api_key("openai", "sk-openai").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // xai is now active
+
+    // Plain logout of a non-active provider: key stays, nothing else moves.
+    engine.logout("openai", false).unwrap();
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
+
+    // `forget` deletes openai's key; xai's is untouched.
+    let s = engine.logout("openai", true).unwrap();
+    assert_eq!(s.provider, "xai");
+    assert!(s.has_credential);
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && !p.authed));
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "xai" && p.authed));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn a_keyed_provider_with_no_saved_key_reverts_to_the_default_provider() {
+    let data = scratch("auth-reconcile");
+
+    // First run: sign in to OpenAI, then delete the key file by hand
+    // (a stale config left by an older build, or a hand-cleared auth.json).
+    {
+        let engine = EngineState::new(&data).unwrap();
+        engine.set_api_key("openai", "sk-openai").unwrap();
+        assert_eq!(engine.settings().provider, "openai");
+    }
+    fs::remove_file(data.join("auth.json")).unwrap();
+
+    // Next run reconciles: keyed provider + no key -> back to the default.
+    let engine = EngineState::new(&data).unwrap();
+    let s = engine.settings();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
+    assert_eq!(s.provider, default.id);
+    assert_eq!(s.base_url, default.base_url);
+    assert_eq!(s.model, default.default_model);
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn an_unknown_stored_provider_reverts_to_the_default_provider() {
+    let data = scratch("auth-reconcile-unknown");
+
+    // A stray `/model provider <x>` from an older build leaves an id no
+    // registry row matches; the sqlite layer doesn't validate it.
+    {
+        let engine = EngineState::new(&data).unwrap();
+        let patch = serde_json::json!({ "provider": "some-old-gateway", "model": "x/y:free" });
+        let s = engine.save_settings(patch.as_object().unwrap()).unwrap();
+        assert_eq!(s.provider, "some-old-gateway");
+    }
+
+    // Next run can't use it and reverts to the default provider.
+    let engine = EngineState::new(&data).unwrap();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
+    assert_eq!(engine.settings().provider, default.id);
+    assert_eq!(engine.settings().model, default.default_model);
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn switching_provider_through_settings_moves_the_address_and_model() {
+    let data = scratch("auth-switch-provider");
+    let engine = EngineState::new(&data).unwrap();
+    assert_eq!(
+        engine.settings().provider,
+        fella_lib::engine::provider::DEFAULT_ID
+    );
+
+    // `/model provider openai` sends just { "provider": "openai" }.
+    let patch = serde_json::json!({ "provider": "openai" });
+    let s = engine.save_settings(patch.as_object().unwrap()).unwrap();
+
+    assert_eq!(s.provider, "openai");
+    assert_eq!(s.base_url, "https://api.openai.com/v1");
+    assert_eq!(
+        s.model,
+        fella_lib::engine::provider::get("openai")
+            .unwrap()
+            .default_model
+    );
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+/// `/login <provider>` when a key for it is already in `auth.json`: switching
+/// by provider id alone is enough no re-paste, and `has_credential` comes
+/// back true so the caller can go straight to `announceSignedIn`.
+#[test]
+fn switching_to_a_provider_with_a_saved_key_needs_no_re_entry() {
+    let data = scratch("auth-reuse-key");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine.set_api_key("openai", "sk-openai").unwrap();
+    engine.set_api_key("xai", "xai-key").unwrap(); // now active
+
+    // `/login openai` with a key already on file -> { "provider": "openai" }.
+    let s = engine
+        .save_settings(
+            serde_json::json!({ "provider": "openai" })
+                .as_object()
+                .unwrap(),
+        )
+        .unwrap();
+    assert_eq!(s.provider, "openai");
+    assert!(
+        s.has_credential,
+        "the saved key should make this a signed-in switch"
+    );
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed && p.current));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn logout_of_the_active_provider_resets_to_the_default_provider() {
+    let data = scratch("auth-logout-active");
+    let engine = EngineState::new(&data).unwrap();
+
+    engine.set_api_key("openai", "sk-openai").unwrap();
+    let before = engine.settings();
+    assert_eq!(before.provider, "openai");
+    assert_eq!(before.base_url, "https://api.openai.com/v1");
+
+    // Plain logout of the active provider: back on the default provider...
+    let s = engine.logout("openai", false).unwrap();
+    let default =
+        fella_lib::engine::provider::get(fella_lib::engine::provider::DEFAULT_ID).unwrap();
+    assert_eq!(s.provider, default.id);
+    assert_eq!(s.base_url, default.base_url);
+    assert_eq!(s.model, default.default_model);
+    // ...but the key is kept, so /login openai reconnects with no re-paste.
+    assert!(engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
+
+    // `forget` is what actually removes it.
+    engine.logout("openai", true).unwrap();
+    assert!(!engine
+        .list_providers()
+        .iter()
+        .any(|p| p.id == "openai" && p.authed));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn rejects_unknown_provider_and_empty_key() {
+    let data = scratch("auth-reject");
+    let engine = EngineState::new(&data).unwrap();
+
+    assert!(engine.set_api_key("nope", "x").is_err());
+    assert!(engine.set_api_key("openai", "   ").is_err()); // empty
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[tokio::test]
+async fn a_missing_key_cannot_start_a_run_or_probe_a_provider() {
+    let data = scratch("auth-require-key");
+    let engine = EngineState::new(&data).unwrap();
+
+    // Health is a local state check until the user has supplied a key; this
+    // test must stay independent of every model service, local or hosted.
+    let health = engine.provider_health().await;
+    assert!(!health.reachable);
+    assert!(!health.rejected);
+    assert!(health.models.is_empty());
+
+    let err = engine
+        .ask("no-key", "does this need a model?", None, |_| {})
+        .await
+        .unwrap_err();
+    assert_eq!(err.kind(), "auth");
+    assert!(err.to_string().contains("/login"));
+
+    let _ = fs::remove_dir_all(&data);
+}
+
+#[test]
+fn migrates_a_legacy_plaintext_key_out_of_the_settings_table() {
+    let data = scratch("auth-migrate");
+
+    // Simulate a pre-keychain install: a fella.db carrying provider +
+    // api_key rows in the settings table.
+    {
+        let conn = rusqlite::Connection::open(data.join("fella.db")).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+        )
+        .unwrap();
+        for (k, v) in [
+            ("provider", "openai-compatible"),
+            ("base_url", "https://example.test/v1"),
+            ("model", "some-model"),
+            ("api_key", "sk-legacy-secret"),
+        ] {
+            conn.execute("INSERT INTO settings (key, value) VALUES (?1, ?2)", (k, v))
+                .unwrap();
+        }
+    }
+
+    let engine = EngineState::new(&data).unwrap();
+
+    // provider mapped onto the registry; credential now recognized
+    let s = engine.settings();
+    assert_eq!(s.provider, "custom"); // legacy id is normalized to the registry id
+    assert!(s.has_credential);
+
+    // key moved to auth.json, removed from the db
+    let auth = fs::read_to_string(data.join("auth.json")).unwrap();
+    assert!(auth.contains("sk-legacy-secret"));
+    assert!(auth.contains("apikey:custom"));
+    let conn = rusqlite::Connection::open(data.join("fella.db")).unwrap();
+    let leftover: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'api_key'",
+            [],
+            |r| r.get(0),
+        )
+        .ok();
+    assert_eq!(leftover, None);
+
+    // idempotent: a second construction doesn't choke
+    let _ = EngineState::new(&data).unwrap();
+
+    let _ = fs::remove_dir_all(&data);
+}

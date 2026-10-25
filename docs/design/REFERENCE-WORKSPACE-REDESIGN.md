@@ -74,7 +74,7 @@ unrelated model, backend, packaging, or broad application suites for this redesi
   saved questions, Analysis displays the saved steps, and Results displays saved
   findings. Successful capture artifacts are local:
   `/tmp/fella-reference-redesign-cCVOL3/`. Screenshots are deliberately untracked.
-- Reproduce the focused review with `node scripts/review-reference-workspace.mjs`
+- Reproduce the focused review with `node tests/e2e/review-reference-workspace.mjs`
   after building the frontend and preparing the Electron engine. It uses a new
   disposable local profile and prints its capture directory and measurements.
 

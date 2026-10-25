@@ -35,7 +35,7 @@ def dump(name, header, records, delim=","):
 
 def dump_xlsx(name, sheet, header, rows):
     """One-sheet .xlsx via hand-written OOXML (stdlib zipfile, no openpyxl).
-    Writes a compact OOXML workbook with only Python's standard library."""
+    Same approach as tests/rust/fixtures/make_messy_ledger.py."""
     import zipfile
 
     def col(i):

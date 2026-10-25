@@ -1,18 +1,19 @@
 # Fella desktop journeys: filesystem analytics
 
-This is a manual journey guide for checking that the app can accept a sequence
-of questions, complete turns, expose Analysis Details, render a chart without
-clipping, retain conversation context, and carry a clarification through to a
-resumed turn. It does **not** grade whether answers or calculations are
-correct. Answer correctness belongs to FQA-Bench.
+These are workflow-focused Electron journeys. They check that the app can
+accept a sequence of questions, complete turns, expose Analysis Details,
+render a chart without clipping, retain conversation context, and carry a
+clarification through to a resumed turn. They do **not** grade whether answers
+or calculations are correct. Answer correctness belongs to FQA-Bench.
 
-The questions are drawn unchanged from the FQA-Bench v0.1 task files. They
-provide repeatable manual scenarios; this guide does not include or invoke an
-automated journey runner.
+The questions are drawn unchanged from the FQA-Bench v0.1 task files. The
+journey runner reads prompts and task labels, not answer keys, and records
+model outputs without grading their values against gold answers.
 
 ## Before you start
 
-- Build the Electron app before starting the manual journey.
+- Build the Electron app and run `pnpm test:e2e:release:live` for all live
+  journeys, or `pnpm test:e2e:charts:journey` for chart journeys only.
 - For manual visual testing, choose OpenAI / `gpt-5.6-luna` and mount
   `bench/fqa-bench/suites/uci-bike-sharing/workspaces/capital-bikeshare`.
 - Ask the Bike Sharing questions below in one conversation, in order. The
@@ -63,8 +64,8 @@ cross-file question, inspect which sources are shown. For the chart, inspect
 that one titled visualization appears, its exact-values disclosure opens, and
 the plot/labels stay inside the answer column in both themes. For the
 follow-up, keep the earlier turns in the same conversation. The final two
-questions are useful for seeing how Fella communicates data limitations; this
-guide does not judge their correctness.
+questions are useful for seeing how Fella communicates data limitations; the
+journey records those responses but does not judge their correctness.
 
 ## Journey B — clarify, then continue
 
@@ -80,3 +81,13 @@ accepts the reply, the reply appears as a user turn, and Fella resumes in the
 same conversation. Open Analysis Details on the resumed turn to inspect its
 clarification lineage and source trail. The answer amount and interpretation
 are deliberately not graded here.
+
+## Audit output
+
+The live journey writes one JSON object per line to
+`test-results/e2e-journeys/<run-id>.jsonl`, or to the path set by
+`FELLA_E2E_AUDIT_FILE`. Records include prompts, rendered responses,
+clarification input, Analysis Details, chart rows and geometry, elapsed time,
+and workflow pass/fail status. The run explicitly marks
+`answer_correctness_scored` as false. Chart screenshots are saved beside the
+JSONL file in `<run-id>-screenshots/`.

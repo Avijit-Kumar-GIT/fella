@@ -1,0 +1,131 @@
+import assert from 'node:assert/strict';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { expect, test, _electron as electron } from '@playwright/test';
+
+// Live model acceptance v1.1: the action assertion follows the current
+// “Create report” label; chart rendering, answer, and artifact criteria remain fixed.
+
+const root = resolve('.');
+
+function authPath() {
+	if (process.env.FELLA_E2E_AUTH_FILE) return resolve(process.env.FELLA_E2E_AUTH_FILE);
+	if (process.platform === 'win32') return join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'dev.fella.app', 'auth.json');
+	if (process.platform === 'darwin') return join(homedir(), 'Library', 'Application Support', 'dev.fella.app', 'auth.json');
+	return join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'dev.fella.app', 'auth.json');
+}
+
+function enginePath() {
+	const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+	return join(root, 'electron', 'engine', `fella-engine-${arch}${process.platform === 'win32' ? '.exe' : ''}`);
+}
+
+async function invoke(page, command, args = {}) {
+	return page.evaluate(({ command, args }) => window.fella.invoke(command, args), { command, args });
+}
+
+const modelCases = [
+	{ provider: 'openai', model: 'gpt-5.6-luna', credential: 'apikey:openai' },
+	{ provider: 'ollama-cloud', model: 'gemma4:31b', credential: 'apikey:ollama-cloud' }
+];
+
+for (const modelCase of modelCases) test(`${modelCase.provider}/${modelCase.model} json-render answer validates and renders as the primary workspace answer`, async () => {
+	test.setTimeout(360_000);
+	const credentialPath = authPath();
+	const auth = JSON.parse(await readFile(credentialPath, 'utf8'));
+	assert.equal(typeof auth[modelCase.credential], 'string', `${modelCase.provider} credential missing from ${credentialPath}`);
+	await access(enginePath()).catch(() => { throw new Error('Electron sidecar is missing; run pnpm electron:build first.'); });
+
+	const profile = await mkdtemp(join(tmpdir(), 'fella-json-render-model-'));
+	const workspace = join(profile, 'quarterly-sales');
+	await writeFile(join(profile, 'auth.json'), await readFile(credentialPath));
+	if (process.platform !== 'win32') await chmod(join(profile, 'auth.json'), 0o600);
+	await mkdir(workspace);
+	await writeFile(join(workspace, 'sales.csv'), [
+		'quarter,region,revenue,orders',
+		'Q1,North,100,10',
+		'Q1,South,40,8',
+		'Q2,North,120,12',
+		'Q2,South,55,11',
+		'Q3,North,90,9',
+		'Q3,South,75,15',
+		'Q4,North,80,8',
+		'Q4,South,110,22'
+	].join('\n'));
+
+	let app;
+	try {
+		app = await electron.launch({
+			args: [join(root, 'electron', 'main.mjs'), `--user-data-dir=${join(profile, 'chromium')}`],
+			cwd: root,
+			env: { ...process.env, FELLA_DATA_DIR: profile, FELLA_ENGINE_PATH: enginePath() }
+		});
+		const page = await app.firstWindow();
+		await page.waitForLoadState('domcontentloaded');
+		const settings = await invoke(page, 'set_settings', { settings: { provider: modelCase.provider, model: modelCase.model } });
+		assert.equal(settings.has_credential, true);
+		await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }); }, workspace);
+		await page.getByRole('button', { name: /Switch workspace\. Current:/ }).click();
+		await page.getByRole('menuitem', { name: 'Add workspace', exact: true }).click();
+
+		const composer = page.getByRole('combobox', { name: /Ask about/ });
+		await expect(composer).toBeVisible();
+		const question = 'Compare the quarter-by-quarter revenue trend between North and South, and explain how order volume moved alongside it, based on sales.csv.';
+		const priorAnswers = await page.locator('.msg.assistant').count();
+		await composer.fill(question);
+		await composer.press('Enter');
+		await expect(page.locator('.msg.user').last()).toContainText(question);
+		const answer = page.locator('.msg.assistant').nth(priorAnswers);
+		await expect.poll(async () => {
+			if (await page.locator('.msg.assistant').count() <= priorAnswers) return false;
+			return !(await answer.locator('.text.rich.pending').count()) && !(await answer.locator('.thinking').count());
+		}, { timeout: 300_000, intervals: [500, 1000, 2000] }).toBe(true);
+
+		const turnId = await answer.getAttribute('data-analysis-turn-id');
+		assert.ok(turnId, 'the real-model response should link its canonical analysis turn');
+		const turn = await invoke(page, 'analysis_turn_load', { turnId });
+		const spec = turn.result?.presentation_spec;
+		if (!spec) {
+			console.log(`REAL_MODEL_JSON_RENDER_DIAGNOSTICS ${modelCase.provider}/${modelCase.model}: ${JSON.stringify({
+				state: turn.state,
+				answer: turn.result?.text,
+				model_calls: turn.trace?.model_calls,
+				evidence: turn.result?.evidence?.map(({ id, tool, columns, row_count, error, error_kind }) => ({ id, tool, columns, row_count, error, error_kind }))
+			})}`);
+		}
+		const presentationSummary = spec ? {
+			root: spec.root,
+			components: Object.values(spec.elements ?? {}).map(({ type }) => type),
+			charts: Object.values(spec.elements ?? {}).filter(({ type }) => type === 'Chart').map(({ props }) => ({
+				title: props.title,
+				resultId: props.resultId,
+				mark: typeof props.spec?.mark === 'string' ? props.spec.mark : props.spec?.mark?.type,
+				fields: Object.fromEntries(Object.entries(props.spec?.encoding ?? {}).filter(([, value]) => value && typeof value === 'object').map(([channel, value]) => [channel, Array.isArray(value) ? value.map((entry) => entry.field) : value.field]))
+			}))
+		} : null;
+		console.log(`REAL_MODEL_JSON_RENDER_SUMMARY ${modelCase.provider}/${modelCase.model}: ${JSON.stringify(presentationSummary)}`);
+		assert.ok(spec && typeof spec === 'object' && !Array.isArray(spec), 'the real model must return the same-turn json-render spec');
+		assert.equal(spec.elements?.[spec.root]?.type, 'Document', 'the model output must have the catalog root');
+		const chartNodes = Object.values(spec.elements ?? {}).filter((element) => element.type === 'Chart');
+		assert.ok(chartNodes.length > 0, 'a chart-worthy multi-period comparison should receive a chart without the user requesting one');
+		for (const element of chartNodes) assert.ok(element.props?.resultId && element.props?.spec?.encoding, 'chart presentation must be bound to a saved result and field encodings');
+
+		await expect(answer.getByRole('button', { name: 'Create report' })).toBeVisible({ timeout: 30_000 });
+		if (await answer.locator('.view-note').count()) {
+			const summary = answer.locator('.view-note details summary');
+			if (await summary.count()) await summary.click();
+			console.log(`REAL_MODEL_PRESENTATION_DISPLAY_ERROR ${modelCase.provider}/${modelCase.model}: ${await answer.locator('.view-note').innerText()}`);
+		}
+		await expect(answer.locator('.view-note')).toHaveCount(0);
+		const renderedCharts = answer.locator('.analytical-presentation .presentation-chart');
+		await expect(renderedCharts).toHaveCount(chartNodes.length);
+		await expect(renderedCharts.first()).toBeVisible();
+		await expect(answer.locator('.analytical-presentation .fallback')).toHaveCount(0);
+		const artifacts = await invoke(page, 'artifact_list', { workspaceId: workspace });
+		assert.ok(artifacts.some((artifact) => artifact.revisions.some((revision) => revision.run_id === turnId && JSON.stringify(revision.spec) === JSON.stringify(spec))), 'the validated same-turn answer should be persisted as a JSON spec artifact');
+	} finally {
+		try { await app?.close(); }
+		finally { await rm(profile, { recursive: true, force: true }); }
+	}
+});
