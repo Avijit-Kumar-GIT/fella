@@ -65,13 +65,9 @@ fn model_num_ctx() -> u32 {
 /// logs a warning when the estimate still crowds that ceiling.
 /// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
-    let presentation = tools_json.and_then(Json::as_array).is_some_and(|tools| {
-        tools.iter().any(|tool| {
-            tool["function"]["name"]
-                .as_str()
-                .is_some_and(is_presentation_output_tool)
-        })
-    });
+    let presentation = tools_json
+        .and_then(Json::as_array)
+        .is_some_and(|tools| json_tools_need_presentation_budget(tools));
     fit_num_ctx_with_output_budget(messages_json, tools_json, output_token_budget(presentation))
 }
 
@@ -106,6 +102,24 @@ fn is_presentation_output_tool(name: &str) -> bool {
     matches!(name, "fella_presentation_answer")
 }
 
+fn presentation_output_needs_large_budget(description: &str) -> bool {
+    const BINDINGS_MARKER: &str = "Available result bindings";
+    let Some((_, bindings_text)) = description.split_once(BINDINGS_MARKER) else {
+        // Keep the conservative behavior for callers that provide a custom
+        // finalizer schema without Fella's result-binding catalog.
+        return true;
+    };
+    let Some(start) = bindings_text.find('[') else {
+        return true;
+    };
+    let Some(end) = bindings_text.rfind(']') else {
+        return true;
+    };
+    serde_json::from_str::<Vec<Json>>(&bindings_text[start..=end])
+        .map(|bindings| !bindings.is_empty())
+        .unwrap_or(true)
+}
+
 fn output_token_budget(presentation: bool) -> u32 {
     let configured = max_output_tokens();
     if presentation {
@@ -116,11 +130,22 @@ fn output_token_budget(presentation: bool) -> u32 {
 }
 
 fn request_output_tokens(tools: &[ToolSchema]) -> u32 {
-    output_token_budget(
-        tools
-            .iter()
-            .any(|tool| is_presentation_output_tool(&tool.name)),
-    )
+    output_token_budget(tools.iter().any(|tool| {
+        is_presentation_output_tool(&tool.name)
+            && presentation_output_needs_large_budget(&tool.description)
+    }))
+}
+
+fn json_tools_need_presentation_budget(tools: &[Json]) -> bool {
+    tools.iter().any(|tool| {
+        let function = &tool["function"];
+        function["name"]
+            .as_str()
+            .is_some_and(is_presentation_output_tool)
+            && presentation_output_needs_large_budget(
+                function["description"].as_str().unwrap_or_default(),
+            )
+    })
 }
 
 /// Whether to let a reasoning model (gpt-oss, deepseek-r1, qwen3, …) emit its

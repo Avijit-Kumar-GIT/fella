@@ -48,11 +48,6 @@ async fn every_capability_combination_matches_registry_and_engine_guards() {
 
     let engine = EngineState::new(&data).unwrap();
     engine.open_workspace(&workspace).unwrap();
-    let chart_args = serde_json::json!({
-        "kind": "bar",
-        "sql": "SELECT category, amount FROM sales ORDER BY amount DESC"
-    });
-
     for mask in 0..16 {
         let caps = capabilities(mask);
         let patch = serde_json::json!({
@@ -89,10 +84,14 @@ async fn every_capability_combination_matches_registry_and_engine_guards() {
             tool_names.iter().any(|name| name == "run_python"),
             caps.python_analysis
         );
+        assert!(
+            !tool_names.iter().any(|name| name == "make_chart"),
+            "the legacy executable chart tool must stay out of the model tool registry"
+        );
         assert_eq!(
-            tool_names.iter().any(|name| name == "make_chart"),
+            registry.charts_enabled(),
             caps.table_analysis && caps.visualizations,
-            "mask {mask:04b}"
+            "presentation chart capability mask {mask:04b}"
         );
 
         assert_eq!(
@@ -115,21 +114,6 @@ async fn every_capability_combination_matches_registry_and_engine_guards() {
             caps.document_analysis,
             "read mask {mask:04b}"
         );
-        match (
-            caps.table_analysis && caps.visualizations,
-            registry.run(&engine, "make_chart", &chart_args).await,
-        ) {
-            (true, Some(Ok(output))) => assert!(output.chart.is_some(), "mask {mask:04b}"),
-            (false, None) => {}
-            (true, Some(Err(error))) => {
-                panic!("chart should run for mask {mask:04b}: {error}")
-            }
-            (true, None) => panic!("chart tool missing for mask {mask:04b}"),
-            (false, Some(Ok(_))) => panic!("chart ran for mask {mask:04b}"),
-            (false, Some(Err(error))) => {
-                panic!("chart should be unavailable for mask {mask:04b}: {error}")
-            }
-        }
     }
 
     // Python guest startup is intentionally covered once for each policy

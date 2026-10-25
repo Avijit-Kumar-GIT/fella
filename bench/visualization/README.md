@@ -1,8 +1,16 @@
-# Visualization benchmark
+# Legacy visualization benchmark
+
+This frozen benchmark describes Fella's retired `make_chart` path. It does not
+measure the current JSON-render presentation flow and must not be used as a
+current product-quality score until its tasks and golds are migrated and
+versioned separately. The historical task set and prior reports are retained
+for reference; no task or gold was changed as part of retiring the old Rust
+integration target.
 
 This battery exercises the personal analytics visualization path end to end:
 
-1. the model chooses `run_sql`, `run_python`, or `forecast_analysis` and `make_chart`;
+1. the model chooses `run_sql`, `run_python`, or `forecast_analysis`, then calls the
+   presentation finalizer;
 2. the engine derives chart values from the selected typed result instead of trusting model-supplied marks;
 3. chart data is validated for readable size, finite numbers, and meaningful variation;
 4. the answer keeps a short prose takeaway beside the typed visual evidence.
@@ -24,8 +32,9 @@ up to 1,000 points, with longer ranges expected to use a coarser time period or 
 narrower date range.
 
 The hosted cases describe user-visible outcomes and do not assert a particular internal
-row-cap implementation. Capacity boundaries are covered by deterministic
-checks in `tests/rust/chart_tool.rs`.
+row-cap implementation. The old deterministic `chart_tool` integration checks have
+been retired with that target; current presentation capability and result-binding
+checks live in `tests/rust/capability_policy.rs` and `tests/rust/agent_loop.rs`.
 
 The hosted run is opt in and BYOK only. It defaults to the hosted Ollama provider
 and Gemma 4 31B; it never starts or calls a model server on the machine.
@@ -55,10 +64,10 @@ FELLA_EVAL_ITERS=3 EVAL_SHOW_ANSWERS=1 \
   pnpm test:visualizations -- --only monthly --json /tmp/visualization.json
 ```
 
-Deterministic checks do not need a provider. The Rust checks are in
-`tests/rust/chart_tool.rs` and `tests/rust/agent_loop.rs`; the renderer check is
-`pnpm test:chart-renderer`. The benchmark cases require a real BYOK model
-because they measure question-to-answer behavior. Record model/provider,
+The frozen hosted task set still expects the retired chart-generation protocol, so
+its commands below are historical and are not valid for evaluating current JSON-render
+answers. Deterministic current presentation checks do not need a provider; the renderer
+check is `pnpm test:chart-renderer`. Record model/provider,
 iteration count, task-set SHA-256,
 answer/chart gold, runtime status, failed tool calls, and token/time cost in every live
 report. Do not edit tasks or gold after observing output; preserve failures and review

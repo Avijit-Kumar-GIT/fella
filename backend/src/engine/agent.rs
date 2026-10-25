@@ -113,32 +113,55 @@ fn presentation_bindings(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn presentation_prompt(evidence: &[EvidenceItem]) -> String {
+fn presentation_schema(charts_enabled: bool) -> serde_json::Value {
+    let mut schema = presentation_manifest()["schema"].clone();
+    if !charts_enabled {
+        if let Some(types) = schema
+            .pointer_mut("/properties/elements/additionalProperties/properties/type/enum")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            types.retain(|kind| kind.as_str() != Some("Chart"));
+        }
+    }
+    schema
+}
+
+fn presentation_prompt(evidence: &[EvidenceItem], charts_enabled: bool) -> String {
     const BINDINGS_MARKER: &str =
         "\nAvailable result bindings (metadata only; the result rows themselves are provided separately as evidence):\n";
     let prompt = presentation_manifest()["prompt"].as_str().unwrap_or("");
     let bindings =
         serde_json::to_string(&presentation_bindings(evidence)).unwrap_or_else(|_| "[]".to_owned());
-    if let Some((prompt, _)) = prompt.rsplit_once(BINDINGS_MARKER) {
+    let mut prompt = if let Some((prompt, _)) = prompt.rsplit_once(BINDINGS_MARKER) {
         format!("{prompt}{BINDINGS_MARKER}{bindings}")
     } else {
         format!("{prompt}{BINDINGS_MARKER}{bindings}")
+    };
+    if !charts_enabled {
+        prompt.push_str(
+            "\nCharts are disabled by the current workspace capabilities. Do not use the Chart component; answer with other registered components where appropriate.",
+        );
     }
+    prompt
 }
 
-fn presentation_answer_schema(evidence: &[EvidenceItem]) -> ToolSchema {
-    let manifest = presentation_manifest();
-    let instructions = presentation_prompt(evidence);
+fn presentation_answer_schema(evidence: &[EvidenceItem], charts_enabled: bool) -> ToolSchema {
+    let instructions = presentation_prompt(evidence, charts_enabled);
+    let chart_guidance = if charts_enabled {
+        "Use a result-bound chart when it makes a pattern clearer."
+    } else {
+        "Charts are disabled by the current workspace capabilities; do not use Chart components."
+    };
     ToolSchema {
         name: PRESENTATION_ANSWER_TOOL.into(),
         description: format!(
-            "Call this finalizer once after analysis when an accepted multi-row result supports a useful structured answer. A presentation is required when the result supports it for a requested time trend, period comparison, category ranking, distribution, or relationship; use a result-bound chart when that makes the pattern clearer. The `answer` is the canonical, evidence-grounded answer used for verification and history. `presentation_spec` is its primary structured view and must use only the supplied result IDs and fields. Do not call this with another tool. Never invent data or use executable code.\n\n{instructions}"
+            "Call this finalizer once after analysis when an accepted multi-row result supports a useful structured answer. A presentation is required when the result supports it for a requested time trend, period comparison, category ranking, distribution, or relationship. {chart_guidance} The `answer` is the canonical, evidence-grounded answer used for verification and history. `presentation_spec` is its primary structured view and must use only the supplied result IDs and fields. Do not call this with another tool. Never invent data or use executable code.\n\n{instructions}"
         ),
         parameters: serde_json::json!({
             "type":"object",
             "properties": {
                 "answer": {"type":"string", "minLength":1, "maxLength":16000},
-                "presentation_spec": manifest["schema"].clone()
+                "presentation_spec": presentation_schema(charts_enabled)
             },
             "required":["answer", "presentation_spec"],
             "additionalProperties":false
@@ -146,11 +169,11 @@ fn presentation_answer_schema(evidence: &[EvidenceItem]) -> ToolSchema {
 	}
 }
 
-fn presentation_spec_response_schema() -> serde_json::Value {
+fn presentation_spec_response_schema(charts_enabled: bool) -> serde_json::Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "presentation_spec": presentation_manifest()["schema"].clone()
+            "presentation_spec": presentation_schema(charts_enabled)
         },
         "required": ["presentation_spec"],
         "additionalProperties": false
@@ -276,7 +299,10 @@ fn validate_presentation_shape(spec: &serde_json::Value) -> EngineResult<()> {
     Ok(())
 }
 
-fn parse_presentation_answer(arguments: &serde_json::Value) -> EngineResult<PresentationAnswer> {
+fn parse_presentation_answer(
+    arguments: &serde_json::Value,
+    charts_enabled: bool,
+) -> EngineResult<PresentationAnswer> {
     let text = arguments["answer"].as_str().unwrap_or_default().trim();
     let spec = arguments["presentation_spec"].clone();
     if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
@@ -285,6 +311,11 @@ fn parse_presentation_answer(arguments: &serde_json::Value) -> EngineResult<Pres
         ));
     }
     validate_presentation_shape(&spec)?;
+    if !charts_enabled && presentation_has_chart(&spec) {
+        return Err(EngineError::msg(
+            "Chart components are disabled by the current workspace capabilities.",
+        ));
+    }
     Ok(PresentationAnswer {
         text: text.to_owned(),
         spec,
@@ -467,8 +498,12 @@ fn validate_composed_presentation(
     spec: &serde_json::Value,
     evidence: &[EvidenceItem],
     require_chart: bool,
+    charts_enabled: bool,
 ) -> Result<(), String> {
     validate_presentation_bindings(spec, evidence)?;
+    if !charts_enabled && presentation_has_chart(spec) {
+        return Err("charts are disabled by the current workspace capabilities".into());
+    }
     if require_chart && !presentation_has_chart(spec) {
         return Err("this time-trend answer requires a result-bound chart".into());
     }
@@ -518,21 +553,21 @@ async fn ensure_presentation(
     answer: &str,
     evidence: &[EvidenceItem],
     current_spec: Option<&serde_json::Value>,
+    charts_enabled: bool,
     run: &mut PresentationRunContext<'_>,
 ) -> Option<serde_json::Value> {
     let current_is_valid = current_spec.is_some_and(|spec| {
         validate_presentation_shape(spec).is_ok()
             && validate_presentation_bindings(spec, evidence).is_ok()
+            && (charts_enabled || !presentation_has_chart(spec))
     });
-    let chart_required = question_needs_time_chart(question, evidence);
+    let chart_required = charts_enabled && question_needs_time_chart(question, evidence);
     let needs_composition = presentation_composition_needed(evidence)
         && (!current_is_valid
             || chart_required && !current_spec.is_some_and(presentation_has_chart));
     if needs_composition {
-        if let Some(spec) = compose_presentation(
-            llm, question, answer, evidence, run.ids, run.usage, run.cancel,
-        )
-        .await
+        if let Some(spec) =
+            compose_presentation(llm, question, answer, evidence, charts_enabled, run).await
         {
             return Some(spec);
         }
@@ -548,10 +583,16 @@ fn presentation_composer_messages(
     question: &str,
     answer: &str,
     evidence: &[EvidenceItem],
+    charts_enabled: bool,
 ) -> Vec<ChatMessage> {
+    let chart_guidance = if charts_enabled {
+        "When the question asks for a trend across ordered periods, make a result-bound line or area chart the primary view; for category rankings use bars."
+    } else {
+        "Charts are disabled by the current workspace capabilities. Do not include Chart components."
+    };
     let system = format!(
-        "You compose Fella's primary analytical presentation after the answer and analysis are complete. Return only a JSON object with one property, `presentation_spec`, matching the supplied response schema. Do not change, repeat, or add claims to the canonical answer. Use the exact result IDs and field names below; charts and tables must bind to those saved results, never embed invented data. When the question asks for a trend across ordered periods, make a result-bound line or area chart the primary view; for a category ranking use bars; for exact records use a table. Add concise interpretation and caveats without repeating values as unbound literals. Keep the view responsive and avoid duplicate content.\n\n{}",
-        presentation_prompt(evidence)
+        "You compose Fella's primary analytical presentation after the answer and analysis are complete. Return only a JSON object with one property, `presentation_spec`, matching the supplied response schema. Do not change, repeat, or add claims to the canonical answer. Use the exact result IDs and field names below; charts and tables must bind to those saved results, never embed invented data. {chart_guidance} For exact records use a table. Add concise interpretation and caveats without repeating values as unbound literals. Keep the view responsive and avoid duplicate content.\n\n{}",
+        presentation_prompt(evidence, charts_enabled)
     );
     let user = format!(
         "Original user question:\n{question}\n\nCanonical answer, already completed and verified; preserve it as the authority:\n{answer}\n\nAccepted saved result bindings and exact row samples (charts render from the full saved result, not only this sample):\n{}",
@@ -565,39 +606,39 @@ async fn compose_presentation(
     question: &str,
     answer: &str,
     evidence: &[EvidenceItem],
-    ids: &mut RunIds,
-    usage: &mut Option<Usage>,
-    cancel: &AtomicBool,
+    charts_enabled: bool,
+    run: &mut PresentationRunContext<'_>,
 ) -> Option<serde_json::Value> {
     if !presentation_composition_needed(evidence) {
         return None;
     }
-    let messages = presentation_composer_messages(question, answer, evidence);
-    let schema = presentation_spec_response_schema();
+    let messages = presentation_composer_messages(question, answer, evidence, charts_enabled);
+    let schema = presentation_spec_response_schema(charts_enabled);
     let suppress = |_text: &str| {};
     let mut retry_messages = messages.clone();
     let mut retry_reason = "the model did not return a valid presentation".to_owned();
     let started = Instant::now();
     let first = tokio::select! {
         result = llm.chat_structured(&messages, &schema, &suppress, &suppress) => result,
-        _ = cancelled(cancel) => return None,
+        _ = cancelled(run.cancel) => return None,
     };
     match first {
         Ok(response) => {
-            record_model_call(ids, started, true, response.usage);
-            *usage = Usage::merge(usage.take(), response.usage);
-            let require_chart = question_needs_time_chart(question, evidence);
+            record_model_call(run.ids, started, true, response.usage);
+            *run.usage = Usage::merge(run.usage.take(), response.usage);
+            let require_chart = charts_enabled && question_needs_time_chart(question, evidence);
             match parse_structured_presentation(&response.content)
                 .map_err(|error| error.to_string())
                 .and_then(|spec| {
-                    validate_composed_presentation(&spec, evidence, require_chart).map(|()| spec)
+                    validate_composed_presentation(&spec, evidence, require_chart, charts_enabled)
+                        .map(|()| spec)
                 }) {
                 Ok(spec) => return Some(spec),
                 Err(error) => retry_reason = error,
             }
         }
         Err(error) => {
-            record_model_call(ids, started, false, None);
+            record_model_call(run.ids, started, false, None);
             log::warn!(
                 "agent: schema-constrained presentation call failed; trying JSON mode: {error}"
             );
@@ -612,20 +653,21 @@ async fn compose_presentation(
         result = llm.chat_json(&retry_messages, &suppress, &suppress) => match result {
             Ok(response) => response,
             Err(error) => {
-                record_model_call(ids, retry_started, false, None);
+                record_model_call(run.ids, retry_started, false, None);
                 log::warn!("agent: JSON-mode presentation retry failed; keeping canonical answer: {error}");
                 return None;
             }
         },
-        _ = cancelled(cancel) => return None,
+        _ = cancelled(run.cancel) => return None,
     };
-    record_model_call(ids, retry_started, true, response.usage);
-    *usage = Usage::merge(usage.take(), response.usage);
-    let require_chart = question_needs_time_chart(question, evidence);
+    record_model_call(run.ids, retry_started, true, response.usage);
+    *run.usage = Usage::merge(run.usage.take(), response.usage);
+    let require_chart = charts_enabled && question_needs_time_chart(question, evidence);
     match parse_structured_presentation(&response.content)
         .map_err(|error| error.to_string())
         .and_then(|spec| {
-            validate_composed_presentation(&spec, evidence, require_chart).map(|()| spec)
+            validate_composed_presentation(&spec, evidence, require_chart, charts_enabled)
+                .map(|()| spec)
         }) {
         Ok(spec) => Some(spec),
         Err(error) => {
@@ -937,6 +979,7 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         _ => None,
     };
     let profile = PromptProfile::from_env();
+    let charts_enabled = registry.charts_enabled();
     let mut sys = system_prompt(
         &profile,
         &catalog,
@@ -1075,7 +1118,7 @@ pretend workspace field.",
     // NoWorkspace errors, which can take minutes on a slow provider.
     let mut schemas = if catalog.workspace.is_some() {
         let mut schemas = registry.schemas_with_contract();
-        schemas.push(presentation_answer_schema(&[]));
+        schemas.push(presentation_answer_schema(&[], charts_enabled));
         schemas
     } else {
         Vec::new()
@@ -1118,7 +1161,7 @@ pretend workspace field.",
                 .iter_mut()
                 .find(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
             {
-                *schema = presentation_answer_schema(&evidence);
+                *schema = presentation_answer_schema(&evidence, charts_enabled);
             }
         }
         let finalizer_only: Vec<_> = schemas
@@ -1189,7 +1232,7 @@ pretend workspace field.",
         let presentation_final = if resp.tool_calls.len() == 1
             && resp.tool_calls[0].name == PRESENTATION_ANSWER_TOOL
         {
-            match parse_presentation_answer(&resp.tool_calls[0].arguments) {
+            match parse_presentation_answer(&resp.tool_calls[0].arguments, charts_enabled) {
                 Ok(answer) => Some(answer),
                 Err(error) => {
                     let call = &resp.tool_calls[0];
@@ -1421,6 +1464,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     &text,
                     &evidence,
                     presentation_final.as_ref().map(|answer| &answer.spec),
+                    charts_enabled,
                     &mut run,
                 )
                 .await
@@ -1943,7 +1987,7 @@ presentation, call `fella_presentation_answer` now; otherwise answer in plain la
 not confident, say so plainly rather than guessing."
             .to_string(),
     ));
-    let finalizer_only = vec![presentation_answer_schema(&evidence)];
+    let finalizer_only = vec![presentation_answer_schema(&evidence, charts_enabled)];
     let final_call_started = Instant::now();
     let resp = tokio::select! {
         result = llm.chat(&messages, finalizer_only.as_slice(), &notify, &on_delta) => match result {
@@ -1971,7 +2015,8 @@ not confident, say so plainly rather than guessing."
         .tool_calls
         .iter()
         .find(|call| call.name == PRESENTATION_ANSWER_TOOL);
-    let final_output = final_call.and_then(|call| parse_presentation_answer(&call.arguments).ok());
+    let final_output =
+        final_call.and_then(|call| parse_presentation_answer(&call.arguments, charts_enabled).ok());
     let final_canonical = final_call
         .and_then(|call| canonical_answer_text(&call.arguments))
         .or_else(|| unformatted_answer.clone());
@@ -2031,6 +2076,7 @@ not confident, say so plainly rather than guessing."
             &text,
             &evidence,
             final_output.as_ref().map(|answer| &answer.spec),
+            charts_enabled,
             &mut run,
         )
         .await
@@ -3209,7 +3255,7 @@ mod tests {
 
     #[test]
     fn json_render_answer_is_a_single_non_executing_finalizer_with_a_complete_spec() {
-        let schema = presentation_answer_schema(&[]);
+        let schema = presentation_answer_schema(&[], true);
         assert_eq!(schema.name, PRESENTATION_ANSWER_TOOL);
         assert_eq!(
             schema.parameters["required"],
@@ -3224,11 +3270,11 @@ mod tests {
             .contains("required when the result supports it"));
         assert!(schema.description.contains("json-render spec"));
 
-        let answer = parse_presentation_answer(&serde_json::json!({
+        let arguments = serde_json::json!({
             "answer": "Revenue increased from Q3 to Q4.",
             "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue increased from Q3 to Q4."},"children":[]}}}
-        }))
-        .unwrap();
+        });
+        let answer = parse_presentation_answer(&arguments, true).unwrap();
         assert_eq!(answer.text, "Revenue increased from Q3 to Q4.");
         assert_eq!(answer.spec["root"], "doc");
     }
@@ -3243,7 +3289,7 @@ mod tests {
             serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["missing"]}}}}),
             serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"body"},"children":[]},"orphan":{"type":"Text","props":{"content":"orphan"},"children":[]}}}}),
         ] {
-            assert!(parse_presentation_answer(&arguments).is_err());
+            assert!(parse_presentation_answer(&arguments, true).is_err());
         }
     }
 
@@ -3253,7 +3299,7 @@ mod tests {
             r#"{"answer":"Revenue increased.","presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#,
         )
         .unwrap();
-        let answer = parse_presentation_answer(&arguments).unwrap();
+        let answer = parse_presentation_answer(&arguments, true).unwrap();
         assert_eq!(answer.text, "Revenue increased.");
         assert_eq!(answer.spec["elements"]["body"]["type"], "Text");
     }
@@ -3266,7 +3312,7 @@ mod tests {
         });
 
         let canonical = canonical_answer_text(&arguments).unwrap();
-        assert!(parse_presentation_answer(&arguments).is_err());
+        assert!(parse_presentation_answer(&arguments, true).is_err());
         assert_eq!(
             canonical,
             "The workspace contains monthly sales and refund data."
@@ -3278,7 +3324,7 @@ mod tests {
         let answer = parse_presentation_answer(&serde_json::json!({
             "answer": "A local selector can change this display.",
             "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["select","title"]},"select":{"type":"Select","props":{"name":"Quarter","stateKey":"quarter","options":[{"value":"q3","label":"Q3"},{"value":"q4","label":"Q4"}],"defaultValue":"q3"},"children":[]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}}
-        }))
+        }), true)
         .unwrap();
 
         assert_eq!(answer.spec["elements"]["select"]["type"], "Select");
@@ -3286,9 +3332,54 @@ mod tests {
 
     #[test]
     fn presentation_finalizer_uses_json_render_schema_and_no_expression_language() {
-        let schema = presentation_answer_schema(&[]);
+        let schema = presentation_answer_schema(&[], true);
         assert!(schema.description.contains("JSON object"));
         assert!(schema.description.contains("result"));
+    }
+
+    #[test]
+    fn generated_charts_obey_the_visualization_capability() {
+        let arguments = serde_json::json!({
+            "answer": "Revenue increased over time.",
+            "presentation_spec": {
+                "root": "doc",
+                "elements": {
+                    "doc": {"type":"Document","props":{},"children":["chart"]},
+                    "chart": {
+                        "type":"Chart",
+                        "props":{
+                            "resultId":"evidence-1",
+                            "spec":{
+                                "mark":"line",
+                                "encoding":{
+                                    "x":{"field":"month","type":"temporal"},
+                                    "y":{"field":"revenue","type":"quantitative"}
+                                }
+                            }
+                        },
+                        "children":[]
+                    }
+                }
+            }
+        });
+        let enabled_schema = presentation_schema(true);
+        let enabled_types = enabled_schema["properties"]["elements"]["additionalProperties"]
+            ["properties"]["type"]["enum"]
+            .as_array()
+            .unwrap();
+        let disabled_schema = presentation_answer_schema(&[], false);
+        let disabled_types = disabled_schema.parameters["properties"]["presentation_spec"]
+            ["properties"]["elements"]["additionalProperties"]["properties"]["type"]["enum"]
+            .as_array()
+            .unwrap();
+
+        assert!(enabled_types.iter().any(|kind| kind == "Chart"));
+        assert!(!disabled_types.iter().any(|kind| kind == "Chart"));
+        assert!(disabled_schema
+            .description
+            .contains("Charts are disabled by the current workspace capabilities"));
+        assert!(parse_presentation_answer(&arguments, true).is_ok());
+        assert!(parse_presentation_answer(&arguments, false).is_err());
     }
 
     #[test]
@@ -3302,7 +3393,7 @@ mod tests {
         ]);
         result.row_count = Some(2);
 
-        let schema = presentation_answer_schema(&[result]);
+        let schema = presentation_answer_schema(&[result], true);
         assert!(schema.description.contains(
             "Available result bindings (metadata only; the result rows themselves are provided separately as evidence):\n[{\"columns\":[\"quarter\",\"revenue\"],\"complete\":true,\"id\":\"evidence-2\",\"row_count\":2,\"tool\":\"run_sql\"}]"
         ));
@@ -3373,10 +3464,12 @@ mod tests {
                 "body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}
             }
         });
-        assert!(validate_composed_presentation(&text_only, &[result.clone()], false).is_ok());
-        assert!(validate_composed_presentation(&text_only, &[result], true)
-            .unwrap_err()
-            .contains("requires a result-bound chart"));
+        assert!(validate_composed_presentation(&text_only, &[result.clone()], false, true).is_ok());
+        assert!(
+            validate_composed_presentation(&text_only, &[result], true, true)
+                .unwrap_err()
+                .contains("requires a result-bound chart")
+        );
     }
 
     #[test]

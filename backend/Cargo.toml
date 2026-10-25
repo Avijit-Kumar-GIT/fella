@@ -49,10 +49,6 @@ name = "capability_policy"
 path = "../tests/rust/capability_policy.rs"
 
 [[test]]
-name = "chart_tool"
-path = "../tests/rust/chart_tool.rs"
-
-[[test]]
 name = "conversations"
 path = "../tests/rust/conversations.rs"
 
@@ -126,13 +122,13 @@ futures-util = { version = "0.3", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 async-trait = "0.1.92"
-tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
+tokio = { version = "1.53.3", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 getrandom = "0.4.3"
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "extra-checks"] }
 
 # optional
 duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
-calamine = { version = "0.36", optional = true }
+calamine = { version = "0.37", optional = true }
 pdf-extract = { version = "0.12.0", optional = true }
 
 [profile.dev]
@@ -167,4 +163,4 @@ lto = "fat"
 strip = true
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1.53.3", features = ["macros", "rt", "rt-multi-thread"] }

@@ -107,6 +107,61 @@ fn contract_turn(contract: serde_json::Value) -> serde_json::Value {
     }))
 }
 
+struct ChartFixture<'a> {
+    mark: &'a str,
+    x_field: &'a str,
+    x_type: &'a str,
+    y_field: &'a str,
+}
+
+fn chart_answer(
+    id: &str,
+    answer: &str,
+    result_id: &str,
+    title: &str,
+    chart: ChartFixture<'_>,
+) -> serde_json::Value {
+    openai_response(serde_json::json!({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": id,
+            "type": "function",
+            "function": {
+                "name": "fella_presentation_answer",
+                "arguments": serde_json::json!({
+                    "answer": answer,
+                    "presentation_spec": {
+                        "root": "doc",
+                        "elements": {
+                            "doc": { "type": "Document", "props": {}, "children": ["chart"] },
+                            "chart": {
+                                "type": "Chart",
+                                "props": {
+                                    "resultId": result_id,
+                                    "title": title,
+                                    "spec": {
+                                        "mark": chart.mark,
+                                        "encoding": {
+                                            "x": { "field": chart.x_field, "type": chart.x_type },
+                                            "y": { "field": chart.y_field, "type": "quantitative" },
+                                            "tooltip": [
+                                                { "field": chart.x_field, "type": chart.x_type },
+                                                { "field": chart.y_field, "type": "quantitative" }
+                                            ]
+                                        }
+                                    }
+                                },
+                                "children": []
+                            }
+                        }
+                    }
+                }).to_string()
+            }
+        }]
+    }))
+}
+
 #[tokio::test]
 async fn agent_calls_a_tool_then_answers() {
     let ws = scratch("agent-ws");
@@ -307,14 +362,18 @@ async fn investigation_definitions_and_question_sources_are_snapshotted_on_the_r
 
     assert!(answer.text.contains('2'), "answer: {}", answer.text);
     let requests = requests.lock().unwrap();
-    let first_user_message = requests[0]["messages"]
-        .as_array()
-        .unwrap()
+    let first_messages = requests[0]["messages"].as_array().unwrap();
+    let first_system_message = first_messages
+        .iter()
+        .find(|message| message["role"] == "system")
+        .and_then(|message| message["content"].as_str())
+        .unwrap();
+    let first_user_message = first_messages
         .iter()
         .find(|message| message["role"] == "user")
         .and_then(|message| message["content"].as_str())
         .unwrap();
-    assert!(first_user_message.contains(definition_text));
+    assert!(first_system_message.contains(definition_text));
     assert!(first_user_message.contains("How many active customers are there?"));
     drop(requests);
 
@@ -528,22 +587,18 @@ async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
                 }
             }]
         })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "metric-chart",
-                "type": "function",
-                "function": {
-                    "name": "make_chart",
-                    "arguments": "{\"kind\":\"bar\",\"source_evidence_id\":\"evidence-1\",\"x_field\":\"segment\",\"y_field\":\"total_metric\",\"title\":\"Metric total by segment\"}"
-                }
-            }]
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "Metric totals were 10 for segment A and 20 for segment B."
-        })),
+        chart_answer(
+            "metric-presentation",
+            "Metric totals were 10 for segment A and 20 for segment B.",
+            "evidence-1",
+            "Metric total by segment",
+            ChartFixture {
+                mark: "bar",
+                x_field: "segment",
+                x_type: "nominal",
+                y_field: "total_metric",
+            },
+        ),
     ]);
 
     let engine = EngineState::new(&data).unwrap();
@@ -570,25 +625,19 @@ async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
 
     assert!(answer.text.contains("10") && answer.text.contains("20"));
     let requests = requests.lock().unwrap();
-    assert_eq!(requests.len(), 3, "no semantic-repair round trip is needed");
+    assert_eq!(requests.len(), 2, "no semantic-repair round trip is needed");
     let system_prompt = requests[0]["messages"][0]["content"]
         .as_str()
         .expect("system prompt");
     assert!(system_prompt.contains("Potentially related fields"));
     assert!(system_prompt.contains("a clue, not a join instruction"));
     assert!(!system_prompt.contains("JOIN or align on these"));
-    assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
+    assert_eq!(answer.evidence.len(), 1, "evidence: {:?}", answer.evidence);
     assert!(answer.evidence.iter().all(|item| item.error.is_none()));
     assert!(!answer
         .verification
         .iter()
         .any(|check| check.label.contains("join")));
-    assert!(answer.verification.iter().any(|check| {
-        check.ok
-            && check
-                .label
-                .contains("chart values matched the source query")
-    }));
     assert_eq!(
         answer
             .evidence
@@ -598,28 +647,27 @@ async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
         1,
         "the grouped measure should be computed once"
     );
-    let charts: Vec<_> = answer
-        .evidence
-        .iter()
-        .filter(|item| item.tool == "make_chart")
-        .collect();
-    assert_eq!(charts.len(), 1, "evidence: {:?}", answer.evidence);
-    let chart_item = charts[0];
-    assert!(chart_item.error.is_none(), "chart: {chart_item:?}");
-    let chart = chart_item.chart.as_ref().expect("chart payload");
-    assert!(matches!(
-        chart.kind,
-        fella_lib::engine::analytics::chart::ChartKind::Bar
-    ));
-    assert_eq!(chart.labels, vec!["A", "B"]);
-    assert_eq!(chart.series.len(), 1);
-    assert_eq!(chart.series[0].values, vec![Some(10.0), Some(20.0)]);
+    assert_eq!(answer.evidence[0].tool, "run_sql");
+    assert_eq!(answer.evidence[0].row_count, Some(2));
+    let chart = answer
+        .presentation_spec
+        .as_ref()
+        .and_then(|spec| spec["elements"].as_object())
+        .and_then(|elements| elements.values().find(|element| element["type"] == "Chart"))
+        .expect("result-bound chart");
+    assert_eq!(chart["props"]["resultId"], answer.evidence[0].id);
+    assert_eq!(chart["props"]["spec"]["mark"], "bar");
+    assert_eq!(chart["props"]["spec"]["encoding"]["x"]["field"], "segment");
     assert_eq!(
-        chart
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.source_evidence_id.as_deref()),
-        Some("evidence-1")
+        chart["props"]["spec"]["encoding"]["y"]["field"],
+        "total_metric"
+    );
+    assert_eq!(
+        answer.evidence[0].rows.as_ref().unwrap(),
+        &vec![
+            vec![serde_json::json!("A"), serde_json::json!(10)],
+            vec![serde_json::json!("B"), serde_json::json!(20)]
+        ]
     );
 
     let _ = fs::remove_dir_all(&ws);
@@ -630,8 +678,8 @@ async fn shared_dimension_does_not_force_a_join_or_duplicate_the_final_chart() {
 async fn unsupported_derived_claim_does_not_invalidate_a_valid_regional_chart() {
     // The arithmetic claim needs correction, but that does not make the
     // successfully queried regional totals or their chart invalid evidence.
-    // Expected: one bounded prose repair, retaining both evidence items and
-    // the requested chart without re-running or duplicating it.
+    // Expected: one bounded answer repair, retaining the SQL evidence and
+    // result-bound chart without re-running the query.
     let ws = scratch("regional-chart-repair-ws");
     let data = scratch("regional-chart-repair-data");
     fs::write(
@@ -653,26 +701,30 @@ async fn unsupported_derived_claim_does_not_invalidate_a_valid_regional_chart() 
                 }
             }]
         })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "regional-chart",
-                "type": "function",
-                "function": {
-                    "name": "make_chart",
-                    "arguments": "{\"kind\":\"bar\",\"source_evidence_id\":\"evidence-1\",\"x_field\":\"region\",\"y_field\":\"total\",\"title\":\"Net revenue by region\"}"
-                }
-            }]
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "North contributed $130 and South $100, so North led by $40. The chart compares both regions."
-        })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "North contributed the most net revenue at $130, compared with South at $100. The chart shows the regional comparison."
-        })),
+        chart_answer(
+            "regional-presentation-bad-answer",
+            "North contributed $130 and South $100, so North led by $40. The chart compares both regions.",
+            "evidence-1",
+            "Net revenue by region",
+            ChartFixture {
+                mark: "bar",
+                x_field: "region",
+                x_type: "nominal",
+                y_field: "total",
+            },
+        ),
+        chart_answer(
+            "regional-presentation-corrected-answer",
+            "North contributed the most net revenue at $130, compared with South at $100. The chart shows the regional comparison.",
+            "evidence-1",
+            "Net revenue by region",
+            ChartFixture {
+                mark: "bar",
+                x_field: "region",
+                x_type: "nominal",
+                y_field: "total",
+            },
+        ),
     ]);
 
     let engine = EngineState::new(&data).unwrap();
@@ -703,31 +755,22 @@ async fn unsupported_derived_claim_does_not_invalidate_a_valid_regional_chart() 
         answer.text
     );
     assert!(answer.text.contains("130") && answer.text.contains("100"));
-    assert_eq!(answer.evidence.len(), 2, "evidence: {:?}", answer.evidence);
+    assert_eq!(answer.evidence.len(), 1, "evidence: {:?}", answer.evidence);
     assert!(answer
         .evidence
         .iter()
         .all(|item| item.error.is_none() && item.verifier_disposition.is_none()));
-    let chart_items: Vec<_> = answer
-        .evidence
-        .iter()
-        .filter(|item| item.tool == "make_chart")
-        .collect();
-    assert_eq!(chart_items.len(), 1, "evidence: {:?}", answer.evidence);
-    assert_eq!(
-        chart_items[0]
-            .chart
-            .as_ref()
-            .expect("regional comparison chart")
-            .series[0]
-            .values,
-        vec![Some(130.0), Some(100.0)]
-    );
-    assert!(answer
-        .verification
-        .iter()
-        .any(|check| { check.ok && check.label == "chart values matched the source query" }));
-    assert_eq!(requests.lock().unwrap().len(), 4, "one answer repair only");
+    assert_eq!(answer.evidence[0].tool, "run_sql");
+    let chart = answer
+        .presentation_spec
+        .as_ref()
+        .and_then(|spec| spec["elements"].as_object())
+        .and_then(|elements| elements.values().find(|element| element["type"] == "Chart"))
+        .expect("regional comparison chart");
+    assert_eq!(chart["props"]["resultId"], answer.evidence[0].id);
+    assert_eq!(chart["props"]["spec"]["encoding"]["x"]["field"], "region");
+    assert_eq!(chart["props"]["spec"]["encoding"]["y"]["field"], "total");
+    assert_eq!(requests.lock().unwrap().len(), 3, "one answer repair only");
 
     let _ = fs::remove_dir_all(&ws);
     let _ = fs::remove_dir_all(&data);
@@ -807,7 +850,7 @@ async fn identical_tool_calls_in_one_model_turn_execute_once() {
 }
 
 #[tokio::test]
-async fn repeated_cached_tool_call_forces_a_tool_free_final_answer() {
+async fn repeated_cached_tool_call_forces_a_non_executing_final_answer() {
     let ws = scratch("duplicate-round-ws");
     let data = scratch("duplicate-round-data");
     fs::write(ws.join("sales.csv"), "amount\n10\n").unwrap();
@@ -873,9 +916,13 @@ async fn repeated_cached_tool_call_forces_a_tool_free_final_answer() {
     );
     let requests = requests.lock().unwrap();
     assert_eq!(requests.len(), 3);
-    assert!(
-        requests[2].get("tools").is_none(),
-        "the final request must disable tools"
+    let final_tools = requests[2]["tools"]
+        .as_array()
+        .expect("finalizer tool only");
+    assert_eq!(final_tools.len(), 1, "no analysis tools remain available");
+    assert_eq!(
+        final_tools[0]["function"]["name"],
+        "fella_presentation_answer"
     );
 
     let _ = fs::remove_dir_all(&ws);
@@ -2012,7 +2059,8 @@ async fn clarification_keeps_safe_candidate_analysis_available() {
     assert!(parent_tool_names.contains(&"read_file"));
     assert!(parent_tool_names.contains(&"run_sql"));
     assert!(parent_tool_names.contains(&"run_python"));
-    assert!(parent_tool_names.contains(&"make_chart"));
+    assert!(parent_tool_names.contains(&"fella_presentation_answer"));
+    assert!(!parent_tool_names.contains(&"make_chart"));
     assert!(parent_tool_names.contains(&"__request_clarification"));
     let candidate_prompt = parent_requests[2].to_string();
     assert!(candidate_prompt.contains("5000") && candidate_prompt.contains("1500"));
@@ -2302,7 +2350,7 @@ async fn model_selected_data_call_waits_for_the_contract_before_execution() {
 }
 
 #[tokio::test]
-async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
+async fn agent_queries_data_then_answers_with_a_result_bound_chart() {
     let ws = scratch("chart-agent-ws");
     let data = scratch("chart-agent-data");
     fs::write(
@@ -2316,18 +2364,26 @@ async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
             "role": "assistant",
             "content": "",
             "tool_calls": [{
-                "id": "chart_call_1",
+                "id": "sales-query",
                 "type": "function",
                 "function": {
-                    "name": "make_chart",
-                    "arguments": "{\"kind\":\"auto\",\"title\":\"Sales over time\",\"sql\":\"SELECT month, amount FROM sales ORDER BY month\"}"
+                    "name": "run_sql",
+                    "arguments": "{\"sql\":\"SELECT month, amount FROM sales ORDER BY month\"}"
                 }
             }]
         })),
-        openai_response(serde_json::json!({
-            "role": "assistant",
-            "content": "Sales rose steadily from January through March."
-        })),
+        chart_answer(
+            "sales-presentation",
+            "Sales rose steadily from January through March.",
+            "evidence-1",
+            "Sales over time",
+            ChartFixture {
+                mark: "line",
+                x_field: "month",
+                x_type: "temporal",
+                y_field: "amount",
+            },
+        ),
     ]);
 
     let engine = EngineState::new(&data).unwrap();
@@ -2351,19 +2407,24 @@ async fn agent_calls_make_chart_then_answers_with_verified_visual_evidence() {
     assert!(answer.text.contains("rose"), "answer: {}", answer.text);
     assert_eq!(answer.evidence.len(), 1);
     let evidence = &answer.evidence[0];
-    assert_eq!(evidence.tool, "make_chart");
+    assert_eq!(evidence.tool, "run_sql");
     assert_eq!(evidence.row_count, Some(3));
     assert!(evidence.error.is_none());
-    let chart = evidence.chart.as_ref().expect("chart evidence");
     assert_eq!(
-        chart.kind,
-        fella_lib::engine::analytics::chart::ChartKind::Line
+        evidence.columns.as_deref(),
+        Some(&["month".into(), "amount".into()][..])
     );
-    assert_eq!(chart.labels, vec!["2024-01", "2024-02", "2024-03"]);
-    assert_eq!(
-        chart.series[0].values,
-        vec![Some(100.0), Some(150.0), Some(200.0)]
-    );
+    assert_eq!(evidence.rows.as_ref().unwrap().len(), 3);
+    let chart = answer
+        .presentation_spec
+        .as_ref()
+        .and_then(|spec| spec["elements"].as_object())
+        .and_then(|elements| elements.values().find(|element| element["type"] == "Chart"))
+        .expect("chart presentation");
+    assert_eq!(chart["props"]["resultId"], evidence.id);
+    assert_eq!(chart["props"]["spec"]["mark"], "line");
+    assert_eq!(chart["props"]["spec"]["encoding"]["x"]["field"], "month");
+    assert_eq!(chart["props"]["spec"]["encoding"]["y"]["field"], "amount");
     assert_eq!(answer.status, VerificationStatus::Verified);
     assert!(
         answer.verification.iter().all(|check| check.ok),

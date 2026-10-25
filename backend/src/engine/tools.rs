@@ -249,6 +249,11 @@ impl Registry {
         self.get(name).is_some()
     }
 
+    /// Whether this registry's settings allow charts in generated presentations.
+    pub fn charts_enabled(&self) -> bool {
+        self.capabilities.charts_enabled()
+    }
+
     /// Run the tool named `name`. `None` = no such tool.
     pub async fn run(
         &self,
