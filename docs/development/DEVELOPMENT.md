@@ -6,10 +6,10 @@ pnpm, or Rust; packaged apps include the Electron runtime and Rust sidecar.
 ## Prerequisites
 
 - Node.js 22 or newer and pnpm 11.
-- Stable Rust 1.93 or newer, plus the platform's C/C++ build tools.
-- On Windows, Visual Studio C++ Build Tools. On macOS, Xcode Command Line
-  Tools. On Linux, Electron's Chromium libraries plus OpenSSL development
-  headers and a C/C++ toolchain.
+- Stable Rust 1.93 or newer.
+- Platform libraries required by Electron. Optional DuckDB builds may require
+  additional native build tools. The standard app no longer depends on
+  `node-pty` and does not require Visual Studio C++ Build Tools.
 - A connected model provider is needed for live model journeys, not for the
   deterministic Rust and frontend tests.
 
@@ -51,18 +51,18 @@ test requires them; never include them in test output or committed artifacts.
 - Keep the renderer a presentation layer. Electron's preload is an allowlisted
   bridge; the Rust runtime owns analytics, local persistence, and the
   canonical turn trace.
-- Prefer shared UI tokens and primitives in `src/app.css`; check light and dark
-  modes, keyboard focus, reduced motion, and accessible names when changing UI.
-  See [Design](DESIGN.md).
-- Update [Architecture](ARCHITECTURE.md) in the same change when a runtime
-  boundary changes. Keep user-facing product scope in [Product](PRODUCT.md).
+- Prefer shared UI tokens and shadcn-svelte primitives in
+  `src/lib/components/ui/`; check light/dark modes, keyboard focus, reduced
+  motion, and accessible names when changing UI. See [Design](../design/DESIGN.md).
+- Update [Architecture](../architecture/ARCHITECTURE.md) in the same change when a runtime
+  boundary changes. Keep user-facing product scope in [Product](../product/PRODUCT.md).
 - Never change a test or benchmark expectation simply to match candidate
   output. Preserve the failure and flag a suspected specification or grader
-  issue for review; see [Testing](TESTING.md).
+  issue for review; see [Testing](../testing/TESTING.md).
 
 ## Useful links
 
-- [Testing and evaluation](TESTING.md)
-- [Performance measurements](PERFORMANCE.md)
-- [Release runbook](RELEASE.md)
-- [Mintlify deployment](DOCS-DEPLOYMENT.md)
+- [Testing and evaluation](../testing/TESTING.md)
+- [Performance measurements](../testing/PERFORMANCE.md)
+- [Release runbook](../operations/RELEASE.md)
+- [Mintlify deployment](../operations/DOCS-DEPLOYMENT.md)

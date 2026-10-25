@@ -2,10 +2,10 @@
 
 Fella is a local-first analytics harness whose model inspects and analyzes
 user-selected files through a bounded, read-only runtime. Before a substantial
-change, read the [product contract](docs/PRODUCT.md),
-[architecture](docs/ARCHITECTURE.md), and relevant
-[testing guidance](docs/TESTING.md). For UI changes, also read
-[Design](docs/DESIGN.md).
+change, read the [product contract](./docs/product/PRODUCT.md),
+[architecture](./docs/architecture/ARCHITECTURE.md), and relevant
+[testing guidance](./docs/testing/TESTING.md). For UI changes, also read
+[Design](docs/design/DESIGN.md).
 
 ## Development
 
@@ -17,8 +17,9 @@ pnpm electron:dev
 ```
 
 The Rust backend and sidecar live in `backend/`. Full setup instructions are in
-[`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md). Run the relevant checks from
-[`docs/TESTING.md`](docs/TESTING.md) before submitting a change.
+the [development guide](docs/development/DEVELOPMENT.md). Run the relevant
+checks from the [testing guide](docs/testing/TESTING.md) before submitting a
+change.
 
 ## Change expectations
 
@@ -41,7 +42,7 @@ not change, delete, weaken, or exclude a failing test to fit observed output.
 If a test seems ambiguous or incorrectly graded, retain the failure and flag
 it for review. Correct an expectation only with approval and a rationale
 grounded in intended behavior; version the task set and report results
-separately. See [`docs/TESTING.md`](docs/TESTING.md).
+separately. See the [testing guide](docs/testing/TESTING.md).
 
 ## Pull requests
 

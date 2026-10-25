@@ -75,7 +75,7 @@ Relevant automated coverage lives beside the contracts:
   refresh-diff, freshness-failure, stale-result preservation, and
   source-scope UI journeys.
 
-The audit checklist item [#286](./audits/FELLA-DESKTOP-AUDIT-2026-10-14.md)
+The audit checklist item [#286](../audits/FELLA-DESKTOP-AUDIT-2026-10-14.md)
 tracks this contract work.
 
 The evidence does not establish a broad analytical accuracy claim. It

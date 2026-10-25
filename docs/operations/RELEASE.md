@@ -14,7 +14,7 @@ by that run, installers are unsigned, and no macOS GUI test was run. The latest
 real-model chart-family repeat completed Luna 6/6 and Gemma 5/6 workflow turns;
 Gemma's forecast chart failed after two invalid chart-tool attempts. That
 journey did not grade analytical correctness. See
-[`TESTING.md`](TESTING.md) for the exact scope and caveats.
+[`TESTING.md`](../testing/TESTING.md) for the exact scope and caveats.
 
 Do not treat a green packaging or interaction gate as proof that the model is
 correct on arbitrary analytics. FQA-Bench v0.1 remains a draft; release claims
@@ -57,5 +57,5 @@ DEB updates require manual reinstall because replacing the package requires
 package-manager privileges.
 
 For development and package commands, see
-[`DEVELOPMENT.md`](DEVELOPMENT.md). For acceptance criteria and test evidence,
-see [`TESTING.md`](TESTING.md).
+[`DEVELOPMENT.md`](../development/DEVELOPMENT.md). For acceptance criteria and test evidence,
+see [`TESTING.md`](../testing/TESTING.md).

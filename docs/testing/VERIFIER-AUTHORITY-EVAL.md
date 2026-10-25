@@ -4,7 +4,7 @@ Run date: 2026-10-06. This is a historical scripted conformance report for
 verifier authority and repair behavior. It measures orchestration on fixed
 responses, not model intelligence, live-provider latency, or broad analytics
 quality. The current verifier contract is summarized in
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md#the-analytical-turn).
+[`../ARCHITECTURE.md`](../architecture/ARCHITECTURE.md#the-analytical-turn).
 
 ## Predeclared scenarios
 
@@ -43,7 +43,7 @@ The unfiltered agent-loop suite at that time had **two failures**:
 `Verified`, while the runtime returned `NeedsReview`. They were reported as
 failures and not changed in that run. A later release-gate run passed the full
 default Rust suite; that later result is recorded in
-[`../TESTING.md`](../TESTING.md), not used to rewrite this historical report.
+[`../TESTING.md`](./TESTING.md), not used to rewrite this historical report.
 
 The six scripted cases are a small fixed suite, not a population estimate.
 They do not establish live-model false-positive or false-negative rates. No

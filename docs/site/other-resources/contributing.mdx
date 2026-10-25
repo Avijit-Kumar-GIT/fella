@@ -30,7 +30,7 @@ workspace artifact, open an issue first so the product boundary can be reviewed.
 - A model provider only for live app/evaluation work; deterministic tests do
   not need one.
 
-The [developer setup guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DEVELOPMENT.md)
+The [developer setup guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/development/DEVELOPMENT.md)
 lists platform requirements and provider setup.
 
 ```bash filename="terminal"
@@ -44,7 +44,7 @@ pnpm electron:dev
 
 <Steps>
   <Step title="Read the maintained boundary">
-    Start with the [product contract](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/PRODUCT.md), [architecture](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/ARCHITECTURE.md), and [design rules](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/DESIGN.md).
+    Start with the [product contract](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/product/PRODUCT.md), [architecture](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/architecture/ARCHITECTURE.md), and [design rules](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/design/DESIGN.md).
   </Step>
   <Step title="Choose the smallest general implementation">
     Preserve the model-directed loop and read-only analytics path. Prefer a general capability improvement over a production rule for one fixture or phrase.
@@ -53,7 +53,7 @@ pnpm electron:dev
     Use deterministic fixtures for engine behavior and predeclared evaluation cases when behavior depends on model interpretation. Do not treat one live response as a regression test.
   </Step>
   <Step title="Run the relevant gates">
-    Use the full command list in the [testing guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/TESTING.md). Run with the default SQLite features.
+    Use the full command list in the [testing guide](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/testing/TESTING.md). Run with the default SQLite features.
   </Step>
   <Step title="Update the source of truth">
     Update maintained product or architecture documentation when its claims change. Keep benchmark fixtures, generators, graders, and task-contract versions together.
@@ -88,7 +88,7 @@ guarantee.
 
 The `/mcp` command is inert and creates no connector or network activity. The
 root `fella.md` is the supported user-authored context surface. See the
-[architecture boundary](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/ARCHITECTURE.md#network-and-trust-boundaries).
+[architecture boundary](https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/architecture/ARCHITECTURE.md#network-and-trust-boundaries).
 
 ## Open a pull request
 
@@ -104,7 +104,7 @@ root `fella.md` is the supported user-authored context surface. See the
   <Card title="Choose a test layer" icon="test-tube" href="/other-resources/evaluation">
     Match deterministic tests and live evaluation to the claim.
   </Card>
-  <Card title="Read the product boundary" icon="book-open" href="https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/PRODUCT.md">
+  <Card title="Read the product boundary" icon="book-open" href="https://github.com/Avijit-Kumar-GIT/fella/blob/main/docs/product/PRODUCT.md">
     See which capabilities are in the personal product.
   </Card>
 </CardGroup>

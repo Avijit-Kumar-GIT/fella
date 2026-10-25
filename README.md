@@ -180,12 +180,12 @@ Useful commands:
   endpoint can be configured to point to a local service.
 - Updates happen only when explicitly requested with `/update`.
 
-Read the [security policy](SECURITY.md) and [product commitments](docs/PRODUCT.md).
+Read the [security policy](SECURITY.md) and [product commitments](./docs/product/PRODUCT.md).
 
 ## Build from source
 
 The desktop shell is Electron, with the SvelteKit UI and Rust analytics engine
-running as a local sidecar. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for
+running as a local sidecar. See [`docs/DEVELOPMENT.md`](./docs/development/DEVELOPMENT.md) for
 toolchain requirements and provider setup.
 
 ```sh
@@ -204,25 +204,13 @@ cargo test --manifest-path backend/Cargo.toml --locked
 ```
 
 The Electron shell and its line-delimited JSON bridge are described in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/ARCHITECTURE.md`](./docs/architecture/ARCHITECTURE.md).
 
 ## Documentation
 
-- [Product](docs/PRODUCT.md) — Fella's purpose, analyst loop, and boundaries
-- [Positioning](docs/POSITIONING.md) — investor narrative and product-claim
-  boundaries
-- [FellaDB and CLI](docs/FELLADB.md) — exploratory vision for CLI-based
-  filesystem search and analyst tooling
-- [Stack vision](docs/STACK-VISION.md) — proposed path from files through
-  model-driven analysis to reusable project knowledge
-- [Architecture](docs/ARCHITECTURE.md) — the Electron shell and Rust analytics runtime
-- [Roadmap](docs/ROADMAP.md) — current quality priorities and deferred work
-- [Development](docs/DEVELOPMENT.md) — setup and contributor conventions
-- [Testing](docs/TESTING.md) — regression, end-to-end, and model evaluation
-- [Performance](docs/PERFORMANCE.md) — ingestion, build, and memory measurement
-- [Release](docs/RELEASE.md) — packaging and release procedure
-- [Design](docs/DESIGN.md) — UI tokens and interaction guidance
-- [Mintlify deployment](docs/DOCS-DEPLOYMENT.md) — public docs hosting
+- [Documentation guide](docs/README.md) — product, architecture, design,
+  contributor guides, and dated audit records
+- [User documentation](docs/site/) — Mintlify content
 - [Contributing](CONTRIBUTING.md) — contribution guidelines
 
 ## Status

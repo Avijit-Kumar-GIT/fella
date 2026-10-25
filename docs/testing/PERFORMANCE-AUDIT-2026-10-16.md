@@ -1,5 +1,10 @@
 # Desktop performance audit — 16 October 2026
 
+> Historical diagnostic for the 16 October build. It includes the removed
+> terminal and earlier Tools/Workbench surfaces; do not use its timings as a
+> current startup baseline. The referenced screenshots were local-only and are
+> not included in this repository.
+
 ## Protocol v1 (registered before measurement)
 
 Test revision: `c942baa32db9a2161775daf5d01d4ba804374ba5`.
@@ -504,13 +509,10 @@ Local artifacts are intentionally ignored by Git:
 - Eleven-family chart journey, including every pre-failure visual check:
   `test-results/e2e-chart-families/2026-10-16T06-26-18-163Z/journey.jsonl`.
 
-Local-only screenshots:
-
-- [Returning startup before workspace readiness](../../test-results/performance/2026-10-16-navigation-v1/returning-startup-before-workspaces-ready.png).
-- [Gemma's requested chart returned as a table](../../test-results/performance/2026-10-16-packaged-v1/screenshots/ollama-cloud-housing-chart.png).
-- [Luna's requested chart returned as a table](../../test-results/performance/2026-10-16-packaged-v1/screenshots/openai-housing-chart.png).
-- [Northstar's generated Gemma answer](../../test-results/performance/2026-10-16-packaged-v1/screenshots/ollama-cloud-northstar.png).
-- [The opened workspace tools](../../test-results/performance/2026-10-16-packaged-v1/screenshots/workspace-tools.png).
+Local-only screenshots were intentionally excluded from Git. Their capture
+paths were under `test-results/performance/2026-10-16-navigation-v1/` and
+`test-results/performance/2026-10-16-packaged-v1/screenshots/` on the machine
+where this audit was run; they are not available in a fresh checkout.
 
 Source/first-start timing is one diagnostic observation; live tasks are one
 observation each; the larger load is one primary observation plus one reindex.

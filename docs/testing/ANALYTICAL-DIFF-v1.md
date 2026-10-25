@@ -1,5 +1,8 @@
 # Analytical diff contract v1.1
 
+The persisted document code still uses “Studio” internally; the current
+user-facing destination is called **Reports**.
+
 User-approved fixture corrections: keep a changed source revision consistent
 with its producing trace, and capture the unchanged-artifact baseline after
 report creation has intentionally marked it retained. Assertions are unchanged.

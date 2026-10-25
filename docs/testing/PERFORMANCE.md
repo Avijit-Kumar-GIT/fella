@@ -5,7 +5,7 @@ question through model round trips, the Rust sidecar, and the full Electron
 process tree. Keep those measurements separate and record the OS, build type,
 workspace, model, and observation interval with each result.
 
-The [16 October 2026 desktop audit](testing/PERFORMANCE-AUDIT-2026-10-16.md)
+The [16 October 2026 desktop audit](./PERFORMANCE-AUDIT-2026-10-16.md)
 records production/development builds, packaged startup, actual navigation,
 folder preparation, hosted model turns, process memory, and regression failures
 on a pinned WSL2/Linux checkout. It includes the measurement protocol,
@@ -69,4 +69,4 @@ These are isolated Linux release-build diagnostics, not controlled
 comparisons, packaged-app measurements, multi-large-file coverage, or Windows
 results. Workspace publication is atomic after preparation, so the UI does not
 query partially prepared sources. Incremental refresh and progressively
-queryable sources remain open work. See [Roadmap](ROADMAP.md).
+queryable sources remain open work. See [Roadmap](../product/ROADMAP.md).

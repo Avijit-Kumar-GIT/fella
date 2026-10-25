@@ -1,6 +1,6 @@
 # Fella product
 
-See [Product vision](PRODUCT-VISION.md) for the north-star story, analyst
+See [Product vision](./PRODUCT-VISION.md) for the north-star story, analyst
 workflow, foundational primitives, trust model, and target experience. This
 document remains the reference for current shipped scope.
 
@@ -48,26 +48,25 @@ checks that make that work useful and inspectable.
   When a user asks a connected model a question, that provider receives the
   prompt and any context or tool results used to answer it.
 
-## Conversation and Question contract
+## Conversation and Investigation contract
 
-A Conversation is the place for ordinary asks and follow-ups. In a mounted
-Workspace, its first user request creates the Workspace's Investigation and
-links that Investigation to the same Conversation. Later freeform messages
-remain ordinary asks in that Conversation: they preserve conversational
-continuity, but do not silently create saved Questions, select a Question, or
-claim that a Question-specific analysis run happened. The original request and
-the saved Investigation context remain available to the model as background;
-each reply should address the user's immediate message rather than combine
-sibling Questions into one request.
+A Conversation is the place for ordinary asks and follow-ups. Creating a new
+Conversation does not create an Investigation. The user creates an Investigation
+explicitly; that action starts and links a Conversation for the Investigation.
+This keeps ordinary chat lightweight while giving longer analytical work a
+named, persistent home.
 
-The explicit **Analyze** action on a saved Question is different: it starts a
-run linked to that one Question. For example, “What were total net sales in
-Q3?” followed by “What about Q4?” is a pair of freeform Conversation asks.
-Choosing **Analyze** on “What was total net sales in Q4?” from the saved
-Question plan runs that Question and records its Question/run relationship.
-General chat without a mounted Workspace remains unbound and does not create an
-Investigation. This keeps chat low-ceremony without weakening the durable
-Question and provenance model.
+Later freeform messages remain ordinary asks in the same Conversation: they
+preserve continuity, but do not silently create saved Questions, select a
+Question, or claim that a Question-specific run happened. Investigation context
+may inform the answer, but each reply should address the immediate request
+instead of merging sibling Questions.
+
+The explicit **Analyze** action on a saved Question starts a run linked to that
+Question. Deleting a Conversation also deletes its linked Investigation and
+transcript. Explicitly saved analytical results, their supporting run records,
+reports, and revisions are retained in the Workspace, as explained in the
+confirmation dialog. General chat without a mounted folder remains unbound.
 
 ## Shipped file and runtime boundaries
 
@@ -106,22 +105,25 @@ demand and an explicit product/safety decision.
 
 ## Current scope
 
-The maintained desktop app is Electron with a Svelte UI and a local Rust
-analytics sidecar. Ask supports model-knowledge answers without a workspace and
-model-directed analysis of supported local files. SQL and sandboxed Python are
-both first-class computation routes; forecasts and scenarios are allowed when
-the available data and stated assumptions support them. Charts, document
-search, clarification, conversation continuity, and inspectable analysis
-details are part of the same conversation flow.
+The desktop app is Electron with a Svelte UI and a local Rust analytics
+sidecar. Chat supports model-knowledge answers without a folder and
+model-directed analysis of supported local files. Notebook is an optional
+arrangement of Chat and the active Investigation or document in the same
+window. Files and Reports are separate sidebar destinations. Investigations
+have Brief, Sources, Questions, Analysis, and Results sections. See the
+[interaction model](./INTERACTION-MODEL.md) for current navigation and
+terminology.
 
-Web research is **not shipped** and remains on the backburner. Fella does not
-silently send workspace contents to web search. The desktop app is not a
-general-purpose file manager, shell automation tool, notebook, or multi-agent
-orchestrator. A read-oriented analyst CLI, with FellaDB as its proposed local
-filesystem search capability, is an exploratory direction and is not shipped.
-See the [analyst workflow audit](ANALYST-WORKFLOW-AUDIT.md) for how the current
-app maps to the full data analyst lifecycle and where the product experience
-still has gaps.
-See [Architecture](ARCHITECTURE.md) for the current implementation,
-[Roadmap](ROADMAP.md) for open work, and [Stack vision](STACK-VISION.md) for
-the proposed path from files to reusable project knowledge.
+SQL and sandboxed Python are first-class computation routes; forecasts and
+scenarios are supported when the available data and stated assumptions allow
+them. Generated presentations use the validated json-render catalog and may
+combine narrative, values, tables, and visualizations as appropriate. The
+plain answer and saved analytical results remain available if a presentation
+cannot be composed or displayed.
+
+Web research is **not shipped**; workspace contents are not sent to a web
+search service. Fella is not a general-purpose file manager, shell, notebook
+kernel, or multi-agent orchestrator. The former terminal/shell UI was removed.
+Provider selection and credentials are user-controlled. See
+[Architecture](../architecture/ARCHITECTURE.md) for implementation boundaries
+and [Roadmap](./ROADMAP.md) for open work.

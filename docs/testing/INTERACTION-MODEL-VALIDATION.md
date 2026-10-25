@@ -1,5 +1,11 @@
 # Interaction-model validation
 
+> Historical validation for a retired Focus/Workbench and workspace-board
+> design. Its failures and test-integrity record are retained for context; it
+> does not specify or verify the current Chat/Notebook experience. See the
+> [current interaction model](../product/INTERACTION-MODEL.md) and
+> [Chat/Notebook contract](CHAT-NOTEBOOK-v1.md).
+
 This record covers the automated portion of UX issue #251, “Validate the new
 interaction model with novice and analyst workflows.” It is an engineering
 validation report, not a usability-study result. No novice or analyst

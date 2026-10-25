@@ -73,6 +73,13 @@ The deterministic desktop cases now assert this revised product behavior. The
 prior v1.1 setup correction and its original results above are retained as
 historical evidence.
 
+Responsive acceptance is based on available content width, not OS. At compact
+widths the layout prioritizes one pane at a time with accessible Chat/Tools
+selection; at wider widths it preserves readable minimum pane widths. Switching
+panes must retain both mounted surfaces and their drafts, and generated content
+must not cause document-level horizontal overflow. These criteria consolidate
+the former standalone responsive-panel contract into this suite.
+
 ### Validation record
 
 - `pnpm check`: passed with zero errors or warnings.
