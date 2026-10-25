@@ -674,7 +674,7 @@ checksum = "c6e8948ce679d00a02a94739ea185595dca7118ed04feb991127e443bd3d761f"
 
 [[package]]
 name = "fella"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "calamine",

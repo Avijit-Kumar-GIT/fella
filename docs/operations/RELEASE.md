@@ -4,37 +4,29 @@ This document describes the maintained Electron release. The app version and
 Rust sidecar version must agree with the tag; the GitHub workflow validates
 them before packaging.
 
-## v0.3.0 candidate status
+## Release quality scope
 
-The local release-gate run recorded on 2026-10-07 passed the default Rust
-suite, Clippy, frontend checks/build, Electron bridge/update/chart/artifact
-checks, eight Playwright release journeys, and packaged Windows/Linux startup
-smokes. This records local validation only: no tag or GitHub draft was created
-by that run, installers are unsigned, and no macOS GUI test was run. The latest
-real-model chart-family repeat completed Luna 6/6 and Gemma 5/6 workflow turns;
-Gemma's forecast chart failed after two invalid chart-tool attempts. That
-journey did not grade analytical correctness. See
-[`TESTING.md`](../testing/TESTING.md) for the exact scope and caveats.
-
-Do not treat a green packaging or interaction gate as proof that the model is
-correct on arbitrary analytics. FQA-Bench v0.1 remains a draft; release claims
-must reflect that limit.
+The tagged release workflow runs the default Rust suite, Clippy, frontend and
+Electron checks, packaged-app smoke checks, FQA fixture validation, and
+cross-platform packaging. Passing those gates does not establish analytical
+correctness for arbitrary user data. FQA-Bench v0.1 remains a draft; release
+claims must reflect that limit. See [`TESTING.md`](../testing/TESTING.md) for
+the scope and caveats.
 
 ## Tag and draft
 
-The Electron shell is a one-time migration from the Tauri `v0.2.0` app. The
-`v0.3.0` app retains the `dev.fella.app` data location, but existing users must
-install the Electron package manually; the old Tauri updater cannot install an
-Electron build. Ask users to confirm settings, credentials, and history are
-present before removing the old app. Subsequent Electron releases use the new
-updater.
+The `v0.3.0` release migrated the app from Tauri to Electron while retaining
+the `dev.fella.app` data location. Users upgrading from Tauri had to install
+that Electron package manually; the Tauri updater could not install it. Later
+Electron releases use the user-triggered updater.
 
-After the release commit is on `main`, check versions and push the tag:
+After the v0.4.0 version and changelog commit is on `main`, check versions and
+push the tag:
 
 ```sh
-node scripts/check-release-version.mjs v0.3.0
-git tag v0.3.0
-git push origin v0.3.0
+node scripts/check-release-version.mjs v0.4.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 The tag workflow reruns quality gates, builds the platform packages, verifies
