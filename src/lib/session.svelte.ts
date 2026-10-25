@@ -1,12 +1,8 @@
 // Shared reactive session state (Svelte 5 runes in a .svelte.ts module).
 //
-// `Session` holds workspace-level state (one open folder, one model) plus an
-// array of independent `Conversation` tabs. The per-conversation fields
-// (`messages`, `busy`, `activity`, …) are exposed as getters/setters that
-// proxy the active tab, so the many `session.addSystem(...)` call sites keep
-// acting on whichever tab is focused. Long-lived work (`ask`) is handed the
-// specific `Conversation` so it keeps streaming into its own tab after a
-// switch.
+// `Session` owns app-level navigation and one active workspace context.
+// Conversation tabs retain their own scope; the conversation objects remain in
+// a local live cache so in-flight work can finish safely while focus moves.
 
 import { ipc, isDesktop } from './ipc';
 import type {
@@ -19,9 +15,13 @@ import type {
 	ProviderInfo,
 	Project,
 	RunStep,
+	RuntimeTurnState,
 	Settings,
+	SourceInfo,
 	WorkspaceProgress
 } from './types';
+import { isRenderableChartEvidence, parseCompanionPane, type CompanionPane } from './workbench';
+import { analystStepForTool, progressStepForState } from './run-progress';
 
 
 function uid(): string {
@@ -41,19 +41,6 @@ export function hasActualQuestion(messages: readonly Message[]): boolean {
 
 export function firstActualQuestion(messages: readonly Message[]): Message | undefined {
 	return messages.find(isActualQuestion);
-}
-
-function humanToolName(tool: string): string {
-	const labels: Record<string, string> = {
-		list_files: 'Looking through the workspace',
-		inspect_file: 'Inspecting a source',
-		read_file: 'Reading a source',
-		search_files: 'Searching the workspace',
-		query: 'Calculating from the data',
-		make_chart: 'Preparing a chart',
-		memory: 'Checking workspace notes'
-	};
-	return labels[tool] ?? tool.replace(/[_-]+/g, ' ').replace(/^./, (c) => c.toUpperCase());
 }
 
 /** The first completed answer is authoritative for a conversation's origin.
@@ -93,13 +80,237 @@ function archivedWorkspace(messages: unknown, fallback: string | null | undefine
 	return fallback ?? null;
 }
 
-const PREFIX = 'fella:conversation:'; // one key per tab: fella:conversation:<id>
+const PREFIX = 'fella:conversation:'; // one key per conversation
 const LEGACY_KEY = 'fella:conversation'; // the single pre-tabs blob
-const INDEX_KEY = 'fella:tabs'; // JSON array of open tab ids
+const INDEX_KEY = 'fella:conversations'; // JSON array of live conversation ids
 const SIDEBAR_KEY = 'fella:sidebar-collapsed';
 const REPOSITORIES_KEY = 'fella:repositories';
 const HIDDEN_REPOSITORIES_KEY = 'fella:hidden-repositories';
+const HISTORY_ONLY_REPOSITORIES_KEY = 'fella:history-only-repositories';
 const PROJECTS_KEY = 'fella:projects';
+const OPEN_WORKSPACES_KEY = 'fella:open-workspaces';
+const WORKSPACE_CONTEXTS_KEY = 'fella:workspace-contexts';
+const LEGACY_ENVIRONMENTS_KEY = 'fella:environments';
+export const GENERAL_WORKSPACE_ID = 'general';
+
+export interface WorkspaceWindow {
+	id: string;
+	kind: 'general' | 'repository';
+	/** Null for General. It is never a fake filesystem path. */
+	path: string | null;
+	catalog: Catalog;
+	conversationId: string;
+	historyOnly?: boolean;
+}
+
+interface SavedWorkspaceState {
+	ids: string[];
+	active: string | null;
+}
+
+export interface WorkspaceContext {
+	/** Null is the unbound General workspace; repository IDs are resolved paths. */
+	workspaceId: string | null;
+	conversationId: string;
+	workspacePane?: WorkspacePane;
+	/** Whether the Investigation details pane is visible beside the conversation. */
+	workspacePaneOpen?: boolean;
+	investigationId?: string | null;
+	/** One replaceable auxiliary surface; the active conversation owns its Investigation. */
+	activeTool?: WorkspaceTool | null;
+}
+
+export interface WorkspaceTool {
+	id: string;
+	kind: WorkspaceToolKind;
+	/** Conversation that owns an immutable answer preview. */
+	conversationId?: string | null;
+	sourcePath?: string | null;
+	sourceName?: string | null;
+	/** An immutable reference to an existing answer artifact or older source snapshot. */
+	preview?: CompanionPane | null;
+	/** Studio documents are workspace-owned, never owned by the active chat. */
+	documentId?: string | null;
+	title?: string;
+	initialArtifactId?: string | null;
+	artifactId?: string | null;
+	artifactRevision?: number | null;
+	newReport?: boolean;
+}
+
+interface SavedWorkspaceContextState {
+	contexts: WorkspaceContext[];
+	activeWorkspaceId: string | null;
+}
+
+function readWorkspaceState(): SavedWorkspaceState {
+	try {
+		const raw = localStorage.getItem(OPEN_WORKSPACES_KEY);
+		if (raw === null) return { ids: [], active: null };
+		const parsed: unknown = JSON.parse(raw);
+		if (!parsed || typeof parsed !== 'object') return { ids: [], active: null };
+		const record = parsed as Record<string, unknown>;
+		const legacyPaths = Array.isArray(record.paths)
+			? [...new Set(record.paths.filter((path): path is string => typeof path === 'string' && path.trim().length > 0))]
+			: [];
+		// These paths are read only as migration input. The new app restores one
+		// active workspace instead of a multi-workspace board.
+		const ids = Array.isArray(record.ids)
+			? [...new Set(record.ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0 && id !== GENERAL_WORKSPACE_ID))]
+			: legacyPaths;
+		const normalizedIds = ids;
+		const active = typeof record.active === 'string' && normalizedIds.includes(record.active)
+			? record.active
+			: null;
+		return { ids: normalizedIds, active };
+	} catch {
+		return { ids: [], active: null };
+	}
+}
+
+const SAVED_WORKSPACE_STATE = readWorkspaceState();
+
+function workspaceContextKey(workspaceId: string | null): string {
+	return workspaceId === null ? '\u0000general' : workspaceId;
+}
+
+function normalizeWorkspaceTool(value: unknown): WorkspaceTool | null {
+	if (!value || typeof value !== 'object') return null;
+	const tool = value as Record<string, unknown>;
+	if (typeof tool.id !== 'string' || !tool.id || !['context', 'source', 'preview', 'studio', 'result'].includes(String(tool.kind))) return null;
+	if (tool.kind === 'result' && (typeof tool.artifactId !== 'string' || !Number.isSafeInteger(tool.artifactRevision) || Number(tool.artifactRevision) < 1)) return null;
+	const preview = parseCompanionPane(tool.preview);
+	if (tool.kind === 'preview' && !preview) return null;
+	return {
+		id: tool.id,
+		kind: tool.kind as WorkspaceToolKind,
+		conversationId: typeof tool.conversationId === 'string' ? tool.conversationId : null,
+		sourcePath: typeof tool.sourcePath === 'string' ? tool.sourcePath : null,
+		sourceName: typeof tool.sourceName === 'string' ? tool.sourceName : null,
+		documentId: typeof tool.documentId === 'string' ? tool.documentId : null,
+		title: typeof tool.title === 'string' ? tool.title : undefined,
+		initialArtifactId: typeof tool.initialArtifactId === 'string' ? tool.initialArtifactId : null,
+		artifactId: typeof tool.artifactId === 'string' ? tool.artifactId : null,
+		artifactRevision: typeof tool.artifactRevision === 'number' ? tool.artifactRevision : null,
+		newReport: tool.newReport === true,
+		preview
+	};
+}
+
+function normalizeWorkspaceContext(value: unknown): WorkspaceContext | null {
+	if (!value || typeof value !== 'object') return null;
+	const source = value as Record<string, unknown>;
+	if (source.workspaceId !== null && typeof source.workspaceId !== 'string') return null;
+	const workspaceId = source.workspaceId as string | null;
+	const legacyKind: WorkspacePane = source.workspacePane === 'context' ? 'context' : 'investigation';
+	const legacyInvestigationId = typeof source.investigationId === 'string' ? source.investigationId : null;
+	let activeTool = normalizeWorkspaceTool(source.activeTool);
+	if (!activeTool && Array.isArray(source.workspaceToolTabs)) {
+		const savedActiveId = typeof source.activeWorkspaceToolTabId === 'string' ? source.activeWorkspaceToolTabId : null;
+		const legacyTabs = source.workspaceToolTabs as unknown[];
+		const selected = savedActiveId
+			? legacyTabs.find((tab) => tab && typeof tab === 'object' && (tab as Record<string, unknown>).id === savedActiveId)
+			: undefined;
+		activeTool = normalizeWorkspaceTool(selected);
+	}
+	// An older workspace could persist Context without a selected item. Restore
+	// that surface in place. Investigation selection now follows the active chat.
+	if (!activeTool && !Array.isArray(source.workspaceToolTabs) && legacyKind === 'context' && source.workspacePaneOpen === true) {
+		activeTool = { id: 'context', kind: 'context' };
+	}
+	return {
+		workspaceId,
+		conversationId: typeof source.conversationId === 'string' ? source.conversationId : '',
+		workspacePane: activeTool ? 'context' : legacyKind,
+		workspacePaneOpen: source.workspacePaneOpen === true,
+		investigationId: typeof source.investigationId === 'string' ? source.investigationId : null,
+		activeTool
+	};
+}
+
+function readWorkspaceContextState(): SavedWorkspaceContextState {
+	try {
+		const currentRaw = localStorage.getItem(WORKSPACE_CONTEXTS_KEY);
+		if (currentRaw) {
+			const parsed: unknown = JSON.parse(currentRaw);
+			if (parsed && typeof parsed === 'object') {
+				const record = parsed as Record<string, unknown>;
+				const contexts = Array.isArray(record.contexts)
+					? record.contexts.flatMap((item): WorkspaceContext[] => {
+						const context = normalizeWorkspaceContext(item);
+						return context ? [context] : [];
+					}).filter((context, index, all) => all.findIndex((item) => workspaceContextKey(item.workspaceId) === workspaceContextKey(context.workspaceId)) === index)
+					: [];
+				if (contexts.length) {
+					const activeWorkspaceId = record.activeWorkspaceId === null || typeof record.activeWorkspaceId === 'string'
+						? record.activeWorkspaceId as string | null
+						: null;
+					if (!contexts.some((context) => context.workspaceId === activeWorkspaceId)) {
+						contexts.unshift(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
+					}
+					return { contexts, activeWorkspaceId };
+				}
+			}
+		}
+
+		// One-time migration from environment compositions. The active environment
+		// wins when older copies contain different selections for the same workspace.
+		const raw = localStorage.getItem(LEGACY_ENVIRONMENTS_KEY);
+		if (raw) {
+			const parsed: unknown = JSON.parse(raw);
+			if (parsed && typeof parsed === 'object') {
+				const record = parsed as Record<string, unknown>;
+				if (Array.isArray(record.environments)) {
+					const environments = record.environments.filter((item): item is Record<string, unknown> =>
+						Boolean(item && typeof item === 'object' && Array.isArray((item as Record<string, unknown>).panes))
+					);
+					const activeEnvironment = environments.find((item) => item.id === record.active);
+					const ordered = [...(activeEnvironment ? [activeEnvironment] : []), ...environments.filter((item) => item !== activeEnvironment)];
+					const byWorkspace = new Map<string, WorkspaceContext>();
+					for (const environment of ordered) {
+						const panes = environment.panes as unknown[];
+						for (const rawPane of panes) {
+							const candidate = normalizeWorkspaceContext(rawPane);
+							if (!candidate) continue;
+							const key = workspaceContextKey(candidate.workspaceId);
+							const existing = byWorkspace.get(key);
+							if (!existing) {
+								byWorkspace.set(key, candidate);
+								continue;
+							}
+							if (!existing.activeTool && candidate.activeTool) existing.activeTool = candidate.activeTool;
+						}
+					}
+					const contexts = [...byWorkspace.values()];
+					if (!contexts.some((context) => context.workspaceId === null)) {
+						contexts.push(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
+					}
+					const activePane = activeEnvironment && Array.isArray(activeEnvironment.panes)
+						? (activeEnvironment.panes as unknown[]).find((item) => item && typeof item === 'object' && (item as Record<string, unknown>).id === activeEnvironment.activePaneId)
+						: null;
+					const activePaneRecord = activePane && typeof activePane === 'object' ? activePane as Record<string, unknown> : null;
+					const legacyActive = activePaneRecord && (activePaneRecord.workspaceId === null || typeof activePaneRecord.workspaceId === 'string')
+						? activePaneRecord.workspaceId as string | null
+						: SAVED_WORKSPACE_STATE.active;
+					const activeWorkspaceId = contexts.some((context) => context.workspaceId === legacyActive) ? legacyActive : null;
+					return { contexts, activeWorkspaceId };
+				}
+			}
+		}
+	} catch {
+		/* fall through to the older workspace list */
+	}
+	const contexts = SAVED_WORKSPACE_STATE.ids.map((workspaceId) => normalizeWorkspaceContext({ workspaceId, conversationId: '' })!);
+	contexts.push(normalizeWorkspaceContext({ workspaceId: null, conversationId: '' })!);
+	return {
+		contexts,
+		activeWorkspaceId: contexts.some((context) => context.workspaceId === SAVED_WORKSPACE_STATE.active)
+			? SAVED_WORKSPACE_STATE.active
+			: null
+	};
+}
+
+const SAVED_WORKSPACE_CONTEXT_STATE = readWorkspaceContextState();
 
 function readSidebarCollapsed(): boolean {
 	try {
@@ -143,24 +354,24 @@ function readProjects(): Project[] {
 }
 
 
-/** One conversation tab: its transcript, its in-flight run, its input history. */
+/** One conversation: its transcript, its in-flight run, and its input history. */
 export class Conversation {
 	readonly kind = 'chat' as const;
 	readonly id: string;
 	messages = $state<Message[]>([]);
 	busy = $state<boolean>(false);
-	/** Transient one-line status shown while this tab's agent is working. */
+	/** Transient one-line status shown while this conversation's agent is working. */
 	activity = $state<string>('');
 	/** Set by `/login <provider>`: the next composer line is taken as the API
 	 *  key for this provider not echoed to the transcript, not persisted. */
 	pendingKey = $state<{ provider: string; display: string } | null>(null);
-	/** ↑-recall history for the composer while this tab is focused. */
+	/** ↑-recall history for the composer while this conversation is focused. */
 	history: string[] = [];
-	/** The model this tab answers with. Empty = use the saved default. All tabs
-	 *  share one provider / login; only the model is per-tab. */
+	/** The model this conversation answers with. Empty = use the saved default. */
 	model = $state<string>('');
-	/** Origin repository, pinned when the first real question is asked. Null
-	 *  means the conversation began without a mounted repository. */
+	/** Folder-backed analytics scope, pinned when the first real question is
+	 *  asked. Null means this conversation belongs to General; undefined is an
+	 *  unassigned, pristine conversation awaiting an owner. */
 	workspaceScope = $state<string | null | undefined>(undefined);
 	/** A user-given name. null = derive one from the folder + first actual
 	 *  question, the same as an un-renamed conversation always has. */
@@ -168,12 +379,18 @@ export class Conversation {
 	/** The current question's intent. Inspect selects the stricter read-only
 	 *  tool registry and makes the source-first workflow explicit to the model. */
 	mode = $state<AskMode>('ask');
-	/** Sources and fields chosen from the workspace for this tab. */
+	/** Sources and fields chosen from the workspace for this conversation. */
 	contextRefs = $state<ContextReference[]>([]);
+	/** Optional artifact surface beside this conversation's transcript. */
+	companionPane = $state<CompanionPane | null>(null);
 	/** The compact, local run trace shown beneath the transcript. */
 	runSteps = $state<RunStep[]>([]);
+	runQuestion = $state('');
+	runQuestionId = $state<string | null>(null);
+	runState = $state<RuntimeTurnState | null>(null);
 	runStartedAt = $state<number | null>(null);
 	runDurationMs = $state<number | null>(null);
+	runMessageId = $state<string | null>(null);
 
 	/** `id` defaults to a fresh one (a genuinely new conversation). Reopening
 	 *  an archived conversation passes its real id back in, so re-archiving
@@ -221,22 +438,47 @@ export class Conversation {
 		this.contextRefs = [];
 	}
 
-	startRun(): void {
+	startRun(question = '', questionId: string | null = null, messageId: string | null = null): void {
 		const now = Date.now();
 		this.runStartedAt = now;
 		this.runDurationMs = null;
+		this.runQuestion = question.trim();
+		this.runQuestionId = questionId;
+		this.runMessageId = messageId;
+		this.runState = 'received';
 		this.runSteps = [
 			{
 				id: uid(),
-				label: 'Planning the question',
+				label: 'Understanding the question',
 				state: 'running',
 				started_at_ms: now
 			}
 		];
 	}
 
-	beginRunStep(tool: string, note?: string): void {
+	updateRunState(state: RuntimeTurnState): void {
+		this.runState = state;
+		const label = progressStepForState(state);
+		if (label) this.beginProgressStep(label);
+	}
+
+	private beginProgressStep(label: string): void {
+		const current = this.runSteps.at(-1);
+		if (current?.state === 'running' && current.label === label) return;
 		const now = Date.now();
+		this.runSteps = [
+			...this.runSteps.map((step) =>
+				step.state === 'running'
+					? { ...step, state: 'complete' as const, finished_at_ms: now }
+					: step
+			),
+			{ id: uid(), label, state: 'running', started_at_ms: now }
+		];
+	}
+
+	beginRunStep(tool: string): string {
+		const now = Date.now();
+		const label = analystStepForTool(tool);
 		const steps = this.runSteps.map((step) =>
 			step.state === 'running' && !step.tool
 				? { ...step, state: 'complete' as const, finished_at_ms: now }
@@ -246,13 +488,13 @@ export class Conversation {
 			...steps,
 			{
 				id: uid(),
-				label: note || humanToolName(tool),
+				label,
 				state: 'running',
 				started_at_ms: now,
-				tool,
-				note
+				tool
 			}
 		];
+		return label;
 	}
 
 	completeRunStep(item: EvidenceItem): void {
@@ -263,7 +505,16 @@ export class Conversation {
 		if (index < 0) return;
 		this.runSteps = this.runSteps.map((step, i) =>
 			i === index
-				? { ...step, state: item.error ? ('error' as const) : ('complete' as const), finished_at_ms: now, evidence: item }
+				? {
+						...step,
+						state: item.error ? ('error' as const) : ('complete' as const),
+						finished_at_ms: now,
+						summary: item.error ? undefined : item.result_summary,
+						sources: item.sources?.map((source) =>
+							source.table ? `${source.source} · ${source.table}` : source.source
+						),
+						evidence_id: item.id
+					}
 				: step
 		);
 	}
@@ -275,8 +526,25 @@ export class Conversation {
 				? { ...step, state: error ? ('error' as const) : ('complete' as const), finished_at_ms: now }
 				: step
 		);
+		const message = this.runMessageId
+			? this.messages.find((item) => item.id === this.runMessageId)
+			: undefined;
+		if (error || message?.answer?.status === 'failed') {
+			this.runState = 'failed';
+		} else if (!['accepted', 'clarify', 'needs_review', 'unsupported', 'failed', 'cancelled'].includes(this.runState ?? '')) {
+			if (message?.answer?.clarification) this.runState = 'clarify';
+			else if (message?.answer?.status === 'needs_review' || message?.answer?.status === 'insufficient_data') this.runState = 'needs_review';
+			else this.runState = 'accepted';
+		}
 		if (this.runStartedAt !== null) this.runDurationMs = Math.max(0, now - this.runStartedAt);
+		if (message) {
+			message.run_steps = this.runSteps.map((step) => ({ ...step }));
+			if (this.runState) message.run_state = this.runState;
+			if (this.runQuestionId) message.run_question_id = this.runQuestionId;
+			if (this.runDurationMs !== null) message.run_duration_ms = this.runDurationMs;
+		}
 		this.runStartedAt = null;
+		this.runMessageId = null;
 	}
 
 	/** Coalesce writes while a run streams; flush immediately once it settles. */
@@ -296,7 +564,13 @@ export class Conversation {
 		try {
 			localStorage.setItem(
 				PREFIX + this.id,
-				JSON.stringify({ id: this.id, workspace, messages: this.messages.slice(-200) })
+				JSON.stringify({
+					id: this.id,
+					workspace,
+					model: this.model,
+					messages: this.messages.slice(-200),
+					companionPane: this.companionPane
+				})
 			);
 		} catch {
 			/* ignore */
@@ -313,30 +587,63 @@ export class Conversation {
 }
 
 
-export type Tab = Conversation;
 export type WorkspaceView = 'ask' | 'workspace' | 'settings' | 'project';
-export type WorkspacePane = 'sources' | 'context';
+export type WorkspacePane = 'context' | 'investigation';
+export type WorkspaceToolKind = 'context' | 'source' | 'preview' | 'studio' | 'result';
+
+export interface InvestigationNavigationTarget {
+	workspaceId: string;
+	conversationId: string;
+	turnId: string;
+}
+
+export interface ConversationAnalysisFocus {
+	conversationId: string;
+	turnId: string;
+}
 
 class Session {
+	#deletingWorkspacePaths = new Set<string>();
+	#pendingArchivesByWorkspace = new Map<string, Set<Promise<void>>>();
+
 	catalog = $state<Catalog>({ workspace: null, sources: [] });
+	/** Repository catalogs currently mounted by the analysis engine. */
+	workspaceWindows = $state<WorkspaceWindow[]>([]);
+	workspaceContexts = $state<WorkspaceContext[]>(SAVED_WORKSPACE_CONTEXT_STATE.contexts);
+	activeWorkspaceId = $state<string | null>(SAVED_WORKSPACE_CONTEXT_STATE.activeWorkspaceId);
 	mountProgress = $state<WorkspaceProgress | null>(null);
-	/** The lightweight workspace surface currently shown beside the tab state. */
+	/** The app-level page; an unbound conversation is the initial destination. */
 	workspaceView = $state<WorkspaceView>('ask');
+	workspaceSection = $state<'chat' | 'files' | 'reports'>('chat');
+	newInvestigationRequested = $state(false);
+	requestNewInvestigation(): void {
+		if (!this.catalog.workspace) return;
+		this.workspaceSection = 'chat';
+		this.setWorkspacePaneOpen(true);
+		this.newInvestigationRequested = true;
+	}
+	/** Window organization only; never a mounted Workspace or an execution mode. */
+	contentLayout = $state<'chat' | 'notebook'>('chat');
+	setContentLayout(layout: 'chat' | 'notebook'): void {
+		this.contentLayout = layout;
+		if (layout === 'chat') { this.setWorkspacePaneOpen(false); return; }
+		if (layout !== 'notebook' || !this.catalog.workspace) return;
+		this.setWorkspacePaneOpen(true);
+	}
 	/** The active pane inside Workspace. */
-	workspacePane = $state<WorkspacePane>('sources');
-	/** Folder from the last session, if it still exists shown on the welcome
-	 *  screen as a one-click "reopen". Fella no longer opens it automatically. */
-	lastFolder = $state<string | null>(null);
+	workspacePane = $state<WorkspacePane>('investigation');
+	/** Ephemeral cross-navigation between a transcript answer and its canonical run. */
+	investigationNavigationTarget = $state<InvestigationNavigationTarget | null>(null);
+	conversationAnalysisFocus = $state<ConversationAnalysisFocus | null>(null);
 	settings = $state<Settings | null>(null);
 	health = $state<ProviderHealth | null>(null);
 	/** Built-in providers from the engine, cached so the composer can hint
 	 *  valid `/login` / `/logout` names without an await. */
 	providers = $state<ProviderInfo[]>([]);
-	/** The open conversation tabs and the focused index. */
-	tabs = $state<Tab[]>([new Conversation()]);
-	active = $state<number>(0);
-	/** Focus mode: hide the tab strip and the folder header for a plain,
-	 *  single-conversation view. Toggled by `/focus` or Ctrl+Shift+F. */
+	/** Live conversations retain their workspace scope. */
+	conversations = $state<Conversation[]>([new Conversation()]);
+	activeConversationIndex = $state<number>(0);
+	/** Focus mode: hide the shell header for a plain, single-conversation view. */
 	focus = $state<boolean>(false);
 	/** History sidebar visibility. Unlike `focus`, this is remembered across
 	 *  launches (open by default) it's a layout preference, not a
@@ -345,15 +652,43 @@ class Session {
 	/** Bumped whenever a conversation is archived, so the sidebar's list
 	 *  knows to refetch without polling. */
 	historyVersion = $state<number>(0);
-	/** Source selected by global search for the Sources master/detail view. */
+	/** Bumped when the workspace's Investigation records or links change. */
+	investigationsVersion = $state<number>(0);
+	reportsVersion = $state(0);
+	/** Presentation labels, hydrated from durable Investigations; never transcript edits. */
+	investigationNames = $state<Record<string, string>>({});
+	rememberInvestigationNames(records: readonly { title: string; conversation_id?: string | null }[]): void {
+		for (const record of records) {
+			if (record.conversation_id && record.title.trim()) this.investigationNames[record.conversation_id] = record.title.trim();
+		}
+	}
+	/** Bumped for Investigation record edits that update the workspace picker summary. */
+	workspaceInvestigationSummaryVersion = $state<number>(0);
+	/** Investigation currently selected in the Investigation view, scoped to the active Workspace. */
+	activeInvestigationId = $state<string | null>(null);
+	/** Source selected by global search for the contextual Investigation catalog. */
 	selectedSourcePath = $state<string | null>(null);
 	/** Repositories shown in the local sidebar, in user-defined order. */
 	repositoryPaths = $state<string[]>(readStringList(REPOSITORIES_KEY));
 	/** Repositories intentionally hidden from the local sidebar. */
 	hiddenRepositoryPaths = $state<string[]>(readStringList(HIDDEN_REPOSITORIES_KEY));
+	/** Saved conversation groups whose workspace path could not be mounted. */
+	historyOnlyRepositoryPaths = $state<string[]>(readStringList(HISTORY_ONLY_REPOSITORIES_KEY));
 	/** User-created repository wikis, kept entirely on this computer. */
 	projects = $state<Project[]>(readProjects());
 	activeProjectId = $state<string | null>(null);
+
+	constructor() {
+		// A workspace is the scope owner. General is always available without
+		// pretending that it is a mounted folder.
+		let context = this.workspaceContextFor(this.activeWorkspaceId);
+		if (!context) {
+			context = { workspaceId: this.activeWorkspaceId, conversationId: this.conversations[0].id };
+			this.workspaceContexts.push(context);
+		}
+		context.conversationId = this.conversations[0].id;
+		this.conversations[0].workspaceScope = context.workspaceId;
+	}
 
 	#writeStringList(key: string, values: string[]): void {
 		try {
@@ -369,6 +704,184 @@ class Session {
 		} catch {
 			/* ignore */
 		}
+	}
+
+	#writeWorkspaceState(): void {
+		try {
+			localStorage.setItem(WORKSPACE_CONTEXTS_KEY, JSON.stringify({
+				contexts: this.workspaceContexts,
+				activeWorkspaceId: this.activeWorkspaceId
+			}));
+			// Remove obsolete composition snapshots only after the new representation
+			// has been saved successfully.
+			localStorage.removeItem(OPEN_WORKSPACES_KEY);
+			localStorage.removeItem(LEGACY_ENVIRONMENTS_KEY);
+		} catch {
+			/* workspace state is a convenience; a full localStorage must not block analysis */
+		}
+	}
+
+	setActiveInvestigation(id: string | null): void {
+		const pane = this.activeWorkspaceContext;
+		if (pane) {
+			this.activeInvestigationId = id;
+			pane.investigationId = id;
+			if (!pane.activeTool) {
+				pane.workspacePane = 'investigation';
+				this.workspacePane = 'investigation';
+			}
+		} else {
+			this.activeInvestigationId = id;
+		}
+		this.#writeWorkspaceState();
+	}
+
+	get pendingWorkspacePaths(): string[] {
+		const id = this.activeWorkspaceId;
+		return id && !this.workspaceAt(id) ? [id] : [];
+	}
+
+	get savedActiveWorkspaceId(): string | null {
+		return this.activeWorkspaceId;
+	}
+
+	get activeWorkspaceContext(): WorkspaceContext | null {
+		return this.workspaceContextFor(this.activeWorkspaceId);
+	}
+
+	workspaceContextFor(workspaceId: string | null): WorkspaceContext | null {
+		return this.workspaceContexts.find((context) => context.workspaceId === workspaceId) ?? null;
+	}
+
+	#ensureWorkspaceContext(workspaceId: string | null): WorkspaceContext {
+		let context = this.workspaceContextFor(workspaceId);
+		if (context) return context;
+		const conversation = this.conversations.findLast((item) => item.workspaceScope === workspaceId);
+		context = {
+			workspaceId,
+			conversationId: conversation?.id ?? '',
+			workspacePane: 'investigation',
+			workspacePaneOpen: false,
+			activeTool: null
+		};
+		this.workspaceContexts.push(context);
+		return context;
+	}
+
+	get activeWorkspaceTool(): WorkspaceTool | null {
+		return this.activeWorkspaceContext?.activeTool ?? null;
+	}
+
+	workspaceLabel(workspaceId: string | null): string {
+		if (!workspaceId) return 'General';
+		const workspace = this.workspaceAt(workspaceId);
+		return (workspace?.path ?? workspaceId).replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Workspace';
+	}
+
+	get activeWorkspace(): WorkspaceWindow | null {
+		return this.activeWorkspaceId ? this.workspaceAt(this.activeWorkspaceId) : null;
+	}
+
+	/** The path to pass to the analytical runtime; General always maps to null. */
+	get activeRepositoryPath(): string | null {
+		const workspace = this.activeWorkspace;
+		return workspace?.kind === 'repository' && !workspace.historyOnly ? workspace.path : null;
+	}
+
+	workspaceAt(id: string): WorkspaceWindow | null {
+		return this.workspaceWindows.find((workspace) => workspace.id === id) ?? null;
+	}
+
+	selectWorkspace(id: string): boolean {
+		return this.focusWorkspace(id);
+	}
+
+	/** Restore the persisted workspace after its catalog has been mounted. */
+	restoreActiveWorkspace(): void {
+		this.focusWorkspace(this.activeWorkspaceId ?? GENERAL_WORKSPACE_ID);
+	}
+
+	/** Register a mounted catalog and focus its repository-owned conversation.
+	 *  General conversations are never silently reassigned to a folder. */
+	registerWorkspace(catalog: Catalog): boolean {
+		const path = catalog.workspace;
+		if (!path) return false;
+		const existing = this.workspaceAt(path);
+		if (existing) {
+			existing.catalog = catalog;
+			existing.historyOnly = false;
+		}
+		else {
+			this.workspaceWindows = [...this.workspaceWindows, {
+				id: path,
+				kind: 'repository',
+				path,
+				catalog,
+				conversationId: '',
+				historyOnly: false
+			}];
+		}
+		this.catalog = catalog;
+		this.rememberRepository(path);
+		this.markRepositoryAvailable(path);
+		if (!this.focusWorkspace(path)) return false;
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	/** Focus a workspace and its owned conversation without borrowing another
+	 *  workspace's catalog. General has no repository runtime or catalog. */
+	focusWorkspace(id: string, conversationId?: string): boolean {
+		const scope = id === GENERAL_WORKSPACE_ID ? null : id;
+		const workspace = scope ? this.workspaceAt(scope) : null;
+		if (scope && !workspace) return false;
+		const context = this.#ensureWorkspaceContext(scope);
+		const requestedConversation = conversationId
+			? this.conversations.find((item) => item.id === conversationId && item.workspaceScope === scope)
+			: null;
+		let conversationIndex = requestedConversation
+			? this.conversations.indexOf(requestedConversation)
+			: this.conversations.findIndex((item) => item.id === context.conversationId && item.workspaceScope === scope);
+		if (conversationIndex < 0 && workspace?.conversationId) {
+			conversationIndex = this.conversations.findIndex((item) => item.id === workspace.conversationId && item.workspaceScope === scope);
+		}
+		if (conversationIndex < 0) conversationIndex = this.conversations.findLastIndex((item) => item.workspaceScope === scope);
+		if (conversationIndex < 0) {
+			const conversation = new Conversation();
+			conversation.model = this.model;
+			conversation.workspaceScope = scope;
+			this.conversations.push(conversation);
+			conversationIndex = this.conversations.length - 1;
+			this.#writeIndex();
+		}
+		const conversation = this.conversations[conversationIndex];
+		if (conversationId && requestedConversation && context.conversationId !== requestedConversation.id) {
+			context.investigationId = null;
+		}
+		context.conversationId = conversation.id;
+		if (workspace) workspace.conversationId = conversation.id;
+		this.activeConversationIndex = conversationIndex;
+		this.activeWorkspaceId = scope;
+		const activeTool = context.activeTool ?? null;
+		if (activeTool?.kind === 'preview' && activeTool.conversationId !== conversation.id) context.activeTool = null;
+		this.activeInvestigationId = context.investigationId ?? null;
+		this.catalog = workspace && !workspace.historyOnly ? workspace.catalog : { workspace: null, sources: [] };
+		this.workspacePane = context.activeTool ? 'context' : context.workspacePane ?? 'investigation';
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	focusWorkspaceConversation(id: string): void {
+		this.focusWorkspace(id);
+	}
+
+	setWorkspaceConversation(id: string, conversationId: string): void {
+		const workspace = this.workspaceAt(id);
+		if (!workspace) return;
+		workspace.conversationId = conversationId;
+		const context = this.workspaceContextFor(id);
+		if (context) context.conversationId = conversationId;
+		this.#writeWorkspaceState();
 	}
 
 	/** Remember a folder explicitly opened by the user and unhide it if needed. */
@@ -395,14 +908,115 @@ class Session {
 		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
 	}
 
+	/** Preserve a conversation group when its original folder cannot be mounted. */
+	markRepositoryHistoryOnly(path: string): void {
+		const normalized = path.trim();
+		if (!normalized) return;
+		if (this.historyOnlyRepositoryPaths.includes(normalized)) return;
+		this.historyOnlyRepositoryPaths = [...this.historyOnlyRepositoryPaths, normalized];
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+	}
+
+	/** Open a missing repository's archived conversations in a history-only
+	 *  workspace window. Its owner stays the original folder; no other catalog
+	 *  can be borrowed for analysis. */
+	openHistoryOnlyWorkspace(path: string, conversationId = ''): boolean {
+		const existing = this.workspaceAt(path);
+		if (existing) {
+			if (conversationId) existing.conversationId = conversationId;
+			return this.focusWorkspace(path, conversationId || undefined);
+		}
+		this.markRepositoryHistoryOnly(path);
+		this.rememberRepository(path);
+		const workspace: WorkspaceWindow = {
+			id: path,
+			kind: 'repository',
+			path,
+			catalog: { workspace: null, sources: [] },
+			conversationId,
+			historyOnly: true
+		};
+		this.workspaceWindows = [...this.workspaceWindows, workspace];
+		if (!this.focusWorkspace(path, conversationId || undefined)) return false;
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	/** A successful mount restores the repository's normal, live state. */
+	markRepositoryAvailable(path: string): void {
+		const normalized = path.trim();
+		if (!normalized) return;
+		const workspace = this.workspaceAt(normalized);
+		if (workspace) workspace.historyOnly = false;
+		if (this.historyOnlyRepositoryPaths.includes(normalized)) {
+			this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((item) => item !== normalized);
+			this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+		}
+	}
+
 	/** Hide a repository from navigation without deleting its conversations or files. */
 	forgetRepository(path: string): void {
 		this.repositoryPaths = this.repositoryPaths.filter((item) => item !== path);
+		this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((item) => item !== path);
 		if (!this.hiddenRepositoryPaths.includes(path)) {
 			this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
 		}
 		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
 		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+	}
+
+	/** Prevent a workspace's live transcripts from being re-archived while its
+	 *  saved conversations are being deleted. Wait for any archive already in
+	 *  flight before the caller takes its final archive list. */
+	async beginWorkspaceDeletion(path: string): Promise<boolean> {
+		if (this.#deletingWorkspacePaths.has(path)) return false;
+		if (this.conversations.some((conversation) => conversation.workspaceScope === path && conversation.busy)) return false;
+		this.#deletingWorkspacePaths.add(path);
+		await Promise.all(this.#pendingArchivesByWorkspace.get(path) ?? []);
+		return true;
+	}
+
+	cancelWorkspaceDeletion(path: string): void {
+		this.#deletingWorkspacePaths.delete(path);
+	}
+
+	/** Remove a workspace from Fella and clear its conversation/context references
+	 *  after its archived conversations have been deleted from the backend. */
+	async deleteWorkspaceAndConversations(path: string): Promise<void> {
+		this.#deletingWorkspacePaths.delete(path);
+		const removed = this.conversations.filter((conversation) => conversation.workspaceScope === path);
+		const removedIds = new Set(removed.map((conversation) => conversation.id));
+		for (const conversation of removed) {
+			conversation.dropSnapshot();
+			if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
+		}
+		this.conversations = this.conversations.filter((conversation) => conversation.workspaceScope !== path);
+		this.workspaceContexts = this.workspaceContexts.filter((context) => context.workspaceId !== path);
+		const generalContext = this.#ensureWorkspaceContext(null);
+		if (removedIds.has(generalContext.conversationId)) generalContext.conversationId = '';
+		if (this.activeWorkspaceId === path) this.activeWorkspaceId = null;
+
+		this.workspaceWindows = this.workspaceWindows.filter((workspace) => workspace.id !== path);
+		this.repositoryPaths = this.repositoryPaths.filter((repository) => repository !== path);
+		if (!this.hiddenRepositoryPaths.includes(path)) this.hiddenRepositoryPaths = [...this.hiddenRepositoryPaths, path];
+		this.historyOnlyRepositoryPaths = this.historyOnlyRepositoryPaths.filter((repository) => repository !== path);
+		this.#writeStringList(REPOSITORIES_KEY, this.repositoryPaths);
+		this.#writeStringList(HIDDEN_REPOSITORIES_KEY, this.hiddenRepositoryPaths);
+		this.#writeStringList(HISTORY_ONLY_REPOSITORIES_KEY, this.historyOnlyRepositoryPaths);
+
+		if (this.catalog.workspace === path) this.catalog = { workspace: null, sources: [] };
+		if (this.activeProject?.workspace === path) {
+			this.activeProjectId = null;
+			this.workspaceView = 'ask';
+		}
+		this.historyVersion++;
+		this.#writeIndex();
+		this.focusWorkspace(this.activeWorkspaceId ?? GENERAL_WORKSPACE_ID);
+		this.#writeWorkspaceState();
+		if (isDesktop()) {
+			try { await ipc.closeWorkspace(path); } catch (error) { console.warn('workspace close failed after deletion', error); }
+		}
 	}
 
 	get activeProject(): Project | null {
@@ -413,7 +1027,7 @@ class Session {
 		return this.projects.find((project) => project.workspace === workspace) ?? null;
 	}
 
-	createProject(name: string, workspace: string): Project {
+	createProject(name: string, workspace: string): Project | null {
 		const existing = this.projectForWorkspace(workspace);
 		if (existing) {
 			this.activeProjectId = existing.id;
@@ -427,6 +1041,7 @@ class Session {
 			name: name.trim() || 'Untitled project',
 			workspace,
 			body: '',
+			references: [],
 			created_at_ms: now,
 			updated_at_ms: now
 		};
@@ -437,7 +1052,7 @@ class Session {
 		return project;
 	}
 
-	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body'>>): void {
+	updateProject(id: string, patch: Partial<Pick<Project, 'name' | 'body' | 'references'>>): void {
 		this.projects = this.projects.map((project) =>
 			project.id === id ? { ...project, ...patch, updated_at_ms: Date.now() } : project
 		);
@@ -473,6 +1088,10 @@ class Session {
 			this.workspaceView = 'ask';
 			return;
 		}
+		if (view === 'workspace') {
+			this.setWorkspacePane('investigation');
+			return;
+		}
 		this.workspaceView = view;
 	}
 
@@ -481,25 +1100,242 @@ class Session {
 			this.workspaceView = 'ask';
 			return;
 		}
-		this.workspacePane = pane;
-		this.workspaceView = 'workspace';
+		const context = this.activeWorkspaceContext;
+		if (!context) return;
+		if (pane === 'investigation') {
+			context.activeTool = null;
+			context.investigationId = this.activeInvestigationId;
+			context.workspacePane = 'investigation';
+		} else {
+			context.activeTool = { id: 'context', kind: 'context' };
+			context.investigationId = null;
+			context.workspacePane = 'context';
+		}
+		context.workspacePaneOpen = true;
+		this.workspacePane = context.workspacePane;
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+	}
+
+	/** Replace the Investigation details pane with a workspace-owned surface. */
+	openWorkspaceTool(kind: 'context'): WorkspaceTool | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
+		const tool: WorkspaceTool = { id: 'context', kind };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	openStudioTool(documentId: string | null = null, artifactId: string | null = null): WorkspaceTool | null {
+		this.workspaceSection = 'reports';
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
+		const tool: WorkspaceTool = { id: 'studio', kind: 'studio', documentId, initialArtifactId: artifactId };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	openNewReport(): void {
+		const tool = this.openStudioTool();
+		if (tool) { tool.newReport = true; this.#writeWorkspaceState(); }
+	}
+
+	openResultTool(artifactId: string, revision: number, title: string): WorkspaceTool | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace || !artifactId || !Number.isSafeInteger(revision) || revision < 1) return null;
+		const tool: WorkspaceTool = { id: `result:${artifactId}:${revision}`, kind: 'result', artifactId, artifactRevision: revision, title };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	setStudioToolDocument(documentId: string, title?: string): void {
+		const tool = this.activeWorkspaceTool;
+		if (!tool || tool.kind !== 'studio') return;
+		tool.documentId = documentId;
+		tool.newReport = false;
+		if (title) tool.title = title;
+		tool.initialArtifactId = null;
+		this.reportsVersion++;
+		this.#writeWorkspaceState();
+	}
+
+	/** Open a read-only catalog source preview in Tools without changing the
+	 *  active Conversation, Investigation scope, or next-message context. */
+	openSourceTool(source: SourceInfo): WorkspaceTool | null {
+		const context = this.activeWorkspaceContext;
+		const workspace = this.catalog.workspace;
+		if (!context || !workspace || !this.catalog.sources.some((item) => item.path === source.path && item.name === source.name)) return null;
+		const tool: WorkspaceTool = {
+			id: `source:${source.path}:${source.name}`,
+			kind: 'source',
+			sourcePath: source.path,
+			sourceName: source.name
+		};
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	/** Display an existing artifact in the auxiliary pane. References
+	 * retain their original workspace revision; opening one never reruns it. */
+	openPreviewTool(preview: CompanionPane): WorkspaceTool | null {
+		const context = this.activeWorkspaceContext;
+		if (!context || !this.catalog.workspace) return null;
+		const tool: WorkspaceTool = { id: `preview:${uid()}`, kind: 'preview', conversationId: this.activeChat.id, preview };
+		context.activeTool = tool;
+		context.workspacePane = 'context';
+		context.investigationId = null;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'context';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return tool;
+	}
+
+	closeWorkspaceTool(): boolean {
+		const context = this.activeWorkspaceContext;
+		if (!context?.activeTool) return false;
+		context.activeTool = null;
+		context.workspacePane = 'investigation';
+		context.investigationId = this.activeInvestigationId;
+		context.workspacePaneOpen = true;
+		this.workspacePane = 'investigation';
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		return true;
+	}
+
+	setWorkspacePaneOpen(open: boolean): void {
+		if (open && !this.catalog.workspace) return;
+		const context = this.activeWorkspaceContext;
+		if (!context) return;
+		context.workspacePaneOpen = open;
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+	}
+
+	toggleWorkspacePane(): void {
+		if (!this.catalog.workspace) return;
+		this.setWorkspacePaneOpen(!this.workspacePaneOpen);
+	}
+
+	openInvestigationRun(turnId: string): boolean {
+		const conversation = this.activeChat;
+		const workspaceId = conversation.workspaceScope;
+		if (!workspaceId || this.catalog.workspace !== workspaceId || !turnId.trim()) return false;
+		this.investigationNavigationTarget = {
+			workspaceId,
+			conversationId: conversation.id,
+			turnId
+		};
+		this.setWorkspacePane('investigation');
+		return this.workspacePaneOpen;
+	}
+
+	clearInvestigationNavigationTarget(target: InvestigationNavigationTarget): void {
+		if (this.investigationNavigationTarget === target) this.investigationNavigationTarget = null;
+	}
+
+	focusConversationAnalysis(conversationId: string, turnId: string): void {
+		this.conversationAnalysisFocus = { conversationId, turnId };
+	}
+
+	clearConversationAnalysisFocus(target: ConversationAnalysisFocus): void {
+		if (this.conversationAnalysisFocus === target) this.conversationAnalysisFocus = null;
 	}
 
 	selectSource(path: string | null): void {
 		this.selectedSourcePath = path;
 	}
 
-	/** Focus a conversation tab. */
-	activateTab(index: number): void {
-		if (!this.tabs[index]) return;
-		this.active = index;
+	/** Open a catalog-backed source without changing the conversation's data
+	 * scope. The pane is a user interface choice, not analysis context. */
+	openSourcePane(source: SourceInfo): void {
+		const workspace = this.catalog.workspace;
+		if (!workspace || !this.catalog.sources.some((item) => item.path === source.path)) return;
+		if (this.activeChat.workspaceScope === workspace) {
+			this.activeChat.companionPane = null;
+			this.openSourceTool(source);
+			this.persist();
+			return;
+		}
+		this.setWorkspacePaneOpen(false);
+		this.activeChat.companionPane = {
+			kind: 'source',
+			path: source.path,
+			name: source.name,
+			workspacePath: workspace,
+			revision: this.catalog.revision ?? null
+		};
 		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		this.persist();
 	}
 
-
-	setAskMode(mode: AskMode): void {
-		this.ensureChat().setMode(mode);
+	/** Open an already-produced chart by its transcript/evidence identity. */
+	openChartPane(messageId: string, evidenceIndex: number): void {
+		const message = this.activeChat.messages.find((item) => item.id === messageId);
+		const evidence = message?.answer?.evidence[evidenceIndex];
+		if (
+			message?.role !== 'assistant' ||
+			!message.answer ||
+			!evidence ||
+			!isRenderableChartEvidence(evidence, message.answer.verification ?? [])
+		) return;
+		const preview: CompanionPane = {
+			kind: 'chart',
+			messageId,
+			evidenceIndex,
+			...(evidence.id ? { evidenceId: evidence.id } : {}),
+			workspacePath: message.answer?.workspace?.path ?? this.activeChat.workspaceScope ?? null,
+			revision: message.answer?.workspace?.revision ?? null
+		};
+		if (this.catalog.workspace && this.activeChat.workspaceScope === this.catalog.workspace) {
+			this.activeChat.companionPane = null;
+			this.openPreviewTool(preview);
+		} else {
+			this.setWorkspacePaneOpen(false);
+			this.activeChat.companionPane = preview;
+		}
+		this.workspaceView = 'ask';
+		this.#writeWorkspaceState();
+		this.persist();
 	}
+
+	closeCompanionPane(): void {
+		this.activeChat.companionPane = null;
+		this.persist();
+	}
+
+	/** Select a conversation inside its owning workspace. */
+	activateConversation(index: number): boolean {
+		const conversation = this.conversations[index];
+		if (!conversation) return false;
+		const scope = conversation.workspaceScope ?? null;
+		if (scope && !this.workspaceAt(scope)) return false;
+		return this.focusWorkspace(scope ?? GENERAL_WORKSPACE_ID, conversation.id);
+	}
+
 
 	addContextReference(ref: ContextReference): void {
 		this.ensureChat().addContext(ref);
@@ -513,22 +1349,27 @@ class Session {
 		this.activeChat?.clearContext();
 	}
 
-	get activeTab(): Tab {
-		return this.tabs[this.active] ?? this.tabs[0];
+	get activeConversation(): Conversation {
+		return this.conversations[this.activeConversationIndex] ?? this.conversations[0];
 	}
 
 	/** The focused conversation used by the command and ask paths. */
 	get activeChat(): Conversation {
-		return this.activeTab;
+		return this.activeConversation;
 	}
 
-	/** The active tab's model, or the saved default when it hasn't picked one. */
+	/** The optional right-side tools pane belongs to the active workspace pane. */
+	get workspacePaneOpen(): boolean {
+		return this.activeWorkspaceContext?.workspacePaneOpen === true;
+	}
+
+	/** The active conversation's model, or the saved default when unset. */
 	get model(): string {
-		const m = this.activeTab.model;
+		const m = this.activeConversation.model;
 		return m || this.settings?.model || '';
 	}
 
-	// --- per-conversation facade -> the active (or first) conversation ------
+	// --- per-conversation facade -> the active conversation -----------------
 	get messages(): Message[] {
 		return this.activeChat?.messages ?? [];
 	}
@@ -536,7 +1377,7 @@ class Session {
 		if (this.activeChat) this.activeChat.messages = v;
 	}
 	get conversationId(): string {
-		return this.activeChat?.id ?? this.activeTab.id;
+		return this.activeChat?.id ?? this.activeConversation.id;
 	}
 	get busy(): boolean {
 		return this.activeChat?.busy ?? false;
@@ -571,46 +1412,71 @@ class Session {
 		return this.ensureChat().addSystem(text);
 	}
 
-	// --- tab management ---------------------------------------------------
-	newTab(): void {
-		const inherit = this.model; // provider + login are shared; carry the model
-		const c = new Conversation();
-		c.model = inherit;
-		this.tabs.push(c);
-		this.activateTab(this.tabs.length - 1);
+	// --- conversation creation inside the focused workspace -----------------
+	newConversation(workspaceId: string | null = this.activeWorkspaceId): boolean {
+		const scope = workspaceId === GENERAL_WORKSPACE_ID ? null : workspaceId;
+		const workspace = scope ? this.workspaceAt(scope) : null;
+		if (scope && !workspace) return false;
+		const context = this.#ensureWorkspaceContext(scope);
+		const conversation = new Conversation();
+		conversation.model = this.model;
+		conversation.workspaceScope = scope;
+		this.conversations.push(conversation);
+		context.conversationId = conversation.id;
+		context.investigationId = null;
+		context.activeTool = null;
+		this.activeInvestigationId = null;
+		// A deliberate New conversation action starts in chat with the optional
+		// workspace tools pane closed.
+		context.workspacePaneOpen = false;
+		this.focusWorkspace(scope ?? GENERAL_WORKSPACE_ID, conversation.id);
+		this.workspaceView = 'ask';
 		this.#writeIndex();
+		this.#writeWorkspaceState();
+		return true;
 	}
 
-	/** Open an archived conversation (`/history <n>`) in a new tab, its
-	 *  transcript exactly as saved. If `workspace` doesn't match the folder
-	 *  open right now, the caller is responsible for warning that new
-	 *  questions here will run against the current folder, not the
-	 *  original one there's only ever one open folder for every tab. */
-	loadArchivedTab(
+	/** Load an archived conversation into its owner's active conversation slot. */
+	loadConversation(
 		id: string,
 		messages: Message[],
 		title: string | null = null,
-		workspace: string | null = null
+		workspace: string | null = null,
+		companionPane: unknown = null,
+		model: string | null = null
 	): void {
-		// Already open (e.g. the very conversation you're re-clicking in the
-		// sidebar) -- focus it instead of forking a second live copy under
-		// the same id, which would collide as a duplicate tab key.
-		const existing = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		const existing = this.conversations.findIndex((conversation) => conversation.id === id);
 		if (existing >= 0) {
-			const tab = this.tabs[existing];
-			if (tab.workspaceScope === undefined) tab.workspaceScope = workspace;
-			this.active = existing;
+			const conversation = this.conversations[existing];
+			if (typeof model === 'string') conversation.model = model;
+			if (conversation.workspaceScope === undefined) conversation.workspaceScope = workspace;
+			conversation.companionPane = parseCompanionPane(companionPane) ?? conversation.companionPane;
+			const context = this.#ensureWorkspaceContext(workspace ?? null);
+			if (context) {
+				if (context.conversationId !== id) context.investigationId = null;
+				context.conversationId = id;
+			}
+			const owner = workspace ? this.workspaceAt(workspace) : null;
+			if (owner) owner.conversationId = id;
+			this.activeConversationIndex = existing;
 			return;
 		}
-		const inherit = this.model; // same convention as newTab()
-		const c = new Conversation(id);
-		c.model = inherit;
-		c.title = title;
-		c.workspaceScope = workspace;
+		const conversation = new Conversation(id);
+		conversation.model = typeof model === 'string' ? model : this.model;
+		conversation.title = title;
+		conversation.workspaceScope = workspace;
+		conversation.companionPane = parseCompanionPane(companionPane);
 		// A reloaded transcript never has a run in flight.
-		c.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
-		this.tabs.push(c);
-		this.activateTab(this.tabs.length - 1);
+		conversation.messages = messages.map((m) => (m.pending ? { ...m, pending: false } : m));
+		this.conversations.push(conversation);
+		const context = this.#ensureWorkspaceContext(workspace ?? null);
+		if (context) {
+			if (context.conversationId !== id) context.investigationId = null;
+			context.conversationId = id;
+		}
+		const owner = workspace ? this.workspaceAt(workspace) : null;
+		if (owner) owner.conversationId = id;
+		this.activeConversationIndex = this.conversations.length - 1;
 		this.#writeIndex();
 	}
 
@@ -618,12 +1484,10 @@ class Session {
 	 *  clears a custom name back to the derived folder + first-message one. */
 	async renameConversation(id: string, title: string): Promise<void> {
 		const trimmed = title.trim();
-		const tab = this.tabs.find(
-			(t): t is Conversation => t.kind === 'chat' && t.id === id
-		);
-		if (tab) {
-			tab.title = trimmed || null;
-			await this.#archive(tab);
+		const conversation = this.conversations.find((item) => item.id === id);
+		if (conversation) {
+			conversation.title = trimmed || null;
+			await this.#archive(conversation);
 			return;
 		}
 		if (!isDesktop()) return;
@@ -632,59 +1496,106 @@ class Session {
 	}
 
 
-	async closeTab(i: number): Promise<void> {
-		const tab = this.tabs[i];
-		if (!tab) return;
-		await this.#archive(tab);
-		tab.dropSnapshot();
-		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
-		this.tabs.splice(i, 1);
-		if (this.tabs.length === 0) this.tabs.push(new Conversation());
-		if (this.active > i) this.active -= 1;
-		this.active = Math.min(this.active, this.tabs.length - 1);
-		this.#writeIndex();
-	}
+	/** Remove a deleted conversation and any preview that belongs to it. */
+	removeConversationWithoutArchiving(id: string): void {
+		delete this.investigationNames[id];
+		const i = this.conversations.findIndex((conversation) => conversation.id === id);
+		const conversation = i >= 0 ? this.conversations[i] : null;
+		const ownerId = conversation?.workspaceScope ??
+			this.workspaceContexts.find((context) => context.conversationId === id)?.workspaceId ?? null;
+		const wasActive = i >= 0 && i === this.activeConversationIndex;
+		if (conversation) {
+			conversation.dropSnapshot();
+			if (isDesktop()) void ipc.forgetConversation(conversation.id).catch(() => {});
+			this.conversations.splice(i, 1);
+		}
 
-	/** Remove a chat tab WITHOUT archiving it -- for when its history entry
-	 *  was just deleted from the sidebar. Deleting only ever removed the
-	 *  archived file; if that conversation was still open as a live tab, the
-	 *  very next settle re-archived it via persist()'s "archive on content"
-	 *  behaviour, silently undoing the delete (and, since persist() sweeps
-	 *  every open tab on any single tab's activity, resurrecting every other
-	 *  deleted-but-still-open conversation right along with it). No-op if
-	 *  the conversation isn't currently open. */
-	removeTabWithoutArchiving(id: string): void {
-		const i = this.tabs.findIndex((t) => t.kind === 'chat' && t.id === id);
+		let changedWorkspaceState = false;
+		for (const context of this.workspaceContexts) {
+			if (context.activeTool?.kind === 'preview' && context.activeTool.conversationId === id) {
+				context.activeTool = null;
+				context.workspacePane = 'investigation';
+				context.workspacePaneOpen = true;
+				changedWorkspaceState = true;
+			}
+			if (context.conversationId === id) {
+				const replacement = this.conversations.findLast((item) => item.workspaceScope === context.workspaceId);
+				if (replacement) context.conversationId = replacement.id;
+				else {
+					const blank = new Conversation();
+					blank.workspaceScope = context.workspaceId;
+					this.conversations.push(blank);
+					context.conversationId = blank.id;
+				}
+				context.investigationId = null;
+				changedWorkspaceState = true;
+			}
+		}
+		const owner = ownerId ? this.workspaceAt(ownerId) : null;
+		if (owner?.conversationId === id) {
+			const replacement = this.conversations.findLast((item) => item.workspaceScope === owner.path);
+			if (replacement) owner.conversationId = replacement.id;
+		}
+		this.investigationsVersion++;
+		if (changedWorkspaceState) {
+			if (this.activeWorkspaceContext) {
+				this.activeInvestigationId = this.activeWorkspaceContext.investigationId ?? null;
+				this.workspacePane = this.activeWorkspaceContext.workspacePane ?? 'investigation';
+			}
+			this.#writeWorkspaceState();
+		}
 		if (i < 0) return;
-		const tab = this.tabs[i] as Conversation;
-		tab.dropSnapshot();
-		if (isDesktop()) void ipc.forgetConversation(tab.id).catch(() => {});
-		this.tabs.splice(i, 1);
-		if (this.tabs.length === 0) this.tabs.push(new Conversation());
-		if (this.active > i) this.active -= 1;
-		this.active = Math.min(this.active, this.tabs.length - 1);
+		if (this.conversations.length === 0) {
+			const replacement = new Conversation();
+			replacement.workspaceScope = ownerId;
+			this.conversations.push(replacement);
+			if (owner) owner.conversationId = replacement.id;
+			this.#ensureWorkspaceContext(ownerId).conversationId = replacement.id;
+		}
+		if (wasActive) {
+			this.activateConversation(this.conversations.findIndex((item) => item.id === (owner?.conversationId ?? this.activeWorkspaceContext?.conversationId)));
+		} else {
+			if (this.activeConversationIndex > i) this.activeConversationIndex -= 1;
+			this.activeConversationIndex = Math.min(this.activeConversationIndex, this.conversations.length - 1);
+		}
 		this.#writeIndex();
 	}
 
 	/** End the active conversation and start the slot blank. */
 	async clear(): Promise<void> {
-		const tab = this.activeChat;
-		await this.#archive(tab);
-		tab.dropSnapshot();
-		this.tabs[this.active] = new Conversation();
+		const conversation = this.activeChat;
+		await this.#archive(conversation);
+		conversation.dropSnapshot();
+		const replacement = new Conversation();
+		replacement.workspaceScope = conversation.workspaceScope ?? null;
+		this.conversations[this.activeConversationIndex] = replacement;
+		const workspace = conversation.workspaceScope ? this.workspaceAt(conversation.workspaceScope) : null;
+		if (workspace) workspace.conversationId = replacement.id;
+		if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
+		this.activateConversation(this.activeConversationIndex);
 		this.#writeIndex();
 	}
 
 	/** Called once on launch. Archives every transcript a previous run left
-	 *  behind (one blob per tab, plus the legacy single blob) and starts fresh
-	 *  with one empty tab transcripts are never restored. */
+	 *  behind (one blob per conversation, plus the legacy single blob) and starts
+	 *  the active workspace context with an empty conversation; transcripts are
+	 *  loaded from history on demand. */
 	async rollOver(): Promise<void> {
 		let keys: string[];
 		try {
 			keys = Object.keys(localStorage).filter((k) => k === LEGACY_KEY || k.startsWith(PREFIX));
 		} catch {
-			this.tabs = [new Conversation()];
-			this.active = 0;
+			const replacement = new Conversation();
+			replacement.workspaceScope = this.activeWorkspaceContext?.workspaceId ?? null;
+			this.conversations = [replacement];
+			this.activeConversationIndex = 0;
+			for (const context of this.workspaceContexts) context.conversationId = '';
+			for (const workspace of this.workspaceWindows) workspace.conversationId = '';
+			if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
+			if (this.activeWorkspaceId) {
+				const workspace = this.workspaceAt(this.activeWorkspaceId);
+				if (workspace) workspace.conversationId = replacement.id;
+			}
 			return;
 		}
 		for (const k of keys) {
@@ -709,59 +1620,85 @@ class Session {
 		} catch {
 			/* ignore */
 		}
-		this.tabs = [new Conversation()];
-		this.active = 0;
+		const replacement = new Conversation();
+		replacement.workspaceScope = this.activeWorkspaceContext?.workspaceId ?? null;
+		this.conversations = [replacement];
+		this.activeConversationIndex = 0;
+		for (const context of this.workspaceContexts) context.conversationId = '';
+		for (const workspace of this.workspaceWindows) workspace.conversationId = '';
+		if (this.activeWorkspaceContext) this.activeWorkspaceContext.conversationId = replacement.id;
+		if (this.activeWorkspaceContext?.workspaceId) {
+			const workspace = this.workspaceAt(this.activeWorkspaceContext.workspaceId);
+			if (workspace) workspace.conversationId = replacement.id;
+		}
 		this.historyVersion++;
 	}
 
-	/** Persist every conversation tab's transcript (each debounces its own
+	/** Persist every live conversation's transcript (each debounces its own
 	 *  write).
 	 *
-	 *  Also archives a tab into history as soon as its first exchange
+	 *  Also archives a conversation into history as soon as its first exchange
 	 *  settles, not just on close/clear -- otherwise a conversation you're
 	 *  still actively having doesn't show up in the sidebar until you're
 	 *  done with it, which reads as "it didn't save" rather than "it hasn't
 	 *  been archived yet". `#archive` re-runs (and just overwrites the same
 	 *  file) on every later settle too, so the sidebar's title/preview
-	 *  reflects the real conversation even if you never close the tab. */
+	 *  reflects the real conversation while it continues. */
 	persist(): void {
-		for (const t of this.tabs) {
-			t.persist();
-			if (!t.busy && t.messages.length > 0) void this.#archive(t);
+		for (const conversation of this.conversations) {
+			if (conversation.workspaceScope && this.#deletingWorkspacePaths.has(conversation.workspaceScope)) continue;
+			conversation.persist();
+			if (!conversation.busy && conversation.messages.length > 0) void this.#archive(conversation);
 		}
 		this.#writeIndex();
 	}
 
 	#writeIndex(): void {
 		try {
-			localStorage.setItem(INDEX_KEY, JSON.stringify(this.tabs.map((t) => t.id)));
+			localStorage.setItem(INDEX_KEY, JSON.stringify(this.conversations.map((conversation) => conversation.id)));
 		} catch {
 			/* ignore */
 		}
 	}
 
-	async #archive(tab: Conversation): Promise<void> {
-		if (tab.messages.length === 0 || !isDesktop()) return;
+	async #archive(conversation: Conversation): Promise<void> {
+		if (conversation.messages.length === 0 || !isDesktop()) return;
+		const workspace = conversation.workspaceScope;
+		if (workspace && this.#deletingWorkspacePaths.has(workspace)) return;
 		const body = JSON.stringify({
-			id: tab.id,
+			id: conversation.id,
 			saved_at_ms: Date.now(),
-			workspace: tab.workspaceScope ?? null,
-			messages: tab.messages,
-			title: tab.title ?? undefined
+			workspace: conversation.workspaceScope ?? null,
+			model: conversation.model,
+			messages: conversation.messages,
+			title: conversation.title ?? undefined,
+			companionPane: conversation.companionPane
 		});
-		try {
-			await ipc.archiveConversation(tab.id, body);
-			this.historyVersion++;
-		} catch (e) {
-			console.warn('archive failed', e);
+		const archive = (async () => {
+			try {
+				await ipc.archiveConversation(conversation.id, body);
+				this.historyVersion++;
+			} catch (e) {
+				console.warn('archive failed', e);
+			}
+		})();
+		if (workspace) {
+			const pending = this.#pendingArchivesByWorkspace.get(workspace) ?? new Set<Promise<void>>();
+			pending.add(archive);
+			this.#pendingArchivesByWorkspace.set(workspace, pending);
+			void archive.then(() => {
+				pending.delete(archive);
+				if (!pending.size) this.#pendingArchivesByWorkspace.delete(workspace);
+			});
 		}
+		await archive;
 	}
 
 	/** Returns true when the blob has been dealt with (archived, or not worth
 	 *  keeping); false only when the archive IPC threw. */
 	async #archiveRaw(raw: string | null): Promise<boolean> {
 		if (!raw) return true;
-		let saved: { id?: string; workspace?: string | null; messages?: unknown };
+		let saved: { id?: string; workspace?: string | null; model?: unknown; messages?: unknown; companionPane?: unknown };
 		try {
 			saved = JSON.parse(raw);
 		} catch {
@@ -776,7 +1713,9 @@ class Session {
 			id: saved.id ?? '',
 			saved_at_ms: last?.ts ?? Date.now(),
 			workspace: archivedWorkspace(saved.messages, saved.workspace),
-			messages: saved.messages
+			...(typeof saved.model === 'string' ? { model: saved.model } : {}),
+			messages: saved.messages,
+			companionPane: parseCompanionPane(saved.companionPane)
 		});
 		try {
 			await ipc.archiveConversation(String(saved.id ?? ''), body);

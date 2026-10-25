@@ -1,81 +1,47 @@
 ---
-title: "Tabs, history, and focus"
-description: "Keep conversations separate, reopen past work, and use the compact focus view."
-icon: "panels-top-left"
+title: "Conversations and navigation"
+description: "Find, create, rename, and delete conversations and move between Chat and Notebook."
+icon: "messages-square"
 ---
 
-Each conversation tab keeps its own transcript, in-flight run, input recall, and model selection. All tabs share one open workspace, active provider, and provider credentials.
+Conversations are saved locally and appear in the **Chat** section of the sidebar. A conversation can be an ordinary chat or the conversation linked to an Investigation.
 
-## Tabs
+## Sidebar organization
 
-Each tab has its own conversation transcript. The workspace and provider are shared, while each tab can select its own model.
+The sidebar has three destinations:
 
-```text filename="keyboard and commands"
-/tab       # open a new conversation
-Ctrl+N     # open a new conversation
-Ctrl+T     # open a new conversation
-Ctrl+W     # close the current tab
-Ctrl+[     # previous tab
-Ctrl+]     # next tab
-Ctrl+1     # ... Ctrl+9 switch tabs
-```
+- **Chat** lists Investigations and other question conversations.
+- **Files** browses the mounted folder and its catalog.
+- **Reports** lists saved reports for the mounted folder.
 
-Use `Ctrl` on Windows and Linux, or `Cmd` on macOS.
+The workspace switcher in the title bar selects the mounted folder. Selecting another folder changes the data context; it does not change the identity of the conversation or Investigation.
 
-## History
+## Create and reopen
 
-Fella starts a fresh conversation when it launches. A conversation is archived locally as soon as an exchange settles, then updated after later turns and renames.
+Use the plus button to start a conversation in the selected workspace. Use the Investigation actions menu to create a named Investigation; Fella creates a linked conversation for it. A normal conversation does not automatically become an Investigation.
 
-The history sidebar is open by default. Use it to:
+Select a conversation to reopen its transcript. Use the sidebar search to find a conversation by its visible title or text. The model selected for each conversation remains associated with it.
 
-- Search conversation titles, previews, and workspace paths.
-- Reopen a conversation in a tab.
-- Rename or delete a conversation.
-- Start a new conversation.
+Use Notebook to inspect the selected Investigation beside Chat in the same window. Notebook is a view over the saved Investigation; it does not create a second transcript or rerun analysis.
 
-Press `Ctrl+B` or use the title-bar button to toggle the sidebar. Its open or closed state persists across launches.
+## Rename and delete
 
-The main screens also have direct shortcuts: `Ctrl+Shift+A` for Ask, `Ctrl+Shift+S` for Sources, `Ctrl+Shift+C` for Context, and `Ctrl+,` for Settings. `Ctrl+O` opens the folder picker. On macOS, use `Cmd` in place of `Ctrl`.
+You can rename a conversation from its row. Deleting asks for confirmation and removes the transcript and its linked Investigation. Saved analytical outputs, reports, their revisions, and supporting analysis records remain in the workspace. The deletion dialog states what will be retained before you confirm.
 
-Slash commands provide the same basic listing and reopen workflow:
+Removing a workspace from the sidebar deletes its conversations but leaves the original folder and files untouched. Saved reports and results remain associated with that workspace and can be reopened after reconnecting the folder.
 
-```text filename="fella commands"
-/history       # list saved conversations
-/history 2     # reopen the second entry
-/clear         # archive this conversation and start again
-```
+## Keyboard controls
 
-Conversation archives retain the workspace path, messages and embedded evidence, and an optional custom title. Reopening one remounts its saved folder when the path still exists. Deleting an archived conversation also closes its live tab if it is open.
-
-## Focus mode
-
-`/focus` or `Ctrl+Shift+F` hides the title bar and sidebar for a plain view. `Esc` still stops an active run first; otherwise it collapses open evidence folds.
-
-## Retry and correction
-
-Use `/retry` after a transient provider failure or after switching models. It repeats the latest non-command question in the current conversation. While a run is live, submitting a plain-text correction cancels the current run and re-asks with the correction appended.
-
-## Update manually
-
-```text filename="fella command"
-/update
-```
-
-Fella checks for a newer release only when you ask. It verifies the downloaded installer against the release checksum before applying it and never performs a background update check.
-
-## Related in the docs
-
-| If you need... | Go to |
+| Shortcut | Action |
 | --- | --- |
-| Learn every command and shortcut | [Commands and shortcuts](/developer-platform/using-fella/commands) |
-| Use a different model per tab | [Models and providers](/developer-platform/using-fella/models) |
-| Inspect a stopped run | [Read the evidence](/developer-platform/using-fella/evidence) |
+| Ctrl/Cmd+N | New conversation |
+| Ctrl/Cmd+O | Open a folder |
+| Ctrl/Cmd+K | Search |
+| Ctrl/Cmd+B | Toggle the sidebar |
+| Ctrl/Cmd+, | Open Settings |
+| Ctrl/Cmd+Shift+A | New conversation |
+| Enter | Send the message |
+| Shift+Enter | Insert a new line |
+| Escape | Stop an active run |
 
-<CardGroup cols={2}>
-  <Card title="Commands and shortcuts" icon="command" href="/developer-platform/using-fella/commands">
-    Keep the full slash-command and keyboard reference nearby.
-  </Card>
-  <Card title="Read the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
-    Review partial work after a run stops or a provider fails.
-  </Card>
-</CardGroup>
+Use Command in place of Ctrl on macOS.

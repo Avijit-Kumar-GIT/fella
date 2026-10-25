@@ -1,78 +1,58 @@
 ---
 title: "Fella"
-description: "Ask questions about your own files and inspect the work behind tool-backed answers."
+description: "Ask questions about local files, investigate the results, and preserve analytical work."
 icon: "house"
 ---
 
-# Ask your files, not a black box
+# An analytical workspace built around conversation
 
-Fella is a local-first desktop app for personal analytics. Open a folder of statements, exports, logs, notes, or other supported files, ask a question in plain language, and inspect the tools and results used to answer it.
+Fella is a local-first desktop app for working with your own information. Ask a question about a mounted folder, inspect the analysis behind the answer, and save useful results into a report.
 
 <CardGroup cols={3}>
-  <Card title="Get an answer" icon="play" href="/getting-started">
-    Install Fella, open a folder, and inspect your first tool-backed result.
+  <Card title="Get started" icon="play" href="/getting-started">
+    Connect a model, open a folder, and ask your first question.
   </Card>
-  <Card title="Try a recipe" icon="list-checks" href="/examples">
-    Copy prompts for comparisons, joins, document lookup, and charts.
+  <Card title="Understand the product" icon="layers" href="/product-model">
+    See how Chat, Investigations, results, and Reports fit together.
   </Card>
-  <Card title="Fix a problem" icon="wrench" href="/troubleshooting">
-    Diagnose missing files, model errors, Python failures, and weak answers.
+  <Card title="Review the changes" icon="sparkles" href="/whats-new">
+    Read what changed in the current branch after v0.3.0.
   </Card>
-  <Card title="Check capabilities" icon="table-properties" href="/getting-started#what-the-shipped-app-can-use">
-    See the exact shipped formats, providers, tools, and outputs.
+  <Card title="Ask and inspect" icon="message-circle" href="/developer-platform/using-fella/asking-questions">
+    Learn how answers use data and when to inspect their evidence.
   </Card>
-  <Card title="Know the limits" icon="triangle-alert" href="/limitations">
-    Understand verification, security, format, and scale boundaries.
+  <Card title="Create an Investigation" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Keep a multi-question analysis organized and resumable.
   </Card>
-  <Card title="Understand the boundary" icon="shield-check" href="/extensions-and-mcp">
-    See why the personal release keeps tools fixed and MCP experimental.
+  <Card title="Save a report" icon="files" href="/developer-platform/using-fella/reports">
+    Preserve narrative and exact analytical output revisions.
   </Card>
 </CardGroup>
 
-## The useful distinction
+## How the work is divided
 
-| Layer | Responsibility | What it does not guarantee |
-| --- | --- | --- |
-| Model | Interprets the question and chooses tools | That its interpretation is correct |
-| Fella harness | Supplies workspace context and runs the tool loop | That every response needs or contains evidence |
-| Analytics engine | Runs read-only SQL, document reads, charts, or Python | That a valid computation answers the intended question |
-| Verification | Replays queries and checks grounding and known risk patterns | Semantic correctness for every answer |
+| Part | Responsibility |
+| --- | --- |
+| Model | Interprets the request, chooses analysis steps, and composes an answer. |
+| Rust harness and engine | Enforce workspace scope, run read-only analysis, record evidence, and perform deterministic checks. |
+| JSON-render presentation | Composes a responsive view from registered components and saved result bindings. It cannot execute arbitrary model-authored code. |
+| Investigation and report stores | Preserve questions, runs, findings, artifacts, revisions, and report snapshots locally. |
 
-Fella can answer a general question without calling a tool. Those answers have no workspace evidence. When tools run, the working fold records the selected files, arguments, SQL or Python, result samples, timings, errors, and post-answer checks.
+Fella can answer a general question without workspace evidence. For data-backed questions, open **How this was analyzed** in Chat or inspect the saved run in Notebook.
 
 <Note>
-  The agent has no file write, move, or delete tool. The user can edit the
-  `fella.md` context file, while generated Python runs inside an embedded WASM
-  capability boundary. Review the [limits](/limitations#security-boundaries)
-  before using sensitive data.
+  Documentation follows the current repository branch. The latest release tag here is v0.3.0; the current branch includes unreleased changes. See [Changes since v0.3.0](/whats-new).
 </Note>
 
-## What you can do
+## Local files and model providers
 
-| Outcome | Typical path |
-| --- | --- |
-| Compare periods or categories | Ask a plain-language question; Fella queries one or more tables |
-| Find a fact in notes or a text-layer PDF | Fella searches and reads document text directly |
-| Reconcile several exports | Name the files and join key when you know them |
-| Produce a bar or line chart | Ask for a chart; category charts are bounded, while time-series charts can cover longer periods |
-| Inspect data directly | Use `/files`, `/schema <table>`, or `/sql <query>` |
-
-```text filename="first question"
-/open /path/to/your/files
-Compare monthly dining spend in the first and second half of 2025. Show the totals and the change.
-```
-
-## Local-first, with explicit egress
-
-The provider you connect receives prompts, context, and tool results; those results may include document text or rows from your folder. `/update` contacts GitHub only when invoked. `/mcp` is inert in the personal release, and generated Python stays inside its embedded local guest with no network capability.
-
-## Next steps
+The folder you choose is cataloged and analyzed locally. Fella does not give the model direct filesystem or database access. If you connect a hosted provider, prompts and requested file-derived results may be sent to it. Read [Privacy and security](/developer-platform/using-fella/privacy) before using sensitive information.
 
 <CardGroup cols={2}>
-  <Card title="Start in five steps" icon="route" href="/getting-started">
-    Reach a useful, inspectable result from a fresh install.
+  <Card title="Supported files" icon="files" href="/developer-platform/using-fella/files">
+    See which formats become tables, documents, or previews.
   </Card>
-  <Card title="Understand evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
-    Learn what the working fold proves and what you still need to review.
+  <Card title="Limits and trust" icon="shield-check" href="/limitations">
+    Understand verification, scope, formats, and provider egress.
   </Card>
 </CardGroup>

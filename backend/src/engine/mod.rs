@@ -4,6 +4,8 @@
 pub mod agent;
 pub mod analysis_store;
 pub mod analytics;
+pub mod artifact_exchange;
+pub mod artifacts;
 pub mod capabilities;
 pub mod catalog;
 pub mod context;
@@ -13,6 +15,7 @@ pub mod evidence;
 mod friction;
 pub mod grounding;
 pub mod ingest;
+pub mod investigation;
 pub mod llm;
 pub mod memory;
 pub mod planner;
@@ -34,13 +37,23 @@ pub use capabilities::AnalysisCapabilities;
 pub use catalog::{Catalog, SourceInfo, WorkspaceProgress};
 pub use error::{EngineError, EngineResult};
 pub use evidence::{Answer, AskEvent};
+pub use investigation::{
+    Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
+    InvestigationDefinitionInput, InvestigationDefinitionKind, InvestigationDefinitionRevision,
+    InvestigationDefinitionSnapshot, InvestigationDefinitionStatus, InvestigationFinding,
+    InvestigationFindingInput, InvestigationFindingRevision, InvestigationFindingUpdate,
+    InvestigationQuestion, InvestigationQuestionAnswerStatus, InvestigationQuestionInput,
+    InvestigationQuestionStatus, InvestigationSourceSelection, InvestigationSourceSelectionMode,
+    InvestigationStatus, QuestionBreakdownProposal,
+};
 pub use llm::ProviderHealth;
 pub use provider::{AuthKind, Provider, PROVIDERS};
 pub use runtime::{
-    AnalysisContract, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind,
-    ContextReference, ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin,
-    ContractMeasure, ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, RunLogEntry,
-    RunLogKind, RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
+    AnalysisContract, AnalysisSourceReference, AnalysisSourceScope, AnalysisTurn,
+    AnalysisTurnReplayStatus, ClarificationReply, ComparisonKind, ContextReference,
+    ContractComparison, ContractDerivedMetric, ContractFilter, ContractJoin, ContractMeasure,
+    ContractOrder, DerivedMetricKind, InterpretationStatus, JoinKind, RunLogEntry, RunLogKind,
+    RunLogModelCall, RunLogOperation, SortDirection, TimeBucket,
 };
 pub use sqlite::Settings;
 pub use state::{

@@ -1,25 +1,26 @@
 //! The reasoning loop. Ask the model; if it calls tools, run them
 //! (deterministically) and feed results back; otherwise verify and return.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::engine::analytics::{provenance, verify};
 use crate::engine::context::ContextPacket;
 use crate::engine::error::{EngineError, EngineResult};
 use crate::engine::evidence::{
-    Answer, AnswerProvenance, AskEvent, EvidenceItem, PythonInputTrace, PythonQueryReference,
-    Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
+    Answer, AnswerProvenance, AskEvent, EvidenceItem, EvidenceSource, PythonInputTrace,
+    PythonQueryReference, Usage, VerificationCheck, VerificationFinding, WorkspaceSnapshot,
 };
-use crate::engine::llm::{ChatMessage, LlmClient, ToolCall};
+use crate::engine::investigation::{InvestigationContextSnapshot, InvestigationSourceSelection};
+use crate::engine::llm::{ChatMessage, LlmClient, ToolCall, ToolSchema};
 use crate::engine::runtime::{
     self, AnalysisContract, ContextReference, ExecutionTrace, InteractionMode, LogicalPlan,
     ModelCallTrace, PlanStrategy, ResolvedClarification, TraceStep, TurnState,
 };
 use crate::engine::state::EngineState;
-use crate::engine::tools::Registry;
+use crate::engine::tools::{Registry, ToolContext, ToolOutput};
 use crate::engine::{friction, planner, risk, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
@@ -77,6 +78,649 @@ fn max_steps() -> usize {
 /// This is soft guidance, not an analytical task limit; evaluate it against
 /// multi-step episodes as FQA-Bench coverage grows.
 const SOFT_STOP_ROUND_TRIPS: usize = 3;
+const PRESENTATION_ANSWER_TOOL: &str = "fella_presentation_answer";
+
+fn presentation_manifest() -> &'static serde_json::Value {
+    static MANIFEST: OnceLock<serde_json::Value> = OnceLock::new();
+    MANIFEST.get_or_init(|| {
+        serde_json::from_str(include_str!("../../resources/presentation-catalog.json"))
+            .expect("generated JSON renderer catalog must be valid JSON")
+    })
+}
+
+fn presentation_result_rows(item: &EvidenceItem) -> Option<(&[String], &[Vec<serde_json::Value>])> {
+    if let Some(table) = &item.result_table {
+        Some((&table.columns, &table.rows))
+    } else {
+        Some((item.columns.as_deref()?, item.rows.as_deref()?))
+    }
+}
+
+fn presentation_bindings(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
+    evidence
+        .iter()
+        .filter(|item| is_presentation_result(item))
+        .filter_map(|item| {
+            let (columns, rows) = presentation_result_rows(item)?;
+            Some(serde_json::json!({
+                "id": item.id,
+                "tool": item.tool,
+                "columns": columns,
+                "row_count": item.row_count.unwrap_or(rows.len()),
+                "complete": item.row_count.is_none_or(|count| count == rows.len())
+            }))
+        })
+        .collect()
+}
+
+fn presentation_schema(charts_enabled: bool) -> serde_json::Value {
+    let mut schema = presentation_manifest()["schema"].clone();
+    if !charts_enabled {
+        if let Some(types) = schema
+            .pointer_mut("/properties/elements/additionalProperties/properties/type/enum")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            types.retain(|kind| kind.as_str() != Some("Chart"));
+        }
+    }
+    schema
+}
+
+fn presentation_prompt(evidence: &[EvidenceItem], charts_enabled: bool) -> String {
+    const BINDINGS_MARKER: &str =
+        "\nAvailable result bindings (metadata only; the result rows themselves are provided separately as evidence):\n";
+    let prompt = presentation_manifest()["prompt"].as_str().unwrap_or("");
+    let bindings =
+        serde_json::to_string(&presentation_bindings(evidence)).unwrap_or_else(|_| "[]".to_owned());
+    let mut prompt = if let Some((prompt, _)) = prompt.rsplit_once(BINDINGS_MARKER) {
+        format!("{prompt}{BINDINGS_MARKER}{bindings}")
+    } else {
+        format!("{prompt}{BINDINGS_MARKER}{bindings}")
+    };
+    if !charts_enabled {
+        prompt.push_str(
+            "\nCharts are disabled by the current workspace capabilities. Do not use the Chart component; answer with other registered components where appropriate.",
+        );
+    }
+    prompt
+}
+
+fn presentation_answer_schema(evidence: &[EvidenceItem], charts_enabled: bool) -> ToolSchema {
+    let instructions = presentation_prompt(evidence, charts_enabled);
+    let chart_guidance = if charts_enabled {
+        "Use a result-bound chart when it makes a pattern clearer."
+    } else {
+        "Charts are disabled by the current workspace capabilities; do not use Chart components."
+    };
+    ToolSchema {
+        name: PRESENTATION_ANSWER_TOOL.into(),
+        description: format!(
+            "Call this finalizer once after analysis when an accepted multi-row result supports a useful structured answer. A presentation is required when the result supports it for a requested time trend, period comparison, category ranking, distribution, or relationship. {chart_guidance} The `answer` is the canonical, evidence-grounded answer used for verification and history. `presentation_spec` is its primary structured view and must use only the supplied result IDs and fields. Do not call this with another tool. Never invent data or use executable code.\n\n{instructions}"
+        ),
+        parameters: serde_json::json!({
+            "type":"object",
+            "properties": {
+                "answer": {"type":"string", "minLength":1, "maxLength":16000},
+                "presentation_spec": presentation_schema(charts_enabled)
+            },
+            "required":["answer", "presentation_spec"],
+            "additionalProperties":false
+        }),
+	}
+}
+
+fn presentation_spec_response_schema(charts_enabled: bool) -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "properties": {
+            "presentation_spec": presentation_schema(charts_enabled)
+        },
+        "required": ["presentation_spec"],
+        "additionalProperties": false
+    })
+}
+
+#[derive(Debug)]
+struct PresentationAnswer {
+    text: String,
+    spec: serde_json::Value,
+}
+
+fn validate_presentation_shape(spec: &serde_json::Value) -> EngineResult<()> {
+    let object = spec
+        .as_object()
+        .ok_or_else(|| EngineError::msg("Presentation spec must be a JSON object."))?;
+    if object.len() != 2 || !object.contains_key("root") || !object.contains_key("elements") {
+        return Err(EngineError::msg(
+            "Presentation spec must contain only root and elements.",
+        ));
+    }
+    let root = spec["root"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| EngineError::msg("Presentation root is missing."))?;
+    let elements = spec["elements"]
+        .as_object()
+        .ok_or_else(|| EngineError::msg("Presentation elements must be an object."))?;
+    if elements.is_empty()
+        || elements.len() > 240
+        || serde_json::to_vec(spec).map_or(true, |data| data.len() > 256 * 1024)
+    {
+        return Err(EngineError::msg(
+            "Presentation spec is empty or exceeds its size limit.",
+        ));
+    }
+    if elements
+        .get(root)
+        .and_then(|element| element.get("type"))
+        .and_then(serde_json::Value::as_str)
+        != Some("Document")
+    {
+        return Err(EngineError::msg(
+            "Presentation root element must be Document.",
+        ));
+    }
+    let mut parents = HashSet::new();
+    for (key, element) in elements {
+        if key.len() > 80
+            || !key.chars().enumerate().all(|(index, ch)| {
+                ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' && index > 0
+            })
+            || !key
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_alphabetic())
+        {
+            return Err(EngineError::msg(
+                "Presentation contains an invalid element key.",
+            ));
+        }
+        let kind = element
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| EngineError::msg("Presentation element is missing a component type."))?;
+        if !presentation_manifest()["schema"]["properties"]["elements"]["additionalProperties"]
+            ["properties"]["type"]["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(kind)))
+        {
+            return Err(EngineError::msg(
+                "Presentation uses a component outside the registered catalog.",
+            ));
+        }
+        if element.get("repeat").is_some_and(|value| !value.is_null()) {
+            return Err(EngineError::msg(
+                "Presentation data repetition is not enabled.",
+            ));
+        }
+        let children = element
+            .get("children")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| EngineError::msg("Presentation element children must be an array."))?;
+        for child in children {
+            let child = child.as_str().ok_or_else(|| {
+                EngineError::msg("Presentation child references must be strings.")
+            })?;
+            if !elements.contains_key(child) || !parents.insert(child.to_owned()) {
+                return Err(EngineError::msg(
+                    "Presentation has a missing or multiply-attached child.",
+                ));
+            }
+        }
+    }
+    if parents.contains(root) {
+        return Err(EngineError::msg("Presentation root cannot have a parent."));
+    }
+    let mut visited = HashSet::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(key) = pending.pop() {
+        if !visited.insert(key.clone()) {
+            return Err(EngineError::msg("Presentation contains a cycle."));
+        }
+        if let Some(children) = elements
+            .get(&key)
+            .and_then(|element| element.get("children"))
+            .and_then(serde_json::Value::as_array)
+        {
+            pending.extend(
+                children
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned),
+            );
+        }
+    }
+    if visited.len() != elements.len() {
+        return Err(EngineError::msg(
+            "Every presentation element must be reachable from the root.",
+        ));
+    }
+    crate::engine::artifacts::validate_spec(spec)?;
+    Ok(())
+}
+
+fn parse_presentation_answer(
+    arguments: &serde_json::Value,
+    charts_enabled: bool,
+) -> EngineResult<PresentationAnswer> {
+    let text = arguments["answer"].as_str().unwrap_or_default().trim();
+    let spec = arguments["presentation_spec"].clone();
+    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
+        return Err(EngineError::msg(
+            "Workspace answer has invalid answer text.",
+        ));
+    }
+    validate_presentation_shape(&spec)?;
+    if !charts_enabled && presentation_has_chart(&spec) {
+        return Err(EngineError::msg(
+            "Chart components are disabled by the current workspace capabilities.",
+        ));
+    }
+    Ok(PresentationAnswer {
+        text: text.to_owned(),
+        spec,
+    })
+}
+
+fn parse_structured_presentation(content: &str) -> EngineResult<serde_json::Value> {
+    let content = content.trim();
+    let unfenced = content
+        .strip_prefix("```json")
+        .or_else(|| content.strip_prefix("```JSON"))
+        .or_else(|| content.strip_prefix("```"))
+        .unwrap_or(content)
+        .trim();
+    let content = unfenced.strip_suffix("```").unwrap_or(unfenced).trim();
+    let output: serde_json::Value = serde_json::from_str(content).map_err(|error| {
+        EngineError::msg(format!("Presentation response was not JSON: {error}"))
+    })?;
+    let spec = output.get("presentation_spec").cloned().ok_or_else(|| {
+        EngineError::msg("Presentation response did not include presentation_spec.")
+    })?;
+    validate_presentation_shape(&spec)?;
+    Ok(spec)
+}
+
+fn presentation_sample(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
+    evidence
+        .iter()
+        .filter(|item| is_presentation_result(item))
+        .filter_map(|item| {
+            let (columns, rows) = presentation_result_rows(item)?;
+            Some(serde_json::json!({
+                "id": item.id,
+                "tool": item.tool,
+                "columns": columns,
+                "row_count": item.row_count.unwrap_or(rows.len()),
+                "complete": item.row_count.is_none_or(|count| count == rows.len()),
+                "sample_rows": rows.iter().take(24).collect::<Vec<_>>()
+            }))
+        })
+        .collect()
+}
+
+fn presentation_composition_needed(evidence: &[EvidenceItem]) -> bool {
+    evidence.iter().any(|item| {
+        is_presentation_result(item)
+            && presentation_result_rows(item).is_some_and(|(_, rows)| rows.len() > 1)
+    })
+}
+
+fn presentation_has_chart(spec: &serde_json::Value) -> bool {
+    spec.get("elements")
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|elements| {
+            elements.values().any(|element| {
+                element.get("type").and_then(serde_json::Value::as_str) == Some("Chart")
+            })
+        })
+}
+
+fn presentation_result<'a>(
+    evidence: &'a [EvidenceItem],
+    id: &str,
+) -> Option<(&'a [String], &'a [Vec<serde_json::Value>])> {
+    evidence
+        .iter()
+        .find(|item| item.id == id && is_presentation_result(item))
+        .and_then(presentation_result_rows)
+}
+
+fn validate_chart_field_references(
+    value: &serde_json::Value,
+    columns: &[String],
+) -> Result<(), String> {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                validate_chart_field_references(value, columns)?;
+            }
+        }
+        serde_json::Value::Object(object) => {
+            if let Some(field) = object.get("field").and_then(serde_json::Value::as_str) {
+                let repeat =
+                    object.len() == 1 && ["row", "column", "repeat", "layer"].contains(&field);
+                if !repeat && !columns.iter().any(|column| column == field) {
+                    return Err(format!("chart field {field:?} is not in the bound result"));
+                }
+            }
+            for value in object.values() {
+                validate_chart_field_references(value, columns)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn validate_presentation_bindings(
+    spec: &serde_json::Value,
+    evidence: &[EvidenceItem],
+) -> Result<(), String> {
+    let elements = spec
+        .get("elements")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "presentation elements are missing".to_owned())?;
+    for (key, element) in elements {
+        let kind = element
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let props = element.get("props").and_then(serde_json::Value::as_object);
+        let Some(props) = props else { continue };
+        let needs_result = matches!(
+            kind,
+            "Metric" | "Progress" | "Table" | "Chart" | "ResultFilter"
+        );
+        if !needs_result {
+            continue;
+        }
+        let id = props
+            .get("resultId")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("elements.{key} needs a resultId"))?;
+        let (columns, rows) = presentation_result(evidence, id)
+            .ok_or_else(|| format!("elements.{key} references unavailable result {id:?}"))?;
+        let field_exists = |field: &str| columns.iter().any(|column| column == field);
+        if matches!(kind, "Metric" | "Progress" | "ResultFilter") {
+            let field = props
+                .get("field")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("elements.{key} needs a result field"))?;
+            if !field_exists(field) {
+                return Err(format!(
+                    "elements.{key} field {field:?} is not in result {id:?}"
+                ));
+            }
+            if matches!(kind, "Metric" | "Progress") {
+                let row = props
+                    .get("row")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| format!("elements.{key} needs a result row"))?
+                    as usize;
+                if row >= rows.len() {
+                    return Err(format!("elements.{key} row {row} is not in result {id:?}"));
+                }
+            }
+        }
+        if kind == "Table" {
+            if let Some(fields) = props.get("fields").and_then(serde_json::Value::as_array) {
+                for field in fields.iter().filter_map(serde_json::Value::as_str) {
+                    if !field_exists(field) {
+                        return Err(format!(
+                            "elements.{key} field {field:?} is not in result {id:?}"
+                        ));
+                    }
+                }
+            }
+            if let Some(formats) = props
+                .get("columnFormats")
+                .and_then(serde_json::Value::as_object)
+            {
+                if let Some(field) = formats.keys().find(|field| !field_exists(field)) {
+                    return Err(format!(
+                        "elements.{key} format field {field:?} is not in result {id:?}"
+                    ));
+                }
+            }
+        }
+        if kind == "Chart" {
+            if let Some(chart) = props.get("spec") {
+                validate_chart_field_references(chart, columns)
+                    .map_err(|error| format!("elements.{key}: {error}"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_composed_presentation(
+    spec: &serde_json::Value,
+    evidence: &[EvidenceItem],
+    require_chart: bool,
+    charts_enabled: bool,
+) -> Result<(), String> {
+    validate_presentation_bindings(spec, evidence)?;
+    if !charts_enabled && presentation_has_chart(spec) {
+        return Err("charts are disabled by the current workspace capabilities".into());
+    }
+    if require_chart && !presentation_has_chart(spec) {
+        return Err("this time-trend answer requires a result-bound chart".into());
+    }
+    Ok(())
+}
+
+fn question_needs_time_chart(question: &str, evidence: &[EvidenceItem]) -> bool {
+    let question = question.to_ascii_lowercase();
+    let asks_for_pattern = [
+        "trend",
+        "over time",
+        "quarter-by-quarter",
+        "month-by-month",
+        "year-by-year",
+        "week-by-week",
+        "change between",
+        "changed between",
+        "growth across",
+        "compare the quarters",
+    ]
+    .iter()
+    .any(|phrase| question.contains(phrase));
+    asks_for_pattern
+        && evidence.iter().any(|item| {
+            is_presentation_result(item)
+                && presentation_result_rows(item).is_some_and(|(columns, rows)| {
+                    rows.len() > 1
+                        && columns.iter().any(|column| {
+                            let column = column.to_ascii_lowercase();
+                            ["date", "time", "period", "quarter", "month", "week", "year"]
+                                .iter()
+                                .any(|part| column.contains(part))
+                        })
+                })
+        })
+}
+
+struct PresentationRunContext<'a> {
+    ids: &'a mut RunIds,
+    usage: &'a mut Option<Usage>,
+    cancel: &'a AtomicBool,
+}
+
+async fn ensure_presentation(
+    llm: &LlmClient,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    current_spec: Option<&serde_json::Value>,
+    charts_enabled: bool,
+    run: &mut PresentationRunContext<'_>,
+) -> Option<serde_json::Value> {
+    let current_is_valid = current_spec.is_some_and(|spec| {
+        validate_presentation_shape(spec).is_ok()
+            && validate_presentation_bindings(spec, evidence).is_ok()
+            && (charts_enabled || !presentation_has_chart(spec))
+    });
+    let chart_required = charts_enabled && question_needs_time_chart(question, evidence);
+    let needs_composition = presentation_composition_needed(evidence)
+        && (!current_is_valid
+            || chart_required && !current_spec.is_some_and(presentation_has_chart));
+    if needs_composition {
+        if let Some(spec) =
+            compose_presentation(llm, question, answer, evidence, charts_enabled, run).await
+        {
+            return Some(spec);
+        }
+    }
+    if current_is_valid && !(chart_required && !current_spec.is_some_and(presentation_has_chart)) {
+        current_spec.cloned()
+    } else {
+        None
+    }
+}
+
+fn presentation_composer_messages(
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    charts_enabled: bool,
+) -> Vec<ChatMessage> {
+    let chart_guidance = if charts_enabled {
+        "When the question asks for a trend across ordered periods, make a result-bound line or area chart the primary view; for category rankings use bars."
+    } else {
+        "Charts are disabled by the current workspace capabilities. Do not include Chart components."
+    };
+    let system = format!(
+        "You compose Fella's primary analytical presentation after the answer and analysis are complete. Return only a JSON object with one property, `presentation_spec`, matching the supplied response schema. Do not change, repeat, or add claims to the canonical answer. Use the exact result IDs and field names below; charts and tables must bind to those saved results, never embed invented data. {chart_guidance} For exact records use a table. Add concise interpretation and caveats without repeating values as unbound literals. Keep the view responsive and avoid duplicate content.\n\n{}",
+        presentation_prompt(evidence, charts_enabled)
+    );
+    let user = format!(
+        "Original user question:\n{question}\n\nCanonical answer, already completed and verified; preserve it as the authority:\n{answer}\n\nAccepted saved result bindings and exact row samples (charts render from the full saved result, not only this sample):\n{}",
+        serde_json::to_string(&presentation_sample(evidence)).unwrap_or_else(|_| "[]".to_owned())
+    );
+    vec![ChatMessage::System(system), ChatMessage::User(user)]
+}
+
+async fn compose_presentation(
+    llm: &LlmClient,
+    question: &str,
+    answer: &str,
+    evidence: &[EvidenceItem],
+    charts_enabled: bool,
+    run: &mut PresentationRunContext<'_>,
+) -> Option<serde_json::Value> {
+    if !presentation_composition_needed(evidence) {
+        return None;
+    }
+    let messages = presentation_composer_messages(question, answer, evidence, charts_enabled);
+    let schema = presentation_spec_response_schema(charts_enabled);
+    let suppress = |_text: &str| {};
+    let mut retry_messages = messages.clone();
+    let mut retry_reason = "the model did not return a valid presentation".to_owned();
+    let started = Instant::now();
+    let first = tokio::select! {
+        result = llm.chat_structured(&messages, &schema, &suppress, &suppress) => result,
+        _ = cancelled(run.cancel) => return None,
+    };
+    match first {
+        Ok(response) => {
+            record_model_call(run.ids, started, true, response.usage);
+            *run.usage = Usage::merge(run.usage.take(), response.usage);
+            let require_chart = charts_enabled && question_needs_time_chart(question, evidence);
+            match parse_structured_presentation(&response.content)
+                .map_err(|error| error.to_string())
+                .and_then(|spec| {
+                    validate_composed_presentation(&spec, evidence, require_chart, charts_enabled)
+                        .map(|()| spec)
+                }) {
+                Ok(spec) => return Some(spec),
+                Err(error) => retry_reason = error,
+            }
+        }
+        Err(error) => {
+            record_model_call(run.ids, started, false, None);
+            log::warn!(
+                "agent: schema-constrained presentation call failed; trying JSON mode: {error}"
+            );
+        }
+    }
+
+    retry_messages.push(ChatMessage::User(format!(
+        "The previous layout failed local validation: {retry_reason}. Return a corrected `presentation_spec` only. Use one of the exact result IDs and field names already supplied; remove unsupported properties. Preserve the canonical answer and analysis."
+    )));
+    let retry_started = Instant::now();
+    let response = tokio::select! {
+        result = llm.chat_json(&retry_messages, &suppress, &suppress) => match result {
+            Ok(response) => response,
+            Err(error) => {
+                record_model_call(run.ids, retry_started, false, None);
+                log::warn!("agent: JSON-mode presentation retry failed; keeping canonical answer: {error}");
+                return None;
+            }
+        },
+        _ = cancelled(run.cancel) => return None,
+    };
+    record_model_call(run.ids, retry_started, true, response.usage);
+    *run.usage = Usage::merge(run.usage.take(), response.usage);
+    let require_chart = charts_enabled && question_needs_time_chart(question, evidence);
+    match parse_structured_presentation(&response.content)
+        .map_err(|error| error.to_string())
+        .and_then(|spec| {
+            validate_composed_presentation(&spec, evidence, require_chart, charts_enabled)
+                .map(|()| spec)
+        }) {
+        Ok(spec) => Some(spec),
+        Err(error) => {
+            log::warn!(
+                "agent: JSON-mode presentation was invalid; keeping canonical answer: {error}"
+            );
+            None
+        }
+    }
+}
+
+fn canonical_answer_text(arguments: &serde_json::Value) -> Option<String> {
+    let text = arguments.get("answer")?.as_str()?.trim();
+    if text.is_empty() || text.len() > 16_000 || text.contains('\0') {
+        return None;
+    }
+    Some(text.to_owned())
+}
+
+/// Ask for a plain answer only when answer presentation has failed. A renderer
+/// failure or repeated tool call must not prevent the user from getting the
+/// supported result gathered so far.
+async fn recover_plain_answer(
+    llm: &LlmClient,
+    messages: &mut Vec<ChatMessage>,
+    ids: &mut RunIds,
+    usage: &mut Option<Usage>,
+    notify: &(dyn Fn(&str) + Send + Sync),
+    cancel: &AtomicBool,
+) -> Option<Option<String>> {
+    messages.push(ChatMessage::User(
+        "The interactive presentation could not be completed. Answer the user's original request now in concise plain language, using only the workspace evidence already gathered. Do not call tools, produce JSON, or discuss presentation generation. If the evidence is incomplete, state what it supports and what remains unknown.".into(),
+    ));
+    let started = Instant::now();
+    let suppress_delta = |_text: &str| {};
+    let result = tokio::select! {
+        result = llm.chat(messages, &[], notify, &suppress_delta) => result,
+        _ = cancelled(cancel) => return None,
+    };
+    match result {
+        Ok(response) => {
+            record_model_call(ids, started, true, response.usage);
+            *usage = Usage::merge(usage.take(), response.usage);
+            let answer = response.content.trim();
+            Some((!answer.is_empty()).then(|| answer.chars().take(16_000).collect()))
+        }
+        Err(error) => {
+            record_model_call(ids, started, false, None);
+            log::warn!("agent: plain answer recovery failed: {error}");
+            Some(None)
+        }
+    }
+}
 
 struct RunIds {
     turn_id: String,
@@ -104,8 +748,10 @@ pub(crate) struct RunRequest<'a> {
     pub(crate) question: &'a str,
     pub(crate) context: &'a ContextPacket,
     pub(crate) clarification: Option<&'a ResolvedClarification>,
+    pub(crate) investigation_context: Option<&'a InvestigationContextSnapshot>,
     pub(crate) inspect: bool,
     pub(crate) context_refs: &'a [ContextReference],
+    pub(crate) source_selection: Option<&'a InvestigationSourceSelection>,
     pub(crate) cancel: Arc<AtomicBool>,
     pub(crate) emit: &'a (dyn Fn(AskEvent) + Send + Sync + 'a),
 }
@@ -224,10 +870,7 @@ async fn cancelled(flag: &AtomicBool) {
 /// Tools that produce analytical results. They remain read-only and may be
 /// used to compare supported scenarios while a user choice is unresolved.
 fn is_computation_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "run_sql" | "run_python" | "forecast_analysis" | "make_chart"
-    )
+    matches!(name, "run_sql" | "run_python" | "forecast_analysis")
 }
 
 fn is_internal_tool(name: &str) -> bool {
@@ -248,20 +891,26 @@ fn is_observation_tool(name: &str) -> bool {
     )
 }
 
-/// Whether this successful result is a complete table that `make_chart` can
-/// reuse. Inspection samples deliberately do not qualify even though they
-/// carry columns and rows; advertising them as chart sources sends the model
-/// into a predictable rejected tool call.
-fn is_reusable_chart_source(item: &EvidenceItem) -> bool {
-    if item.error.is_some() {
+/// Whether this successful computation can be bound by the final json-render
+/// presentation. Incomplete results remain usable only with their explicit
+/// completeness warning; inspection samples are never analytical outputs.
+fn is_presentation_result(item: &EvidenceItem) -> bool {
+    if !item.is_accepted()
+        || !matches!(
+            item.tool.as_str(),
+            "run_sql" | "run_python" | "forecast_analysis"
+        )
+    {
         return false;
     }
     match item.tool.as_str() {
-        "run_sql" => matches!(
-            (&item.columns, &item.rows, item.row_count),
-            (Some(_), Some(rows), Some(row_count)) if rows.len() == row_count
-        ),
-        "run_python" | "forecast_analysis" => item.result_table.is_some(),
+        "run_sql" => {
+            matches!((&item.columns, &item.rows), (Some(columns), Some(_)) if !columns.is_empty())
+        }
+        "run_python" | "forecast_analysis" => item
+            .result_table
+            .as_ref()
+            .is_some_and(|table| !table.columns.is_empty()),
         _ => false,
     }
 }
@@ -277,8 +926,10 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         question,
         context,
         clarification,
+        investigation_context,
         inspect,
         context_refs,
+        source_selection,
         cancel,
         emit,
     } = request;
@@ -327,8 +978,10 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         }),
         _ => None,
     };
+    let profile = PromptProfile::from_env();
+    let charts_enabled = registry.charts_enabled();
     let mut sys = system_prompt(
-        &PromptProfile::from_env(),
+        &profile,
         &catalog,
         &context.user_context,
         &context.schema,
@@ -336,6 +989,15 @@ pub(crate) async fn run(request: RunRequest<'_>) -> EngineResult<Answer> {
         context.recent.as_deref(),
         context.learned.as_deref(),
     );
+    if let Some(investigation_context) = investigation_context
+        .and_then(|context| crate::engine::investigation::model_context(context, analysis_question))
+    {
+        sys.push_str("\n\nInvestigation background (analyst-authored context, not evidence):\n");
+        sys.push_str(&investigation_context);
+        sys.push_str(
+            "\nUse saved meanings and the broader objective only when they help answer the immediate user request. Do not repeat this background or restate the Investigation plan unless it materially clarifies the answer. Answer only the immediate request; do not answer other Questions or borrow their measures. This context does not expand the selected source scope or grant capabilities.\n",
+        );
+    }
     if inspect && workspace.is_some() {
         sys.push_str(
             "\n\nInteraction mode: Inspect. Start with the relevant read-only workspace sources and schema, then explain the checks briefly before answering.\n",
@@ -420,6 +1082,9 @@ pretend workspace field.",
         sys.push_str(
             "\n\nSemantic decision policy: do not force a semantic guess when two supported interpretations would materially change the result. First use the workspace schema, observed values, source notes, prior user definitions, and read-only probes to resolve ordinary aliases and messy labels. Treat a quoted category or value as an exact label request by default; do not silently substitute a nearby observed label based only on semantic similarity. Map it only when workspace evidence or a prior user definition supports the mapping; otherwise preserve the exact match or clarify if the intended meaning would change the answer. For a non-literal mapping or a roll-up across distinct observed labels, inspect the relevant values, record the selected mapping and exact labels in the contract's `assumptions` before computing, and name those labels in the final answer. If one interpretation is still clearly more likely, proceed with that assumption and state it. If materially different interpretations remain, call `__request_clarification` once with a concise question and at most six choices; where useful, continue safe read-only analysis by computing labeled candidate results or partial results. Do not present one unresolved scenario as the definitive answer, but do not withhold useful computed alternatives merely because clarification is pending. The runtime will return the typed question with any supported findings. A typed decision/classifier may route among resolve, assume, clarify, and unsupported, but it must not invent candidates, replace the model's analytical reasoning, or override observed data. A question in final prose is not a substitute for the clarification action: only `__request_clarification` makes the app collect the user's choice and resume this same analysis.\n",
         );
+        sys.push_str(
+            "\n\nWorkspace answer format: Complete the analysis and answer the user's request; presentation must never gate the answer. After collecting accepted multi-row analytical results, call `fella_presentation_answer` once and bind displayed values to the supplied result IDs and fields. For an ordered time trend, period comparison, category ranking, distribution, or relationship, the presentation is required when the result supports it; choose the visualization that makes the pattern clearest. A concise plain-language answer is appropriate for simple inventory, definition, document summary, and exact single-value lookups with no structured result. If a presentation is rejected or cannot be composed, preserve and return the canonical answer in plain language. Never replace an answer with a presentation-generation error. Keep conclusions, assumptions, and limitations visible.\n",
+        );
     }
     let mut messages = vec![
         ChatMessage::System(sys),
@@ -451,8 +1116,10 @@ pretend workspace field.",
     // tools it can only fail to call. This keeps a plain "hello" (or "what can
     // you do?") to a single fast turn instead of a many-step loop of
     // NoWorkspace errors, which can take minutes on a slow provider.
-    let schemas = if catalog.workspace.is_some() {
-        registry.schemas_with_contract()
+    let mut schemas = if catalog.workspace.is_some() {
+        let mut schemas = registry.schemas_with_contract();
+        schemas.push(presentation_answer_schema(&[], charts_enabled));
+        schemas
     } else {
         Vec::new()
     };
@@ -480,6 +1147,7 @@ pretend workspace field.",
     // the model one final answer turn without tools instead of letting it
     // request that same result until the global step ceiling.
     let mut force_final_answer = false;
+    let mut unformatted_answer: Option<String> = None;
 
     let run_start = ids.started_at;
     let mut tool_calls_total = 0usize;
@@ -488,12 +1156,25 @@ pretend workspace field.",
     let soft_stop = soft_stop_round_trips();
     let mut semantic_repair_attempts = 0usize;
     for step in 0..steps {
+        if catalog.workspace.is_some() {
+            if let Some(schema) = schemas
+                .iter_mut()
+                .find(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
+            {
+                *schema = presentation_answer_schema(&evidence, charts_enabled);
+            }
+        }
+        let finalizer_only: Vec<_> = schemas
+            .iter()
+            .filter(|schema| schema.name == PRESENTATION_ANSWER_TOOL)
+            .cloned()
+            .collect();
         log::info!("agent step {}/{steps}", step + 1);
         let step_start = Instant::now();
         // Race the model call against a stop request; dropping the future
         // closes the HTTP connection so the model stops generating.
         let available_tools = if force_final_answer {
-            &[]
+            finalizer_only.as_slice()
         } else {
             schemas.as_slice()
         };
@@ -538,18 +1219,112 @@ pretend workspace field.",
         };
         usage = Usage::merge(usage, resp.usage);
 
-        if force_final_answer && !resp.tool_calls.is_empty() {
-            log::warn!("agent: model requested tools after the repeat guard disabled them");
-            return Ok(finish(
-                finish_context(engine, workspace.as_ref(), &ids, emit),
-                question,
-                "I already gathered the repeated result and stopped the loop, but the model did not return a final answer. Please try the question again or rephrase it.".into(),
-                evidence,
-                usage,
-            ));
+        for call in &resp.tool_calls {
+            if call.name == PRESENTATION_ANSWER_TOOL {
+                if let Some(answer) = canonical_answer_text(&call.arguments) {
+                    // Preserve the canonical answer independently from
+                    // validation of its optional presentation tree.
+                    unformatted_answer = Some(answer);
+                }
+            }
         }
 
-        if resp.tool_calls.is_empty() {
+        let presentation_final = if resp.tool_calls.len() == 1
+            && resp.tool_calls[0].name == PRESENTATION_ANSWER_TOOL
+        {
+            match parse_presentation_answer(&resp.tool_calls[0].arguments, charts_enabled) {
+                Ok(answer) => Some(answer),
+                Err(error) => {
+                    let call = &resp.tool_calls[0];
+                    messages.push(ChatMessage::Assistant {
+                        content: resp.content.clone(),
+                        tool_calls: resp.tool_calls.clone(),
+                    });
+                    messages.push(ChatMessage::Tool {
+                        call_id: call.id.clone(),
+                        name: call.name.clone(),
+                        content: format!(
+                            "The final JSON presentation was rejected: {error}. Return a corrected complete answer using the required fields."
+                        ),
+                    });
+                    force_final_answer = true;
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
+        let mut plain_final: Option<String> = None;
+
+        if force_final_answer && !resp.tool_calls.is_empty() && presentation_final.is_none() {
+            log::warn!("agent: model requested tools after the repeat guard disabled them");
+            let recovered = match unformatted_answer
+                .as_deref()
+                .filter(|text| !text.trim().is_empty())
+            {
+                Some(answer) => Some(answer.to_owned()),
+                None => match recover_plain_answer(
+                    llm,
+                    &mut messages,
+                    &mut ids,
+                    &mut usage,
+                    &notify,
+                    cancel.as_ref(),
+                )
+                .await
+                {
+                    Some(answer) => answer,
+                    None => {
+                        return Ok(stopped(
+                            finish_context(engine, workspace.as_ref(), &ids, emit),
+                            question,
+                            evidence,
+                            usage,
+                        ));
+                    }
+                },
+            };
+            let answer = recovered.unwrap_or_else(|| {
+                "I couldn't complete a reliable answer from the available workspace evidence. Try narrowing the question or naming a source to inspect.".to_owned()
+            });
+            plain_final = Some(answer);
+        }
+
+        if resp.tool_calls.is_empty() && catalog.workspace.is_some() {
+            let mut answer = unformatted_answer
+                .take()
+                .filter(|text| !text.trim().is_empty())
+                .or_else(|| {
+                    (!resp.content.trim().is_empty()).then(|| resp.content.trim().to_owned())
+                });
+            if answer.is_none() {
+                match recover_plain_answer(
+                    llm,
+                    &mut messages,
+                    &mut ids,
+                    &mut usage,
+                    &notify,
+                    cancel.as_ref(),
+                )
+                .await
+                {
+                    Some(recovered) => answer = recovered,
+                    None => {
+                        return Ok(stopped(
+                            finish_context(engine, workspace.as_ref(), &ids, emit),
+                            question,
+                            evidence,
+                            usage,
+                        ));
+                    }
+                }
+            }
+            plain_final = Some(answer.unwrap_or_else(|| {
+                "I couldn't complete a reliable answer from the available workspace evidence. Try narrowing the question or naming a source to inspect.".to_owned()
+            }));
+        }
+
+        if resp.tool_calls.is_empty() || presentation_final.is_some() || plain_final.is_some() {
             emit(AskEvent::TurnState {
                 turn_id: ids.turn_id.clone(),
                 state: TurnState::Verifying,
@@ -562,7 +1337,11 @@ pretend workspace field.",
             );
             // A model that returns neither text nor a tool call would otherwise
             // leave a blank reply. Give the user something to act on.
-            let text = if resp.content.trim().is_empty() && evidence.is_empty() {
+            let text = if let Some(answer) = presentation_final.as_ref() {
+                answer.text.clone()
+            } else if let Some(answer) = plain_final.as_ref() {
+                answer.clone()
+            } else if resp.content.trim().is_empty() && evidence.is_empty() {
                 "The model returned an empty reply. Try rephrasing the question, or switch model \
                  with /model."
                     .to_string()
@@ -673,6 +1452,25 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     checks.push(check);
                 }
             }
+            let presentation_spec = if profile.presentation_rule {
+                let mut run = PresentationRunContext {
+                    ids: &mut ids,
+                    usage: &mut usage,
+                    cancel: cancel.as_ref(),
+                };
+                ensure_presentation(
+                    llm,
+                    question,
+                    &text,
+                    &evidence,
+                    presentation_final.as_ref().map(|answer| &answer.spec),
+                    charts_enabled,
+                    &mut run,
+                )
+                .await
+            } else {
+                presentation_final.map(|answer| answer.spec)
+            };
             return Ok(finish_with(
                 finish_context(engine, workspace.as_ref(), &ids, emit),
                 question,
@@ -680,6 +1478,7 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 evidence,
                 usage,
                 checks,
+                presentation_spec,
             ));
         }
         // `resp.content` (any "let me check…" preamble before the tool calls)
@@ -700,6 +1499,18 @@ the requested measure, filters, and scope. State just the number(s); don't round
         let mut in_batch_calls: HashMap<(String, String), usize> = HashMap::new();
         let mut in_batch_duplicates: Vec<(usize, usize)> = Vec::new();
         let mut compiled_contracts: Vec<(usize, planner::CompiledPlan)> = Vec::new();
+
+        // A final presentation is not an executable analysis tool. If a model
+        // batches it with data calls, return a protocol-safe explanation and
+        // let the analysis calls complete before finalization.
+        for (index, call) in resp.tool_calls.iter().enumerate() {
+            if call.name == PRESENTATION_ANSWER_TOOL {
+                internal_results.insert(
+                    index,
+                    "Finish the analysis calls first. Do not combine `fella_presentation_answer` with any other tool; call it after reviewing their results.".into(),
+                );
+            }
+        }
 
         // Resolve model-proposed semantic hypotheses before their tool results
         // are returned to the model. This is an observation/planning phase.
@@ -919,13 +1730,17 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     tool: planned_call.name.clone(),
                     args: args.clone(),
                 });
+                let tool_context = ToolContext {
+                    prior_evidence: &evidence,
+                    conversation_id: Some(&ids.conversation_id),
+                    source_selection,
+                };
                 let (mut item, result) = run_tool_call(
                     engine,
                     &catalog,
                     registry,
-                    &ids.conversation_id,
                     &planned_call,
-                    &evidence,
+                    &tool_context,
                     cancel.clone(),
                 )
                 .await;
@@ -1028,14 +1843,18 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
 
         tool_calls_total += pending.len();
 
+        let tool_context = ToolContext {
+            prior_evidence: &evidence,
+            conversation_id: Some(&ids.conversation_id),
+            source_selection,
+        };
         let ran = futures_util::future::join_all(pending.iter().map(|&i| {
             run_tool_call(
                 engine,
                 &catalog,
                 registry,
-                &ids.conversation_id,
                 &resp.tool_calls[i],
-                &evidence,
+                &tool_context,
                 cancel.clone(),
             )
         }))
@@ -1084,9 +1903,9 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
             had_tool_error |= item.error.is_some();
             workspace_changed |= is_workspace_change_error(item.error.as_deref());
             item.id = evidence_id(evidence.len());
-            if is_reusable_chart_source(&item) {
+            if is_presentation_result(&item) {
                 llm_text = format!(
-                    "Reusable result reference: {}. If a chart is needed, call `make_chart` with this `source_evidence_id`; do not rerun or rewrite the computation.\n\n{llm_text}",
+                    "Reusable JSON-render result binding: {}. Use this exact evidence ID and its returned field names in `fella_presentation_answer` when the result belongs in the presentation. Do not invent values or rerun this computation only to make a visualization.\n\n{llm_text}",
                     item.id
                 );
             }
@@ -1159,19 +1978,19 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
         );
     }
 
-    // Out of steps: one last turn with no tools, telling the model plainly
-    // why so it writes a real (possibly hedged) answer instead of confused
-    // or empty output. The canned fallback below stays as the last-resort
-    // case (model call fails, or it still returns nothing).
+    // Out of steps: one final answer turn. A model may use the non-executing
+    // presentation function, but plain text remains a valid completion.
     messages.push(ChatMessage::User(
-        "You're out of tool-calling steps for this question. Don't call any more \
-tools give your best answer now, using only what you've already found. If \
-you're not confident, say so plainly rather than guessing."
+        "You're out of tool-calling steps for this question. Don't call any more analysis \
+tools. Answer using only what you've already found. If accepted multi-row results support a useful \
+presentation, call `fella_presentation_answer` now; otherwise answer in plain language. If you're \
+not confident, say so plainly rather than guessing."
             .to_string(),
     ));
+    let finalizer_only = vec![presentation_answer_schema(&evidence, charts_enabled)];
     let final_call_started = Instant::now();
     let resp = tokio::select! {
-        result = llm.chat(&messages, &[], &notify, &on_delta) => match result {
+        result = llm.chat(&messages, finalizer_only.as_slice(), &notify, &on_delta) => match result {
             Ok(response) => {
                 record_model_call(&mut ids, final_call_started, true, response.usage);
                 response
@@ -1192,23 +2011,87 @@ you're not confident, say so plainly rather than guessing."
         }
     };
     usage = Usage::merge(usage, resp.usage);
-    let text = if resp.content.trim().is_empty() {
+    let final_call = resp
+        .tool_calls
+        .iter()
+        .find(|call| call.name == PRESENTATION_ANSWER_TOOL);
+    let final_output =
+        final_call.and_then(|call| parse_presentation_answer(&call.arguments, charts_enabled).ok());
+    let final_canonical = final_call
+        .and_then(|call| canonical_answer_text(&call.arguments))
+        .or_else(|| unformatted_answer.clone());
+    let mut final_text = final_output
+        .as_ref()
+        .map(|answer| answer.text.clone())
+        .or(final_canonical)
+        .or_else(|| (!resp.content.trim().is_empty()).then(|| resp.content.trim().to_owned()));
+    if final_text.is_none() {
+        match recover_plain_answer(
+            llm,
+            &mut messages,
+            &mut ids,
+            &mut usage,
+            &notify,
+            cancel.as_ref(),
+        )
+        .await
+        {
+            Some(recovered) => final_text = recovered,
+            None => {
+                return Ok(stopped(
+                    finish_context(engine, workspace.as_ref(), &ids, emit),
+                    question,
+                    evidence,
+                    usage,
+                ));
+            }
+        }
+    }
+    let text = final_text.unwrap_or_else(|| {
         "I ran out of analysis steps before reaching a confident answer.".to_string()
-    } else {
-        resp.content
-    };
+    });
     log::info!(
         "agent run: {:?}, {} model call(s), {tool_calls_total} tool call(s), {} evidence (hit step cap)",
         run_start.elapsed(),
         ids.model_calls.len(),
         evidence.len()
     );
-    Ok(finish(
-        finish_context(engine, workspace.as_ref(), &ids, emit),
+    let checks = verify::run_for_answer(
+        engine,
+        question,
+        &text,
+        &evidence,
+        ids.contract.as_ref(),
+        ids.grounding.as_ref(),
+    );
+    let presentation_spec = if profile.presentation_rule {
+        let mut run = PresentationRunContext {
+            ids: &mut ids,
+            usage: &mut usage,
+            cancel: cancel.as_ref(),
+        };
+        ensure_presentation(
+            llm,
+            question,
+            &text,
+            &evidence,
+            final_output.as_ref().map(|answer| &answer.spec),
+            charts_enabled,
+            &mut run,
+        )
+        .await
+    } else {
+        final_output.map(|answer| answer.spec)
+    };
+    let context = finish_context(engine, workspace.as_ref(), &ids, emit);
+    Ok(finish_with(
+        context,
         question,
         text,
         evidence,
         usage,
+        checks,
+        presentation_spec,
     ))
 }
 
@@ -1265,21 +2148,29 @@ fn finish(
         context.ids.contract.as_ref(),
         context.ids.grounding.as_ref(),
     );
-    finish_with(context, question, text, evidence, usage, checks)
+    finish_with(context, question, text, evidence, usage, checks, None)
 }
 
 fn finish_with(
     context: FinishContext<'_>,
     question: &str,
     text: String,
-    evidence: Vec<EvidenceItem>,
+    mut evidence: Vec<EvidenceItem>,
     usage: Option<Usage>,
     mut verification: Vec<VerificationCheck>,
+    presentation_spec: Option<serde_json::Value>,
 ) -> Answer {
+    let finding_snapshot = chart_finding_snapshot(&text);
+    stamp_chart_provenance(
+        &mut evidence,
+        &context.ids.turn_id,
+        finding_snapshot.as_deref(),
+    );
     if !workspace_matches(context.engine, context.workspace) {
         verification.push(VerificationCheck {
             label: "workspace changed while this answer was running".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: Some(
                 "the data changed during this question, so its evidence may not describe the current workspace; ask again"
                     .into(),
@@ -1370,6 +2261,7 @@ fn finish_with(
         contract: context.ids.contract.clone(),
         grounding: context.ids.grounding.clone(),
         text,
+        presentation_spec,
         provenance: AnswerProvenance {
             evidence_ids: evidence
                 .iter()
@@ -1390,6 +2282,59 @@ fn finish_with(
         answer: Box::new(answer.clone()),
     });
     answer
+}
+
+/// Keep chart provenance aligned with the lead conclusion rendered above the
+/// visualization in Message.svelte. The copy is stored on the run's chart so
+/// later Investigation edits cannot rewrite the historical visualization.
+fn chart_finding_snapshot(answer: &str) -> Option<String> {
+    let body = answer
+        .split('\n')
+        .skip_while(|line| line.trim_start().starts_with("Background:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = body.trim();
+    if body.is_empty() {
+        return None;
+    }
+
+    let lead = body
+        .split_once("\n\n")
+        .map_or(body, |(lead, _)| lead)
+        .trim();
+    let first_line = lead.lines().next().unwrap_or_default().trim_start();
+    let heading_depth = first_line
+        .chars()
+        .take_while(|character| *character == '#')
+        .count();
+    let heading = (1..=6).contains(&heading_depth)
+        && first_line[heading_depth..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace);
+    let structured_lead = heading
+        || ["- ", "* ", "+ ", "> ", "```"]
+            .iter()
+            .any(|prefix| first_line.starts_with(prefix));
+    let snapshot = if structured_lead { body } else { lead };
+    Some(snapshot.to_string())
+}
+
+fn stamp_chart_provenance(
+    evidence: &mut [EvidenceItem],
+    run_id: &str,
+    finding_snapshot: Option<&str>,
+) {
+    for item in evidence {
+        let Some(chart) = item.chart.as_mut() else {
+            continue;
+        };
+        let metadata = chart
+            .metadata
+            .get_or_insert_with(crate::engine::analytics::chart::ChartMetadata::default);
+        metadata.source_run_id = Some(run_id.to_string());
+        metadata.finding_snapshot = finding_snapshot.map(str::to_string);
+    }
 }
 
 /// A typed contract is valuable when interpretation needs explicit grounding,
@@ -1550,6 +2495,7 @@ fn duplicate_tool_outcome(call: &ToolCall, content: String) -> (EvidenceItem, St
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         },
         content,
@@ -1563,9 +2509,8 @@ async fn run_tool_call(
     engine: &EngineState,
     catalog: &Catalog,
     registry: &Registry,
-    conversation_id: &str,
     call: &ToolCall,
-    prior_evidence: &[EvidenceItem],
+    tool_context: &ToolContext<'_>,
     cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
@@ -1573,28 +2518,37 @@ async fn run_tool_call(
         return tool_error(
             &call.name,
             &call.arguments,
-            "the workspace changed while this question was running; the tool call was not used ask again".into(),
+            "the workspace changed while this question was running; this tool call was not used. Inspect the current workspace and ask again.".into(),
             started,
+            Some("workspace_stale"),
         );
     }
-    let tool_context = crate::engine::tools::ToolContext {
-        prior_evidence,
-        conversation_id: Some(conversation_id),
-    };
     let result = registry
-        .run_with_context_cancel(engine, &call.name, &call.arguments, &tool_context, cancel)
+        .run_with_context_cancel(engine, &call.name, &call.arguments, tool_context, cancel)
         .await;
     if !catalog_matches(engine, catalog) {
         return tool_error(
             &call.name,
             &call.arguments,
-            "the workspace changed while this question was running; the tool result was discarded ask again".into(),
+            "the workspace changed while this question was running; this tool result was discarded. Inspect the current workspace and ask again.".into(),
             started,
+            Some("workspace_stale"),
         );
     }
     match result {
         Some(Ok(out)) => {
             let mut sources = out.sources.clone();
+            for source in tool_operation_sources(
+                catalog,
+                &call.name,
+                &call.arguments,
+                &out,
+                tool_context.source_selection,
+            ) {
+                if !sources.contains(&source) {
+                    sources.push(source);
+                }
+            }
             for source in out
                 .sql
                 .as_deref()
@@ -1621,7 +2575,11 @@ async fn run_tool_call(
                 .and_then(|chart| chart.metadata.as_ref())
                 .and_then(|metadata| metadata.source_evidence_id.as_deref())
             {
-                if let Some(source) = prior_evidence.iter().find(|item| item.id == source_id) {
+                if let Some(source) = tool_context
+                    .prior_evidence
+                    .iter()
+                    .find(|item| item.id == source_id)
+                {
                     for source in &source.sources {
                         if !sources.contains(source) {
                             sources.push(source.clone());
@@ -1660,6 +2618,7 @@ async fn run_tool_call(
                 python_queries_complete: out.python_queries_complete,
                 ms: started.elapsed().as_millis() as u64,
                 error: None,
+                error_kind: None,
                 verifier_disposition: None,
             };
             (item, out.llm_text)
@@ -1672,15 +2631,153 @@ async fn run_tool_call(
                     msg = format!("{msg}\n\nTables in this workspace:\n{schema}");
                 }
             }
-            tool_error(&call.name, &call.arguments, msg, started)
+            tool_error(&call.name, &call.arguments, msg, started, Some(e.kind()))
         }
         None => tool_error(
             &call.name,
             &call.arguments,
             format!("no such tool `{}`", call.name),
             started,
+            Some("tool_not_found"),
         ),
     }
+}
+
+/// Bind file-oriented tool results to the exact catalog entries they read or
+/// listed. SQL and Python add table lineage below; this fills the parallel
+/// provenance gap for inspection, document reads/search, and inventory pages.
+fn tool_operation_sources(
+    catalog: &Catalog,
+    tool: &str,
+    args: &serde_json::Value,
+    output: &ToolOutput,
+    selection: Option<&InvestigationSourceSelection>,
+) -> Vec<EvidenceSource> {
+    let root = std::path::Path::new(catalog.workspace.as_deref().unwrap_or_default());
+    let relative_path = |source: &crate::engine::catalog::SourceInfo| {
+        crate::engine::catalog::workspace_relative_path(root, std::path::Path::new(&source.path))
+    };
+    let eligible = |source: &&crate::engine::catalog::SourceInfo| {
+        selection.is_none_or(|scope| scope.includes_path(&relative_path(source)))
+    };
+    let mut references: Vec<EvidenceSource> = Vec::new();
+
+    let mut add = |source: &crate::engine::catalog::SourceInfo, note: Option<String>| {
+        let path = relative_path(source);
+        let table = source.view.clone().unwrap_or_default();
+        if let Some(existing) = references
+            .iter_mut()
+            .find(|reference| reference.source == path && reference.table == table)
+        {
+            if let Some(note) = note {
+                match &mut existing.note {
+                    Some(existing_note) if !existing_note.split("; ").any(|part| part == note) => {
+                        existing_note.push_str("; ");
+                        existing_note.push_str(&note);
+                    }
+                    None => existing.note = Some(note),
+                    _ => {}
+                }
+            }
+            return;
+        }
+        references.push(EvidenceSource {
+            source: path,
+            table,
+            note,
+        });
+    };
+
+    match tool {
+        "inspect_table" => {
+            if let Some(name) = args.get("name").and_then(serde_json::Value::as_str) {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.name == name || source.view.as_deref() == Some(name) {
+                        add(source, Some("table inspection".into()));
+                    }
+                }
+            }
+        }
+        "read_file" => {
+            let names: Vec<&str> = args
+                .get("names")
+                .and_then(serde_json::Value::as_array)
+                .map(|names| names.iter().filter_map(serde_json::Value::as_str).collect())
+                .unwrap_or_else(|| {
+                    args.get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .into_iter()
+                        .collect()
+                });
+            for name in names {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() && relative_path(source) == name {
+                        add(source, Some("document read".into()));
+                    }
+                }
+            }
+        }
+        "grep_files" => {
+            let hits = output.rows.as_deref().unwrap_or_default();
+            for row in hits {
+                let Some(path) = row.get(1).and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                let line = row
+                    .get(2)
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|line| format!("line {line}"));
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() && relative_path(source) == path {
+                        add(source, line.clone());
+                    }
+                }
+            }
+            if hits.is_empty() {
+                for source in catalog.sources.iter().filter(eligible) {
+                    if source.view.is_none() {
+                        add(source, Some("included in lexical search scope".into()));
+                    }
+                }
+            }
+        }
+        "list_files" => {
+            let text = output.output.as_deref().unwrap_or(&output.llm_text);
+            for source in catalog.sources.iter().filter(eligible) {
+                let path = relative_path(source);
+                let listed = if source.view.is_some() {
+                    let view = source.view.as_deref().unwrap_or_default();
+                    text.lines()
+                        .any(|line| line.starts_with(&format!("table {view} (file={path},")))
+                } else {
+                    text.lines()
+                        .any(|line| line.starts_with(&format!("document {path} (")))
+                };
+                if listed {
+                    add(source, Some("workspace inventory entry".into()));
+                }
+            }
+            for skipped in &catalog.skipped {
+                let relative = crate::engine::catalog::workspace_relative_path(
+                    root,
+                    std::path::Path::new(&skipped.name),
+                );
+                if text
+                    .lines()
+                    .any(|line| line.starts_with(&format!("skipped {relative} (")))
+                {
+                    references.push(EvidenceSource {
+                        source: relative,
+                        table: String::new(),
+                        note: Some(format!("unavailable: {}", skipped.reason)),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    references
 }
 
 fn tool_error(
@@ -1688,6 +2785,7 @@ fn tool_error(
     args: &serde_json::Value,
     message: String,
     started: Instant,
+    error_kind: Option<&'static str>,
 ) -> (EvidenceItem, String) {
     (
         EvidenceItem {
@@ -1709,9 +2807,13 @@ fn tool_error(
             python_queries_complete: None,
             ms: started.elapsed().as_millis() as u64,
             error: Some(message.clone()),
+            error_kind: error_kind.map(str::to_string),
             verifier_disposition: None,
         },
-        format!("ERROR: {message}"),
+        match error_kind {
+            Some(kind) => format!("ERROR ({kind}): {message}"),
+            None => format!("ERROR: {message}"),
+        },
     )
 }
 
@@ -1733,7 +2835,7 @@ pub struct PromptProfile {
     pub python_rule: bool,
     pub depth_rule: bool,
     pub aside_rule: bool,
-    pub chart_rule: bool,
+    pub presentation_rule: bool,
     pub docs_rule: bool,
     pub forecast_rule: bool,
     pub background_rule: bool,
@@ -1772,7 +2874,7 @@ impl PromptProfile {
                 "python_rule" => p.python_rule = false,
                 "depth_rule" => p.depth_rule = false,
                 "aside_rule" => p.aside_rule = false,
-                "chart_rule" => p.chart_rule = false,
+                "presentation_rule" => p.presentation_rule = false,
                 "docs_rule" => p.docs_rule = false,
                 "forecast_rule" => p.forecast_rule = false,
                 "background_rule" => p.background_rule = false,
@@ -1801,7 +2903,7 @@ impl PromptProfile {
             python_rule: true,
             depth_rule: true,
             aside_rule: true,
-            chart_rule: true,
+            presentation_rule: true,
             docs_rule: true,
             forecast_rule: true,
             background_rule: true,
@@ -1867,7 +2969,7 @@ claims. The schema and sample rows are clues for investigation, not a substitute
         );
         rules.push(
             "The model drives interpretation and tool choice. Use inspection, document search, \
-SQL, Python, charts, or a combination as the question requires; revise the approach when \
+SQL, Python, or a combination as the question requires; revise the approach when \
 results do not answer the intended question. Do not require a fixed tool, query language, or \
 sequence. Ground workspace-specific claims in returned evidence, and make useful derived \
 calculations explicit rather than doing consequential arithmetic only in prose."
@@ -1883,17 +2985,16 @@ spend a separate turn announcing routine work before using a tool."
     }
     if has_workspace && profile.core_rules {
         rules.push(
-            "Use available evidence and context to interpret labels, aliases, units, signs, dates, \
-and source scope; inspect observed values when they can resolve uncertainty. If more than one \
-material interpretation remains, ask a focused clarification using `__request_clarification`. If one interpretation is reasonable \
-and the uncertainty is minor, proceed with the assumption stated briefly. When asking the user to \
-choose, call `__request_clarification` rather than asking only in free-form answer text; the app \
-uses that turn ID to resume this same analysis. If a source note \
-explicitly says a term's definition or mapping is absent, treat that as evidence the meaning is \
- unresolved—not as permission to infer it from convention. When competing scopes materially change \
- the result and the user's choice is still needed, call `__request_clarification`; labeled alternatives \
- may help explain the choice but do not replace the interactive request. A question or list of \
- scenarios in final prose is not a clarification action."
+            "Use evidence and context to interpret labels, aliases, units, signs, dates, and source \
+scope; inspect observed values when they can resolve uncertainty. For a low-impact ambiguity with a \
+reasonable, evidence-supported default, proceed, record the choice in the analysis contract's \
+`assumptions`, and disclose it briefly. Do not ask about routine presentation defaults or minor \
+uncertainty. Only ask a focused clarification when multiple plausible interpretations remain after \
+reasonable investigation and could materially change the population, scope, measure, method, or conclusion, and the user's choice is still needed. Then call \
+`__request_clarification` once with a focused decision; do not replace the interactive request with prose. A list of \
+scenarios in final prose is not a clarification action. If a source note explicitly says a term's \
+definition or mapping is absent, do not infer it from convention. Labeled alternatives can explain a \
+material choice but do not replace the clarification action."
                 .into(),
         );
         rules.push(
@@ -1971,36 +3072,23 @@ sandbox with no filesystem, network, environment, or subprocess access."
                 .into(),
         );
     }
-    if has_workspace && profile.chart_rule {
+    if has_workspace && profile.presentation_rule {
         rules.push(
-            "Use make_chart when the user asks for a visualization or a chart materially helps explain \
-the analysis. When a chart is explicitly requested, preserve it as the primary deliverable and avoid \
-incidental aggregates that do not answer the request. Reuse `source_evidence_id` only when the prior \
-complete result already has the exact requested grain, grouping, filters, and measures; otherwise use \
-`make_chart` with direct read-only SQL for the needed result shape. Do not use a total-by-category result \
-in place of a requested time series, or vice versa. Choose a chart family that fits the data: \
-bar for categorical comparisons, line/area for ordered time series, scatter for paired numeric measures, \
-histogram for one-variable distributions, box_plot for grouped distributions, heatmap for two categorical \
-dimensions, and forecast for explicitly separated observed/projected values. Pie/donut are only for a small, \
-non-negative part-to-whole result with a stated common denominator. For pie/donut, set `x_field` to the \
-category result column, `value_field` to its numeric measure, `part_to_whole` to true, and `denominator` to \
-the exact shared population. If a field name is rejected, use the available field names returned by the tool. \
-For long-form data with one row per period/category/measure observation, use `x_field`, `group_field`, and \
-`value_field` so the chart creates a series per group; do not try to plot every fact row as a separate \
-category. `make_chart` can materialize up to 10,000 source rows for grouped-series, histogram, and box-plot \
-queries, then pivots selected dimensions while keeping the requested time grain. If group-period pairs \
-repeat, aggregate them explicitly in SQL; if pairs are absent, \
-preserve gaps unless evidence establishes zero. The final time axis supports up to 1,000 points. If a chart \
-query exceeds its source-row limit, preserve the user's requested dates and grain while reshaping or \
-aggregating; never narrow the range just to fit a limit without asking. \
-An explicitly requested visualization is a required deliverable: if its source result is revised or \
-superseded, recreate the chart from the revised accepted evidence before finalizing rather than dropping \
-it. Select exact result fields, preserve the requested scope and units, and explicitly handle missing values; \
-never turn missing into zero. Make the title, \
-axes, grouping, period grain, aggregation, filters, and denominator agree with the analysis. If the result \
-doesn't support the requested chart or is too large to read, say so rather than altering its meaning."
+            "Choose an answer-specific presentation based on the question and the actual result shape. \
+When a structured presentation materially improves the answer, use Fella's json-render output as its primary surface and compose it from saved evidence-bound components. After producing accepted multi-row results, you MUST compose a presentation for trends, period comparisons, rankings, distributions, and relationships; use a result-bound chart when it best explains the pattern. \
+Make the main analytical relationship visible and avoid repetitive templates. Plain language remains a valid complete answer if composition fails, and presentation failure must never block it. \
+Bind every displayed analytical value to a returned result; do not copy result numbers into \
+Metric value props, labels, chart data, or prose. Exact Metric values use a result ID, field, and zero-based row; \
+display-only calculations use @Rows(). Presentation choices never change analysis, source scope, or verification."
                 .into(),
         );
+        // Presentation design belongs in the model's main instructions too,
+        // rather than only inside a long finalizer-tool description. Both are
+        // generated from the same frontend library; this changes presentation
+        // guidance, never analytical execution or verification.
+        if let Some(guidance) = presentation_manifest()["designGuidance"].as_str() {
+            rules.push(guidance.to_string());
+        }
     }
     if has_workspace && profile.docs_rule {
         rules.push(
@@ -2165,6 +3253,459 @@ mod tests {
     use super::*;
     use crate::engine::llm::ToolCall;
 
+    #[test]
+    fn json_render_answer_is_a_single_non_executing_finalizer_with_a_complete_spec() {
+        let schema = presentation_answer_schema(&[], true);
+        assert_eq!(schema.name, PRESENTATION_ANSWER_TOOL);
+        assert_eq!(
+            schema.parameters["required"],
+            serde_json::json!(["answer", "presentation_spec"])
+        );
+        assert_eq!(schema.parameters["additionalProperties"], false);
+        assert!(schema
+            .description
+            .contains("canonical, evidence-grounded answer"));
+        assert!(schema
+            .description
+            .contains("required when the result supports it"));
+        assert!(schema.description.contains("json-render spec"));
+
+        let arguments = serde_json::json!({
+            "answer": "Revenue increased from Q3 to Q4.",
+            "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["title"]},"title":{"type":"Title","props":{"content":"Revenue increased from Q3 to Q4."},"children":[]}}}
+        });
+        let answer = parse_presentation_answer(&arguments, true).unwrap();
+        assert_eq!(answer.text, "Revenue increased from Q3 to Q4.");
+        assert_eq!(answer.spec["root"], "doc");
+    }
+
+    #[test]
+    fn json_render_answer_rejects_incomplete_or_invalid_trees() {
+        for arguments in [
+            serde_json::json!({"answer":"An answer", "presentation_spec":{}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"missing","elements":{}}}),
+            serde_json::json!({"answer":"", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":[]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Unknown","props":{},"children":[]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["missing"]}}}}),
+            serde_json::json!({"answer":"An answer", "presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"body"},"children":[]},"orphan":{"type":"Text","props":{"content":"orphan"},"children":[]}}}}),
+        ] {
+            assert!(parse_presentation_answer(&arguments, true).is_err());
+        }
+    }
+
+    #[test]
+    fn serialized_presentation_payload_uses_the_same_tree_validation() {
+        let arguments: serde_json::Value = serde_json::from_str(
+            r#"{"answer":"Revenue increased.","presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#,
+        )
+        .unwrap();
+        let answer = parse_presentation_answer(&arguments, true).unwrap();
+        assert_eq!(answer.text, "Revenue increased.");
+        assert_eq!(answer.spec["elements"]["body"]["type"], "Text");
+    }
+
+    #[test]
+    fn canonical_answer_survives_an_invalid_presentation_spec() {
+        let arguments = serde_json::json!({
+            "answer": "The workspace contains monthly sales and refund data.",
+            "presentation_spec": {"root": "missing", "elements": {}}
+        });
+
+        let canonical = canonical_answer_text(&arguments).unwrap();
+        assert!(parse_presentation_answer(&arguments, true).is_err());
+        assert_eq!(
+            canonical,
+            "The workspace contains monthly sales and refund data."
+        );
+    }
+
+    #[test]
+    fn json_render_answer_accepts_a_flat_rooted_component_tree() {
+        let answer = parse_presentation_answer(&serde_json::json!({
+            "answer": "A local selector can change this display.",
+            "presentation_spec": {"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["select","title"]},"select":{"type":"Select","props":{"name":"Quarter","stateKey":"quarter","options":[{"value":"q3","label":"Q3"},{"value":"q4","label":"Q4"}],"defaultValue":"q3"},"children":[]},"title":{"type":"Title","props":{"content":"Revenue"},"children":[]}}}
+        }), true)
+        .unwrap();
+
+        assert_eq!(answer.spec["elements"]["select"]["type"], "Select");
+    }
+
+    #[test]
+    fn presentation_finalizer_uses_json_render_schema_and_no_expression_language() {
+        let schema = presentation_answer_schema(&[], true);
+        assert!(schema.description.contains("JSON object"));
+        assert!(schema.description.contains("result"));
+    }
+
+    #[test]
+    fn generated_charts_obey_the_visualization_capability() {
+        let arguments = serde_json::json!({
+            "answer": "Revenue increased over time.",
+            "presentation_spec": {
+                "root": "doc",
+                "elements": {
+                    "doc": {"type":"Document","props":{},"children":["chart"]},
+                    "chart": {
+                        "type":"Chart",
+                        "props":{
+                            "resultId":"evidence-1",
+                            "spec":{
+                                "mark":"line",
+                                "encoding":{
+                                    "x":{"field":"month","type":"temporal"},
+                                    "y":{"field":"revenue","type":"quantitative"}
+                                }
+                            }
+                        },
+                        "children":[]
+                    }
+                }
+            }
+        });
+        let enabled_schema = presentation_schema(true);
+        let enabled_types = enabled_schema["properties"]["elements"]["additionalProperties"]
+            ["properties"]["type"]["enum"]
+            .as_array()
+            .unwrap();
+        let disabled_schema = presentation_answer_schema(&[], false);
+        let disabled_types = disabled_schema.parameters["properties"]["presentation_spec"]
+            ["properties"]["elements"]["additionalProperties"]["properties"]["type"]["enum"]
+            .as_array()
+            .unwrap();
+
+        assert!(enabled_types.iter().any(|kind| kind == "Chart"));
+        assert!(!disabled_types.iter().any(|kind| kind == "Chart"));
+        assert!(disabled_schema
+            .description
+            .contains("Charts are disabled by the current workspace capabilities"));
+        assert!(parse_presentation_answer(&arguments, true).is_ok());
+        assert!(parse_presentation_answer(&arguments, false).is_err());
+    }
+
+    #[test]
+    fn finalizer_catalog_lists_current_result_bindings_instead_of_an_empty_placeholder() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-2".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        result.row_count = Some(2);
+
+        let schema = presentation_answer_schema(&[result], true);
+        assert!(schema.description.contains(
+            "Available result bindings (metadata only; the result rows themselves are provided separately as evidence):\n[{\"columns\":[\"quarter\",\"revenue\"],\"complete\":true,\"id\":\"evidence-2\",\"row_count\":2,\"tool\":\"run_sql\"}]"
+        ));
+        assert!(!schema.description.ends_with("evidence):\n[]"));
+    }
+
+    #[test]
+    fn multirow_analytical_results_trigger_the_presentation_recovery() {
+        let mut result = evidence_item("run_sql");
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        assert!(presentation_composition_needed(&[result.clone()]));
+
+        result.rows = Some(vec![vec![serde_json::json!("Q4"), serde_json::json!(20)]]);
+        assert!(!presentation_composition_needed(&[result]));
+        assert!(!presentation_composition_needed(&[evidence_item(
+            "list_files"
+        )]));
+    }
+
+    #[test]
+    fn result_bound_presentations_reject_unknown_result_ids_and_columns() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-1".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q3"), serde_json::json!(10)],
+            vec![serde_json::json!("Q4"), serde_json::json!(20)],
+        ]);
+        let spec = serde_json::json!({
+            "root":"doc",
+            "elements":{
+                "doc":{"type":"Document","props":{},"children":["chart"]},
+                "chart":{"type":"Chart","props":{"resultId":"evidence-1","spec":{
+                    "mark":"line",
+                    "encoding":{"x":{"field":"quarter","type":"ordinal"},"y":{"field":"revenue","type":"quantitative"}}
+                }},"children":[]}
+            }
+        });
+        assert!(validate_presentation_bindings(&spec, &[result.clone()]).is_ok());
+
+        let mut wrong_result = spec.clone();
+        wrong_result["elements"]["chart"]["props"]["resultId"] = serde_json::json!("evidence-0");
+        assert!(validate_presentation_bindings(&wrong_result, &[result.clone()]).is_err());
+
+        let mut wrong_field = spec;
+        wrong_field["elements"]["chart"]["props"]["spec"]["encoding"]["y"]["field"] =
+            serde_json::json!("profit");
+        assert!(validate_presentation_bindings(&wrong_field, &[result]).is_err());
+    }
+
+    #[test]
+    fn a_requested_time_trend_cannot_be_recovered_with_a_text_only_layout() {
+        let mut result = evidence_item("run_sql");
+        result.id = "evidence-1".into();
+        result.columns = Some(vec!["quarter".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q1"), serde_json::json!(10)],
+            vec![serde_json::json!("Q2"), serde_json::json!(12)],
+        ]);
+        let text_only = serde_json::json!({
+            "root":"doc",
+            "elements":{
+                "doc":{"type":"Document","props":{},"children":["body"]},
+                "body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}
+            }
+        });
+        assert!(validate_composed_presentation(&text_only, &[result.clone()], false, true).is_ok());
+        assert!(
+            validate_composed_presentation(&text_only, &[result], true, true)
+                .unwrap_err()
+                .contains("requires a result-bound chart")
+        );
+    }
+
+    #[test]
+    fn requested_time_trends_require_a_chart_when_the_result_has_a_time_dimension() {
+        let mut result = evidence_item("run_sql");
+        result.columns = Some(vec!["period".into(), "revenue".into()]);
+        result.rows = Some(vec![
+            vec![serde_json::json!("Q1"), serde_json::json!(10)],
+            vec![serde_json::json!("Q2"), serde_json::json!(12)],
+        ]);
+        assert!(question_needs_time_chart(
+            "Compare the quarter-by-quarter revenue trend.",
+            &[result.clone()]
+        ));
+        assert!(!question_needs_time_chart(
+            "What was revenue in Q2?",
+            &[result.clone()]
+        ));
+        result.columns = Some(vec!["category".into(), "revenue".into()]);
+        assert!(!question_needs_time_chart(
+            "Show the revenue trend.",
+            &[result]
+        ));
+    }
+
+    #[test]
+    fn structured_composer_requires_and_validates_only_the_presentation_spec() {
+        let response = r#"{"presentation_spec":{"root":"doc","elements":{"doc":{"type":"Document","props":{},"children":["body"]},"body":{"type":"Text","props":{"content":"Revenue increased."},"children":[]}}}}"#;
+        let spec = parse_structured_presentation(response).unwrap();
+        assert_eq!(spec["root"], "doc");
+        assert_eq!(
+            parse_structured_presentation(&format!("```json\n{response}\n```")).unwrap(),
+            spec
+        );
+        assert!(parse_structured_presentation(r#"{"answer":"Plain text"}"#).is_err());
+        assert!(parse_structured_presentation(
+            r#"{"presentation_spec":{"root":"missing","elements":{}}}"#
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn failed_tool_results_keep_a_typed_recovery_category() {
+        let (item, model_message) = tool_error(
+            "run_sql",
+            &serde_json::json!({"sql": "SELECT 1"}),
+            "the workspace changed during this run".into(),
+            Instant::now(),
+            Some("workspace_stale"),
+        );
+
+        assert_eq!(item.error_kind.as_deref(), Some("workspace_stale"));
+        assert_eq!(
+            item.error.as_deref(),
+            Some("the workspace changed during this run")
+        );
+        assert!(model_message.starts_with("ERROR (workspace_stale):"));
+        assert_eq!(
+            serde_json::to_value(item).unwrap()["error_kind"],
+            "workspace_stale"
+        );
+    }
+
+    #[test]
+    fn file_tools_preserve_exact_source_provenance_with_investigation_scope() {
+        use crate::engine::catalog::{SkippedFile, SourceInfo, SourceKind};
+
+        let catalog = Catalog {
+            workspace: Some("/workspace".into()),
+            sources: vec![
+                SourceInfo {
+                    name: "sales.csv".into(),
+                    path: "/workspace/sales.csv".into(),
+                    kind: SourceKind::Csv,
+                    view: Some("sales".into()),
+                    row_count: Some(2),
+                    columns: None,
+                    size_bytes: 20,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "q4-notes.md".into(),
+                    path: "/workspace/reports/q4-notes.md".into(),
+                    kind: SourceKind::Text,
+                    view: None,
+                    row_count: None,
+                    columns: None,
+                    size_bytes: 30,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "other.md".into(),
+                    path: "/workspace/private/other.md".into(),
+                    kind: SourceKind::Text,
+                    view: None,
+                    row_count: None,
+                    columns: None,
+                    size_bytes: 40,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "book.xlsx · Q1".into(),
+                    path: "/workspace/reports/book.xlsx".into(),
+                    kind: SourceKind::Xlsx,
+                    view: Some("book_q1".into()),
+                    row_count: Some(3),
+                    columns: None,
+                    size_bytes: 50,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+                SourceInfo {
+                    name: "book.xlsx · Q2".into(),
+                    path: "/workspace/reports/book.xlsx".into(),
+                    kind: SourceKind::Xlsx,
+                    view: Some("book_q2".into()),
+                    row_count: Some(4),
+                    columns: None,
+                    size_bytes: 50,
+                    mtime: 1,
+                    synopsis: None,
+                    note: None,
+                },
+            ],
+            skipped: vec![SkippedFile {
+                name: "private/unsupported.docx".into(),
+                reason: "Unsupported file type".into(),
+            }],
+            ..Catalog::default()
+        };
+        let output = |text: &str| ToolOutput {
+            summary: "fixture".into(),
+            llm_text: text.into(),
+            sources: Vec::new(),
+            sql: None,
+            columns: None,
+            rows: None,
+            row_count: None,
+            output: Some(text.into()),
+            chart: None,
+            result_table: None,
+            python_queries: None,
+            python_queries_complete: None,
+        };
+        let selection = InvestigationSourceSelection {
+            mode: crate::engine::investigation::InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["reports/q4-notes.md".into()],
+        };
+
+        let read = tool_operation_sources(
+            &catalog,
+            "read_file",
+            &serde_json::json!({"name": "reports/q4-notes.md"}),
+            &output("Q4 notes"),
+            Some(&selection),
+        );
+        assert_eq!(read.len(), 1);
+        assert_eq!(read[0].source, "reports/q4-notes.md");
+        assert_eq!(read[0].note.as_deref(), Some("document read"));
+
+        let grep_output = ToolOutput {
+            rows: Some(vec![vec![
+                serde_json::json!(1),
+                serde_json::json!("reports/q4-notes.md"),
+                serde_json::json!(12),
+                serde_json::json!("Revenue grew"),
+            ]]),
+            ..output("Revenue grew")
+        };
+        let grep = tool_operation_sources(
+            &catalog,
+            "grep_files",
+            &serde_json::json!({"pattern": "revenue"}),
+            &grep_output,
+            Some(&selection),
+        );
+        assert_eq!(grep.len(), 1);
+        assert_eq!(grep[0].source, "reports/q4-notes.md");
+        assert_eq!(grep[0].note.as_deref(), Some("line 12"));
+
+        let inspect = tool_operation_sources(
+            &catalog,
+            "inspect_table",
+            &serde_json::json!({"name": "sales"}),
+            &output("inspected sales"),
+            None,
+        );
+        assert_eq!(inspect.len(), 1);
+        assert_eq!(inspect[0].source, "sales.csv");
+        assert_eq!(inspect[0].table, "sales");
+
+        let inventory = tool_operation_sources(
+            &catalog,
+            "list_files",
+            &serde_json::json!({"kind": "documents"}),
+            &output("document reports/q4-notes.md (text, 0 KB)"),
+            Some(&selection),
+        );
+        assert_eq!(inventory.len(), 1);
+        assert_eq!(inventory[0].source, "reports/q4-notes.md");
+        assert_eq!(
+            inventory[0].note.as_deref(),
+            Some("workspace inventory entry")
+        );
+
+        let listed = tool_operation_sources(
+            &catalog,
+            "list_files",
+            &serde_json::json!({"kind": "all"}),
+            &output(
+                "table book_q1 (file=reports/book.xlsx, 3 rows)\nskipped private/unsupported.docx (Unsupported file type)",
+            ),
+            None,
+        );
+        assert_eq!(listed.len(), 2);
+        assert!(listed
+            .iter()
+            .any(|source| { source.source == "reports/book.xlsx" && source.table == "book_q1" }));
+        assert!(!listed.iter().any(|source| source.table == "book_q2"));
+        let skipped = listed
+            .iter()
+            .find(|source| source.source == "private/unsupported.docx")
+            .unwrap();
+        assert_eq!(
+            skipped.note.as_deref(),
+            Some("unavailable: Unsupported file type")
+        );
+    }
+
     fn evidence_item(tool: &str) -> EvidenceItem {
         EvidenceItem {
             id: "evidence-test".into(),
@@ -2185,8 +3726,66 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }
+    }
+
+    #[test]
+    fn chart_provenance_is_saved_with_the_run_and_uses_its_visible_lead() {
+        let mut chart = evidence_item("make_chart");
+        chart.chart = Some(crate::engine::analytics::chart::VisualizationSpec {
+            kind: crate::engine::analytics::chart::ChartKind::Line,
+            title: Some("Monthly revenue".into()),
+            labels: vec!["Jan".into(), "Feb".into()],
+            series: Vec::new(),
+            unit: None,
+            x_label: None,
+            y_label: None,
+            payload: None,
+            metadata: Some(crate::engine::analytics::chart::ChartMetadata {
+                source_evidence_id: Some("query-1".into()),
+                ..Default::default()
+            }),
+        });
+        let source = evidence_item("run_sql");
+        let mut evidence = vec![source, chart];
+        let snapshot = chart_finding_snapshot(
+            "Background: general context\n\nRevenue rose 12% in February.\n\nThe increase was concentrated in the west region.",
+        );
+
+        stamp_chart_provenance(&mut evidence, "run-204", snapshot.as_deref());
+
+        let metadata = evidence[1]
+            .chart
+            .as_ref()
+            .unwrap()
+            .metadata
+            .as_ref()
+            .unwrap();
+        assert_eq!(metadata.source_run_id.as_deref(), Some("run-204"));
+        assert_eq!(
+            metadata.finding_snapshot.as_deref(),
+            Some("Revenue rose 12% in February.")
+        );
+        assert_eq!(metadata.source_evidence_id.as_deref(), Some("query-1"));
+        let saved = serde_json::to_value(&evidence[1]).unwrap();
+        assert_eq!(saved["chart"]["metadata"]["source_run_id"], "run-204");
+        assert_eq!(
+            saved["chart"]["metadata"]["finding_snapshot"],
+            "Revenue rose 12% in February."
+        );
+        assert!(
+            evidence[0].chart.is_none(),
+            "source evidence is not rewritten"
+        );
+    }
+
+    #[test]
+    fn chart_finding_snapshot_keeps_structured_leads_together() {
+        let answer = "## Revenue\n\n- January: $12\n- February: $18";
+        assert_eq!(chart_finding_snapshot(answer).as_deref(), Some(answer));
+        assert_eq!(chart_finding_snapshot("  \n  "), None);
     }
 
     #[test]
@@ -2281,32 +3880,35 @@ mod tests {
     }
 
     #[test]
-    fn only_complete_analytical_tables_are_advertised_as_chart_sources() {
+    fn analytical_results_are_advertised_as_presentation_bindings() {
         let mut inspection = evidence_item("inspect_table");
         inspection.columns = Some(vec!["category".into(), "amount".into()]);
         inspection.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         inspection.row_count = Some(1);
-        assert!(!is_reusable_chart_source(&inspection));
+        assert!(!is_presentation_result(&inspection));
 
         let mut complete_query = evidence_item("run_sql");
         complete_query.columns = Some(vec!["category".into(), "amount".into()]);
         complete_query.rows = Some(vec![vec!["Rent".into(), 1200.into()]]);
         complete_query.row_count = Some(1);
-        assert!(is_reusable_chart_source(&complete_query));
+        assert!(is_presentation_result(&complete_query));
 
         complete_query.row_count = Some(2);
-        assert!(!is_reusable_chart_source(&complete_query));
+        assert!(
+            is_presentation_result(&complete_query),
+            "incomplete saved results remain bindable with a scope warning"
+        );
         complete_query.row_count = Some(1);
         complete_query.error = Some("query failed".into());
-        assert!(!is_reusable_chart_source(&complete_query));
+        assert!(!is_presentation_result(&complete_query));
 
         let mut published_python = evidence_item("run_python");
         published_python.result_table = Some(crate::engine::analytics::chart::TabularResult {
             columns: vec!["category".into(), "amount".into()],
             rows: vec![vec!["Rent".into(), 1200.into()]],
         });
-        assert!(is_reusable_chart_source(&published_python));
-        assert!(!is_reusable_chart_source(&evidence_item("read_file")));
+        assert!(is_presentation_result(&published_python));
+        assert!(!is_presentation_result(&evidence_item("read_file")));
     }
 
     #[test]
@@ -2557,7 +4159,7 @@ mod tests {
     }
 
     #[test]
-    fn chart_prompt_preserves_requested_shape_and_uses_direct_sql_when_needed() {
+    fn presentation_prompt_prefers_answer_specific_json_render_without_gating_plain_answers() {
         let prompt = system_prompt(
             &PromptProfile::full(),
             &open_catalog(),
@@ -2568,12 +4170,10 @@ mod tests {
             None,
         );
 
-        assert!(prompt.contains("exact requested grain, grouping, filters, and measures"));
-        assert!(prompt.contains("otherwise use `make_chart` with direct read-only SQL"));
-        assert!(prompt
-            .contains("Do not use a total-by-category result in place of a requested time series"));
-        assert!(prompt.contains("one row per period/category/measure observation"));
-        assert!(prompt.contains("preserve gaps unless evidence establishes zero"));
+        assert!(prompt.contains("When a structured presentation materially improves the answer"));
+        assert!(prompt.contains("presentation failure must never block it"));
+        assert!(prompt.contains("saved evidence-bound components"));
+        assert!(!prompt.contains("make_chart"));
     }
 
     #[test]
@@ -2584,9 +4184,9 @@ mod tests {
     }
 
     #[test]
-    fn chart_and_structure_rules_are_droppable() {
-        let p = PromptProfile::from_drop(Some("chart_rule, structure_rule"));
-        assert!(!p.chart_rule && !p.structure_rule);
+    fn presentation_and_structure_rules_are_droppable() {
+        let p = PromptProfile::from_drop(Some("presentation_rule, structure_rule"));
+        assert!(!p.presentation_rule && !p.structure_rule);
         assert!(p.python_rule && p.background_rule, "unnamed sections stay");
     }
 
@@ -2610,6 +4210,11 @@ mod tests {
         assert!(got.contains("Treat the request as an analysis problem"));
         assert!(got.contains("The model drives interpretation and tool choice"));
         assert!(got.contains("ask a focused clarification"));
+        assert!(got.contains("record the choice in the analysis contract's `assumptions`"));
+        assert!(got.contains("Do not ask about routine presentation defaults or minor uncertainty"));
+        assert!(got.contains(
+            "could materially change the population, scope, measure, method, or conclusion"
+        ));
         assert!(got.contains("`__request_clarification`"));
         assert!(got.contains("the user's choice is still needed"));
         assert!(got.contains("do not replace the interactive request"));
@@ -2617,7 +4222,8 @@ mod tests {
         assert!(!got.contains("contract's typed `clarification` field"));
         assert!(got.contains("explicitly says a term's definition or mapping is absent"));
         assert!(got.contains("Preserve relevant scope, filters, units, and definitions"));
-        assert!(got.contains("An explicitly requested visualization is a required deliverable"));
+        assert!(got.contains("When a structured presentation materially improves the answer"));
+        assert!(got.contains("presentation failure must never block it"));
         assert!(got
             .contains("Distinguish association from causation and observed values from estimates"));
         assert!(got.contains("Forecasts and scenarios are valid analysis requests"));
@@ -2796,6 +4402,7 @@ mod tests {
         let chart_check = VerificationCheck {
             label: "chart values did not match source query".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: Some("plotted values differ from source rows".into()),
             finding: Some(crate::engine::evidence::VerificationFinding {
                 code: crate::engine::evidence::VerificationFindingCode::ChartMismatch,
@@ -2816,6 +4423,7 @@ mod tests {
         let claim_check = VerificationCheck {
             label: "the answer mentions 40 not found in any result".into(),
             ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
             detail: None,
             finding: Some(crate::engine::evidence::VerificationFinding {
                 code: crate::engine::evidence::VerificationFindingCode::UnsupportedClaim,

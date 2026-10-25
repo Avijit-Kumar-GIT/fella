@@ -1,29 +1,115 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import CommandPalette from '$lib/components/CommandPalette.svelte';
+	import CompanionPane from '$lib/components/CompanionPane.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
-	import ProjectDialog from '$lib/components/ProjectDialog.svelte';
-	import ProjectView from '$lib/components/ProjectView.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
 	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
-	import { dispatch, loadStartupCatalog, openFolder, stop } from '$lib/commands';
+	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
+	import WorkspaceSourceView from '$lib/components/WorkspaceSourceView.svelte';
+	import StudioDetailsView from '$lib/components/StudioDetailsView.svelte';
+	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
+	import { dispatch, loadStartupCatalog, openContext, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
 	import { prefs } from '$lib/prefs.svelte';
-	import { session } from '$lib/session.svelte';
+	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import type { SourceInfo } from '$lib/types';
 
 	let transcript = $state<Transcript | undefined>();
 	let composer = $state<Composer | undefined>();
 	let paletteOpen = $state(false);
-	let projectDialogOpen = $state(false);
 	let dragging = $state(false);
+	let toolsExpanded = $state(false);
+	let toolsCompact = $state(false);
+	let selectedSource = $state<SourceInfo | null>(null);
+	let selectedFolder = $state('all');
+	let fileInspectorOpen = $state(true);
+	let reportInspectorOpen = $state(true);
+	let pendingSourcePrompt = $state('');
+	let windowWidth = $state(1440);
+	let narrowNavigation = $derived(windowWidth < ((session.workspacePaneOpen || session.workspaceSection !== 'chat') ? 980 : 700));
+	$effect(() => {
+		if (narrowNavigation) untrack(() => { session.sidebarCollapsed = true; });
+	});
 
 	let activeView = $derived(session.workspaceView);
+	let showRightPane = $derived.by(() => {
+		if (session.workspaceSection === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
+		if (session.workspaceSection === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
+		return session.workspacePaneOpen || Boolean(session.activeChat.companionPane) ||
+			(session.contentLayout === 'notebook' && !session.catalog.workspace);
+	});
+	let scopedWorkspaceActive = $derived(
+		Boolean(session.activeChat.workspaceScope && session.catalog.workspace === session.activeChat.workspaceScope)
+	);
+	$effect(() => {
+		const sources = session.catalog.sources;
+		const selected = selectedSource;
+		if (selected && sources.some((source) => source.path === selected.path && source.name === selected.name)) return;
+		selectedSource = sources[0] ?? null;
+	});
+	$effect(() => {
+		const workspace = session.catalog.workspace;
+		void workspace;
+		untrack(() => { selectedFolder = 'all'; });
+	});
+	$effect(() => {
+		const mode = session.workspaceSection;
+		if (mode === 'files') untrack(() => { fileInspectorOpen = true; });
+		if (mode === 'reports') untrack(() => { reportInspectorOpen = true; });
+	});
+	$effect(() => {
+		const prompt = pendingSourcePrompt;
+		if (session.workspaceSection !== 'chat' || !prompt || !composer) return;
+		queueMicrotask(() => {
+			if (!composer || pendingSourcePrompt !== prompt) return;
+			composer.setText(prompt);
+			composer.focus();
+			pendingSourcePrompt = '';
+		});
+	});
+
+	function relativeSourcePath(path: string): string {
+		const root = session.catalog.workspace?.replace(/[/\\]+$/, '') ?? '';
+		const normalizedPath = path.replace(/\\/g, '/');
+		const normalizedRoot = root.replace(/\\/g, '/').replace(/\/$/, '');
+		return normalizedRoot && normalizedPath.toLocaleLowerCase().startsWith(`${normalizedRoot.toLocaleLowerCase()}/`)
+			? normalizedPath.slice(normalizedRoot.length + 1)
+			: normalizedPath;
+	}
+
+	function selectFolder(folder: string): void {
+		selectedFolder = folder;
+		const next = session.catalog.sources.find((source) => {
+			const segments = relativeSourcePath(source.path).split('/').filter(Boolean);
+			const id = segments.length > 1 ? segments[0] : '__root';
+			return folder === 'all' || id === folder;
+		});
+		selectedSource = next ?? null;
+		fileInspectorOpen = true;
+	}
+
+	function askAboutSource(source: SourceInfo): void {
+		session.workspaceSection = 'chat';
+		fileInspectorOpen = true;
+		pendingSourcePrompt = `What should I know about ${source.name}?`;
+	}
+	$effect(() => {
+		const pane = session.activeChat.companionPane;
+		if (!pane || !scopedWorkspaceActive) return;
+		untrack(() => {
+			if (session.openPreviewTool(pane)) {
+				session.activeChat.companionPane = null;
+				session.persist();
+			}
+		});
+	});
 
 	function mountStatusLabel(progress: NonNullable<typeof session.mountProgress>): string {
 		const count = (value: number) => new Intl.NumberFormat().format(value);
@@ -66,6 +152,20 @@
 	onMount(() => {
 		void session.rollOver();
 		composer?.focus();
+		window.fella?.onAppCommand?.((command) => {
+			switch (command) {
+				case 'new-conversation': startConversation(); break;
+				case 'open-folder': void openFolder(); break;
+				case 'settings': session.setWorkspaceView('settings'); break;
+				case 'search': paletteOpen = true; break;
+				case 'toggle-sidebar': session.toggleSidebar(); break;
+				case 'show-chat': session.setContentLayout('chat'); session.setWorkspaceView('ask'); break;
+				case 'open-notebook':
+					session.setWorkspaceView('ask');
+					session.setContentLayout('notebook');
+					break;
+			}
+		});
 		if (!isDesktop()) return;
 
 		void ipc
@@ -99,17 +199,39 @@
 		};
 	});
 
-	function moveTab(delta: number): void {
-		if (session.tabs.length < 2) return;
-		const next = (session.active + delta + session.tabs.length) % session.tabs.length;
-		session.activateTab(next);
+	function startConversation(): void {
+		session.newConversation();
 		composer?.focus();
+	}
+
+	async function selectWorkspace(id: string): Promise<void> {
+		session.setWorkspaceView('ask');
+		if (id === GENERAL_WORKSPACE_ID) {
+			session.focusWorkspace(GENERAL_WORKSPACE_ID);
+			return;
+		}
+		if (session.workspaceAt(id) && !session.workspaceAt(id)?.historyOnly) {
+			session.focusWorkspace(id);
+			return;
+		}
+		const opened = await openRepository(id);
+		if (!opened && session.historyOnlyRepositoryPaths.includes(id)) {
+			session.openHistoryOnlyWorkspace(id);
+		}
 	}
 
 	function onKey(e: KeyboardEvent) {
 		if (e.defaultPrevented) return;
 		const commandKey = e.ctrlKey || e.metaKey;
 		const key = e.key.toLowerCase();
+		// Electron's native application menu owns these accelerators. Keep this
+		// handler for the browser preview, but don't perform an action twice in
+		// the desktop app when the native menu dispatches its command.
+		if (isDesktop() && commandKey && !e.shiftKey && ['n', 'o', ',', 'k', 'b'].includes(key)) {
+			e.preventDefault();
+			return;
+		}
+		if (key === 'escape' && narrowNavigation && !session.sidebarCollapsed && !paletteOpen) { session.sidebarCollapsed = true; return; }
 		if (commandKey && key === 'k') {
 			e.preventDefault();
 			paletteOpen = !paletteOpen;
@@ -121,17 +243,34 @@
 			return;
 		}
 		if (paletteOpen) return;
-		if (commandKey && e.shiftKey && key === 'a') {
+		if (commandKey && (key === '[' || key === ']')) {
 			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
+			const workspaces = [
+				GENERAL_WORKSPACE_ID,
+				...session.repositoryPaths.filter((path) => !session.hiddenRepositoryPaths.includes(path))
+			];
+			const count = workspaces.length;
+			const direction = key === ']' ? 1 : -1;
+			const current = session.activeWorkspaceId ?? GENERAL_WORKSPACE_ID;
+			const index = workspaces.indexOf(current);
+			void selectWorkspace(workspaces[(Math.max(0, index) + direction + count) % count]);
+		} else if (commandKey && /^[1-9]$/.test(key)) {
+			e.preventDefault();
+			const workspaces = [
+				GENERAL_WORKSPACE_ID,
+				...session.repositoryPaths.filter((path) => !session.hiddenRepositoryPaths.includes(path))
+			];
+			const workspace = workspaces[Number(key) - 1];
+			if (workspace) void selectWorkspace(workspace);
+		} else if (commandKey && e.shiftKey && key === 'a') {
+			e.preventDefault();
+			startConversation();
 		} else if (commandKey && e.shiftKey && key === 's') {
 			e.preventDefault();
-			session.setWorkspacePane('sources');
+			session.setWorkspacePane('investigation');
 		} else if (commandKey && e.shiftKey && key === 'c') {
 			e.preventDefault();
-			session.setWorkspacePane('context');
+			void openContext();
 		} else if (commandKey && key === ',') {
 			e.preventDefault();
 			session.setWorkspaceView('settings');
@@ -140,37 +279,13 @@
 			void openFolder();
 		} else if (commandKey && key === 'n') {
 			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
-		} else if (commandKey && e.key === '[') {
-			e.preventDefault();
-			moveTab(-1);
-		} else if (commandKey && e.key === ']') {
-			e.preventDefault();
-			moveTab(1);
+			startConversation();
 		} else if (commandKey && key === 'l') {
 			e.preventDefault();
 			void session.clear();
 		} else if (commandKey && key === 'b') {
 			e.preventDefault();
 			session.toggleSidebar();
-		} else if (commandKey && key === 't') {
-			e.preventDefault();
-			session.setWorkspaceView('ask');
-			session.newTab();
-			composer?.focus();
-		} else if (commandKey && key === 'w') {
-			e.preventDefault();
-			void session.closeTab(session.active);
-			composer?.focus();
-		} else if (commandKey && e.key >= '1' && e.key <= '9') {
-			const i = Number(e.key) - 1;
-			if (i < session.tabs.length) {
-				e.preventDefault();
-				session.activateTab(i);
-				composer?.focus();
-			}
 		} else if (commandKey && e.shiftKey && key === 'f') {
 			e.preventDefault();
 			session.focus = !session.focus;
@@ -205,12 +320,11 @@
 
 	// Persist the conversation transcript as it changes.
 	$effect(() => {
-		session.tabs.length;
-		for (const t of session.tabs) {
-			if (t.kind !== 'chat') continue;
-			t.messages.length;
-			t.messages.at(-1)?.text;
-			t.messages.at(-1)?.pending;
+		session.conversations.length;
+		for (const conversation of session.conversations) {
+			conversation.messages.length;
+			conversation.messages.at(-1)?.text;
+			conversation.messages.at(-1)?.pending;
 		}
 		session.persist();
 	});
@@ -229,8 +343,8 @@
 			'/model',
 			'/auth',
 			'/history',
-			'/tab',
-			'/focus',
+			'/new',
+			'/plain',
 			'/context'
 		];
 		session.setWorkspaceView('ask');
@@ -270,15 +384,26 @@
 	});
 </script>
 
-<svelte:window onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
+<svelte:window bind:innerWidth={windowWidth} onkeydown={onKey} ondragover={onDragOver} ondragleave={onDragLeave} ondrop={onDrop} />
 
-	<div class="shell">
+	<div class="shell" class:narrow-navigation={narrowNavigation} class:native-titlebar={isDesktop()}>
+		{#if isDesktop()}<Titlebar nativeOverlay onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
+		{#if narrowNavigation && !session.focus && !session.sidebarCollapsed}<button class="navigation-backdrop" aria-label="Close navigation" onclick={() => session.toggleSidebar()}></button>{/if}
 		{#if !session.focus && !session.sidebarCollapsed}
-			<Sidebar onsearch={() => (paletteOpen = true)} onnewproject={() => (projectDialogOpen = true)} />
+			<Sidebar
+				bind:mode={session.workspaceSection}
+				onworkspaceselect={selectWorkspace}
+				onsearch={() => (paletteOpen = true)}
+				onsectionselect={(section) => { if (section === 'files') fileInspectorOpen = true; if (section === 'reports') reportInspectorOpen = true; }}
+				selectedFolder={selectedFolder}
+				onselectfolder={selectFolder}
+			/>
 		{/if}
 	<div class="app" class:focus={session.focus}>
-		<Titlebar onpalette={() => (paletteOpen = true)} />
-		<main>
+		{#if session.sidebarCollapsed || session.focus}
+			<div class="collapsed-navigation"><button aria-label="Expand sidebar" title="Expand sidebar" onclick={() => { session.focus = false; if (session.sidebarCollapsed) session.toggleSidebar(); }}><Icon name="panel" size={14} /></button></div>
+		{/if}
+		<section class="workspace-window" aria-label="Current workspace">
 			{#if session.mountProgress && session.mountProgress.phase !== 'ready'}
 				<div class="mount-status" aria-hidden="true">
 					<span class="mount-orb"><Logo size={17} active /></span>
@@ -293,23 +418,54 @@
 					{/if}
 				</div>
 			{/if}
-			<div class="main-row">
-				{#if activeView === 'workspace'}
-					<WorkspaceView />
-				{:else if activeView === 'project'}
-					<ProjectView />
-				{:else if activeView === 'settings'}
-					<SettingsView />
-				{:else}
-					<Transcript bind:this={transcript} />
-				{/if}
-			</div>
-		</main>
-		<div class="dock">
-			{#if activeView === 'ask'}
-				<Composer bind:this={composer} onafterrun={refreshHealth} />
-			{/if}
-		</div>
+			<main>
+				<div class="main-row">
+					{#if activeView === 'settings'}
+						<div class="settings-workspace"><SettingsView /></div>
+					{:else}
+						<WorkspacePanelLayout
+							open={showRightPane}
+							notebook={true}
+							primaryLabel={session.workspaceSection === 'files' ? 'Files' : session.workspaceSection === 'reports' ? 'Reports' : 'Chat'}
+							secondaryLabel={session.workspaceSection === 'files' ? 'Preview' : session.workspaceSection === 'reports' ? 'Report details' : 'Investigation'}
+							defaultToolsWidth={session.workspaceSection === 'reports' ? 320 : 380}
+							layoutKey={session.workspaceSection}
+							bind:expanded={toolsExpanded}
+							bind:compact={toolsCompact}
+						>
+							{#snippet conversation()}
+								<div class="primary-workspace" class:reports={session.workspaceSection === 'reports'} class:navigation-collapsed={session.sidebarCollapsed}>
+								{#if !isDesktop() && session.workspaceSection !== 'reports'}<Titlebar onpalette={() => (paletteOpen = true)} onworkspaceselect={selectWorkspace} expanded={toolsExpanded} compact={toolsCompact} ontoggleexpand={() => (toolsExpanded = !toolsExpanded)} />{/if}
+								<div class="conversation-workspace" hidden={session.workspaceSection !== 'chat'}>
+										<Transcript bind:this={transcript} />
+										<div class="dock"><Composer bind:this={composer} onafterrun={refreshHealth} /></div>
+									</div>
+								{#if session.workspaceSection === 'files'}
+									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
+								{:else if session.workspaceSection === 'reports'}
+									<WorkspaceView hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
+								{/if}
+								</div>
+							{/snippet}
+							{#snippet tools()}
+								{#if session.workspaceSection === 'chat' && scopedWorkspaceActive}
+									<WorkspaceView expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
+								{:else if session.workspaceSection === 'files' && session.catalog.workspace}
+									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
+								{:else if session.workspaceSection === 'reports' && session.catalog.workspace}
+										<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceTool?.kind === 'studio' ? session.activeWorkspaceTool.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
+								{/if}
+								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && session.workspaceSection === 'chat'}
+									<div class="notebook-empty"><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>
+								{:else if session.workspaceSection === 'chat' && showRightPane && !session.workspacePaneOpen}
+									<CompanionPane />
+								{/if}
+							{/snippet}
+						</WorkspacePanelLayout>
+					{/if}
+				</div>
+			</main>
+		</section>
 	</div>
 </div>
 
@@ -317,34 +473,55 @@
 
 {#if dragging}
 	<div class="dropzone" transition:fadeQuick aria-hidden="true">
-		<div class="dropcard"><Icon name="folder" size={20} /> Drop a folder to open it</div>
+		<div class="dropcard">Drop a folder or workspace to open it</div>
 	</div>
 {/if}
 
 <CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
-<ProjectDialog bind:open={projectDialogOpen} />
 
 <style>
+	.navigation-backdrop { position: absolute; inset: 0; z-index: 39; border: 0; background: rgb(0 0 0 / .25); }
+	.narrow-navigation :global(.sidebar) { position: absolute; inset: 0 auto 0 0; z-index: 40; max-width: calc(100% - 48px); box-shadow: var(--shadow-pop); }
+	.notebook-empty { display: flex; flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; justify-content: center; gap: 16px; padding: clamp(20px, 6vw, 64px); }
+	.notebook-empty h1 { font-size: var(--fs-xl); margin: 0; }
+	.notebook-empty p { max-width: 44ch; color: var(--text-dim); line-height: 1.6; }
+	.notebook-empty button { padding: 8px 16px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg-raised); color: var(--text); cursor: pointer; }
 	.shell {
 		position: relative;
 		display: flex;
 		height: 100%;
+		min-width:0; overflow:hidden; border:1px solid var(--border-strong); border-radius:8px;
 	}
+	.shell.native-titlebar { padding-top:32px; border:0; border-radius:0; }
 	.app {
+		position:relative;
 		display: flex;
 		flex-direction: column;
 		flex: 1;
 		min-width: 0;
-		background: var(--bg);
+		background: var(--app-chrome);
+	}
+	.workspace-window {
+		position: relative;
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+		margin: 0;
+		overflow: hidden;
+		border: 0;
+		border-radius: 0;
+		background: var(--workspace-surface);
+		box-shadow: none;
 	}
 	main {
 		flex: 1;
 		min-height: 0;
 		display: flex;
 		flex-direction: column;
-		/* Same fill as the titlebar/sidebar/panel so the whole shell reads as
-		   one open canvas, not stacked boxes -- no seam, no colour change. */
-		background: var(--bg);
+		min-width: 0;
+		background: var(--workspace-canvas);
 	}
 	.mount-status {
 		flex: none;
@@ -392,12 +569,33 @@
 		min-width: 0;
 		min-height: 0;
 		display: flex;
+		container-name: workspace-area;
+		container-type: inline-size;
+		background: var(--workspace-canvas);
 	}
-	/* Status line + composer read as one calm footer zone, continuous with the
-	   transcript surface above it no rule, no colour change. */
+	.primary-workspace { position:relative; display:flex; flex:1; min-width:0; min-height:0; flex-direction:column; overflow:hidden; container-name:primary-pane; container-type:inline-size; }
+	.primary-workspace.reports.navigation-collapsed { padding-top:52px; }
+	.settings-workspace { display:flex; flex:1; min-height:0; padding-top:56px; }
+	.collapsed-navigation { position:absolute; top:16px; left:16px; z-index:25; display:flex; align-items:center; -webkit-app-region:drag; }
+	.collapsed-navigation > button { display:grid; width:28px; height:28px; place-items:center; border-radius:50%; color:var(--text-dim); background:var(--bg-raised); -webkit-app-region:no-drag; }
+	.conversation-workspace[hidden] { display:none; }
+	.conversation-workspace {
+		display: flex;
+		flex: 1;
+		flex-direction: column;
+		min-width: 0;
+		min-height: 0;
+		overflow: hidden;
+	}
+	.conversation-workspace > :global(.transcript) {
+		flex: 1;
+		min-width: 0;
+		min-height: 0;
+	}
 	.dock {
 		flex: none;
-		padding-bottom: var(--space-4);
+		min-width: 0;
+		background: var(--workspace-canvas);
 	}
 	.dropzone {
 		position: fixed;
@@ -412,7 +610,6 @@
 	.dropcard {
 		display: inline-flex;
 		align-items: center;
-		gap: var(--space-2);
 		padding: var(--space-3) var(--space-4);
 		background: var(--bg-raised);
 		border: 1px solid var(--border);

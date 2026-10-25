@@ -1,67 +1,55 @@
 ---
-title: "Read the evidence"
-description: "Inspect the tools, queries, rows, timings, and verification checks behind an answer."
+title: "Evidence and analysis"
+description: "Inspect the sources, computations, saved results, and checks behind an answer."
 icon: "search-check"
 ---
 
-Every assistant answer has a collapsed **Evidence** row. Tool-backed answers show the recorded steps and checks; a tool-free answer is labeled `Evidence · general knowledge`.
+The **How this was analyzed** disclosure under a Chat answer is collapsed by default. Open it when you want to understand what the run actually did. It records observable tool activity, not hidden model reasoning.
 
-## Evidence and verification
+## What a run records
 
-| Layer | What it records | What it means |
-| --- | --- | --- |
-| Evidence | Tool name and arguments, a plain-language note when supplied, result summary, SQL or generated Python, input references, rows or text output, chart data, duration, and errors | What a tool was asked to do and what it returned |
-| Verification | Passes and warnings produced after the draft answer | Whether specific consistency checks found a problem |
+| Record | What it tells you |
+| --- | --- |
+| Workspace revision | Which catalog snapshot was mounted when the run began. |
+| Source scope | Which files and tables were used or excluded for that run. |
+| Tool trace | The inspection, SQL, document reads, Python calculations, chart work, errors, and timings. |
+| Result | The values returned by the engine, including whether a result was truncated. |
+| Verification | Which consistency and grounding checks passed, warned, or affected an output. |
+| Presentation | The structured view and the saved result bindings used to render it, when a view was composed. |
 
-Evidence is not proof that the model chose the right source or interpreted the question correctly. Verification is not new source material; it checks the answer against existing evidence.
+The run is a historical record. Editing the current Investigation’s Question, selected files, or definitions does not rewrite a completed run.
 
 ## Inspect an answer
 
-<Steps>
-  <Step title="Open Evidence">
-    The summary shows the number of steps, total tool time, and how many findings need review.
-  </Step>
-  <Step title="Open step details">
-    Expand each step to see its SQL or arguments, result summary, output, and up to 20 displayed table rows. Python steps are labeled; generated snippets and the built-in forecast method are available under **show calculation**. Charts render below the answer rather than inside the fold.
-  </Step>
-  <Step title="Read verification findings">
-    A check mark is a passed check. A warning means the check found something to review; it does not automatically invalidate the entire answer.
-  </Step>
-</Steps>
+1. Confirm that the run used the expected source files and tables.
+2. Check query filters, joins, date boundaries, denominators, and units.
+3. Compare the returned result with the answer’s claims.
+4. Review warnings and any excluded result or withheld presentation.
+5. If the workspace has changed, inspect the source revision before reusing the answer.
 
-## What to inspect first
+In Notebook, the **Analysis** section organizes saved runs and their details across an Investigation. **Results** shows current Question coverage and saved Findings. It is fine to inspect a run without opening every detail; the deeper trace stays available when you need it.
 
-1. **Source selection:** Did Fella use the right file or table?
-2. **Schema:** Are the column type, casing, units, and nulls what you expected?
-3. **Query:** Does the `WHERE`, grouping, join, and aggregate match the words in your question?
-4. **Rows:** Do the returned values support the sentence in the answer?
-5. **Checks:** Did verification find a warning or a query that changed on re-run?
+## What verification means
 
-## What verification checks
+Verification checks specific properties of recorded work, such as SQL replay, numeric grounding, known query risks, result consistency, and whether a chart agrees with its bound result. A warning identifies something to review; it is not automatically a judgment that the whole answer is wrong.
 
-The deterministic pass can flag unknown tables, changed or broken query re-runs, unsupported figures, text-column aggregates, exact-case filters, missing contract bindings, null date buckets, arithmetic mismatches, and mislabeled values in single-row aggregate results. Findings identify their effect and scope in **Analysis Details**.
+A green status is not proof that the model chose the right business definition or population. A valid calculation can still answer the wrong interpretation. Inspect the source data and method for consequential decisions.
 
-Actionable findings can trigger up to three targeted, tool-backed repair passes. Only the named result is excluded or the named artifact withheld; unrelated accepted evidence remains available. A changed or failed query replay is not reconciled with a prose-only re-ask. A separate cost-gated same-model second opinion may compare figures; disagreement is informational, not proof that the answer is wrong.
+## Structured answers and fallback
 
-## Warnings are signals
+JSON-render presentations use registered components and saved result IDs and fields. The client validates the component structure and analytical bindings before rendering. Presentation controls can change only the displayed state or request an explicit user-started follow-up; they cannot change source files or run hidden queries.
 
-A warning is not proof that the whole answer is wrong. For example, a `TEXT` amount column may be intentionally textual, but aggregating it without a cast is risky. Read the query and decide whether the warning matters to your files.
+If a structured view cannot be composed or displayed, Fella keeps the canonical answer and analysis details available as text. Reopening a saved presentation uses its stored snapshot and does not require a fresh analysis run.
 
-Queries slower than 500 ms and truncated queries are not re-run; verification records that it trusted the first result. Number matching is tolerant and heuristic, so a pass does not establish semantic correctness.
+## Preserve and compare
 
-## Evidence after stopping
-
-Stopping a run does not throw away the work. Partial tool results remain available in the transcript, so you can understand where the run stopped or ask a narrower follow-up.
-
-<Warning>
-  `/sql` prints a direct query result without an assistant answer. It therefore has no evidence fold and no post-answer verification.
-</Warning>
+Save a useful output to Reports. Its revision stays linked to the run and exact results. When you revise it, the analytical diff describes changes in meaning, inputs, method, results, and known report impact. Numeric deltas are withheld when the outputs cannot be safely aligned.
 
 <CardGroup cols={2}>
   <Card title="Verification details" icon="badge-check" href="/concepts/verification">
-    See every deterministic check and its limits.
+    See what deterministic checks establish and where they stop.
   </Card>
-  <Card title="Tool catalog" icon="wrench" href="/concepts/tools">
-    See the guardrails on each built-in tool.
+  <Card title="Reports and saved outputs" icon="files" href="/developer-platform/using-fella/reports">
+    Save an output and review its revisions.
   </Card>
 </CardGroup>

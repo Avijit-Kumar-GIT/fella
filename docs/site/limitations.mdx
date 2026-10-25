@@ -12,17 +12,18 @@ Fella is an early, pre-1.0 personal analytics app. Its narrow scope makes the no
 
 | Limit | Practical consequence |
 | --- | --- |
-| Not every response uses a tool | General answers can have no working fold or workspace evidence |
+| Not every response uses a tool | General answers may have no recorded analysis run or workspace evidence |
 | Verification is deterministic, not omniscient | It catches replay, grounding, and known query-shape problems, not every wrong interpretation |
 | Grounded can still be wrong | A valid query may use the wrong filter, join, unit, date boundary, or denominator |
 | Forecast quality is not guaranteed | Fella may estimate from history, but a forecast is not an observed fact or a guarantee; sparse, irregular, or missing time data can limit what is defensible |
 | Evidence is sampled/capped | Inspect the query and row counts, not only visible sample rows |
+| A generated layout can fail validation or rendering | The canonical answer and recorded analysis remain available, but the structured presentation may be absent |
 
 For consequential decisions, validate the source and query independently. Fella is not a substitute for professional financial, medical, legal, or safety advice.
 
 ## Data and formats
 
-- Shipped builds support delimited/JSON tables, Excel workbooks, and text-layer documents listed in [Getting started](/getting-started#what-the-shipped-app-can-use).
+- Shipped builds support delimited/JSON tables, Excel workbooks, and text-layer documents listed in [Files and documents](/developer-platform/using-fella/files).
 - There is no OCR. Image-only PDFs and standalone images are not readable data.
 - Word, OpenDocument, email, HTML, XML, archive, media, and database files are not supported inputs.
 - JSON must be table-shaped enough to ingest; arbitrary deeply nested documents may not become useful columns.
@@ -40,7 +41,7 @@ For consequential decisions, validate the source and query independently. Fella 
 | Python execution budget | 1 billion Wasmi fuel; host SQL keeps its 15-second watchdog |
 | Chart size | Category charts are bounded; time-series charts can cover longer periods, with output and rendering caps |
 
-Fella targets MB-scale personal folders and everyday lookups, aggregates, comparisons, and small joins. It is not a warehouse, distributed query engine, notebook, ETL system, or multi-user server.
+Fella targets MB-scale personal folders and everyday lookups, aggregates, comparisons, and small joins. It is not a warehouse, distributed query engine, general-purpose code notebook, shell, ETL system, or multi-user server.
 
 ## Security boundaries
 
@@ -60,7 +61,7 @@ package installer.
 
 ### Context
 
-The user may edit `fella.md` in the Workspace surface. This is a human-driven
+The user may edit `fella.md` in the Workspace context view. This is a human-driven
 write path, not an agent tool. The agent can read the file as context, but it
 cannot create or modify it.
 

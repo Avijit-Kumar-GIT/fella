@@ -2,6 +2,7 @@
 //! for column types and imported as real tables. Read-only queries run on a
 //! fresh `SQLITE_OPEN_READ_ONLY` connection.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -9,6 +10,7 @@ use std::sync::{
 };
 
 use rusqlite::functions::FunctionFlags;
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags};
 use serde::de::{Deserializer as _, MapAccess, SeqAccess, Visitor};
@@ -620,6 +622,17 @@ impl DataEngine for SqliteEngine {
         query_connection(ro, sql, max_rows)
     }
 
+    fn query_scoped(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        allowed_sources: &HashSet<String>,
+    ) -> EngineResult<QueryOutcome> {
+        let ro = self.ro()?;
+        authorize_source_reads(&ro, allowed_sources)?;
+        query_connection(ro, sql, max_rows)
+    }
+
     fn query_with_cancel(
         &self,
         sql: &str,
@@ -627,6 +640,18 @@ impl DataEngine for SqliteEngine {
         cancel: Arc<AtomicBool>,
     ) -> EngineResult<QueryOutcome> {
         let ro = self.ro()?;
+        query_connection_cancellable(ro, sql, max_rows, Some(cancel))
+    }
+
+    fn query_with_cancel_scoped(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        allowed_sources: &HashSet<String>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryOutcome> {
+        let ro = self.ro()?;
+        authorize_source_reads(&ro, allowed_sources)?;
         query_connection_cancellable(ro, sql, max_rows, Some(cancel))
     }
 
@@ -688,6 +713,22 @@ pub(crate) fn query_read_only(
     query_connection(conn, sql, max_rows)
 }
 
+pub(crate) fn query_read_only_scoped(
+    path: &Path,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
+    register_parse_num(&conn)?;
+    authorize_source_reads(&conn, allowed_sources)?;
+    query_connection(conn, sql, max_rows)
+}
+
 pub(crate) fn query_read_only_cancellable(
     path: &Path,
     sql: &str,
@@ -701,6 +742,43 @@ pub(crate) fn query_read_only_cancellable(
     .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
     register_parse_num(&conn)?;
     query_connection_cancellable(conn, sql, max_rows, Some(cancel))
+}
+
+pub(crate) fn query_read_only_scoped_cancellable(
+    path: &Path,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryOutcome> {
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )
+    .map_err(|e| EngineError::msg(format!("open read-only: {e}")))?;
+    register_parse_num(&conn)?;
+    authorize_source_reads(&conn, allowed_sources)?;
+    query_connection_cancellable(conn, sql, max_rows, Some(cancel))
+}
+
+fn authorize_source_reads(
+    conn: &Connection,
+    allowed_sources: &HashSet<String>,
+) -> EngineResult<()> {
+    let allowed_sources: HashSet<String> = allowed_sources
+        .iter()
+        .map(|source| source.to_ascii_lowercase())
+        .collect();
+    conn.authorizer(Some(move |context: AuthContext<'_>| match context.action {
+        AuthAction::Read { table_name, .. }
+            if allowed_sources.contains(&table_name.to_ascii_lowercase()) =>
+        {
+            Authorization::Allow
+        }
+        AuthAction::Read { .. } => Authorization::Deny,
+        _ => Authorization::Allow,
+    }))?;
+    Ok(())
 }
 
 fn query_connection(ro: Connection, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome> {

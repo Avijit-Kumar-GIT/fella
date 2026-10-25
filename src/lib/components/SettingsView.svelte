@@ -4,14 +4,17 @@
 	import { ipc, isDesktop, openExternal } from '$lib/ipc';
 	import { prefs, type Appearance } from '$lib/prefs.svelte';
 	import { session } from '$lib/session.svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Collapsible } from '$lib/components/ui/collapsible';
+	import { Switch } from '$lib/components/ui/switch';
 	import type { AnalysisCapabilities, RunLogEntry } from '$lib/types';
 	import Icon from './Icon.svelte';
 	import ProviderIcon from './ProviderIcon.svelte';
 
-	const appearances: { id: Appearance; label: string; detail: string }[] = [
-		{ id: 'system', label: 'System', detail: 'Follow your computer' },
-		{ id: 'light', label: 'Light', detail: 'Bright workspace' },
-		{ id: 'dark', label: 'Dark', detail: 'Low light workspace' }
+	const appearances: { id: Appearance; label: string }[] = [
+		{ id: 'system', label: 'System' },
+		{ id: 'light', label: 'Light' },
+		{ id: 'dark', label: 'Dark' }
 	];
 	const defaultCapabilities: AnalysisCapabilities = {
 		table_analysis: true,
@@ -24,17 +27,16 @@
 		label: string;
 		detail: string;
 	}[] = [
-		{ key: 'table_analysis', label: 'Table analysis', detail: 'Schemas, samples, and SQL queries' },
-		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search and read text and PDF files' },
-		{ key: 'python_analysis', label: 'Python calculations', detail: 'Sandboxed calculations for advanced statistics' },
-		{ key: 'visualizations', label: 'Visualizations', detail: 'Validated charts from table queries' }
+		{ key: 'table_analysis', label: 'Table analysis', detail: 'Inspect schemas and field profiles; query with read-only SQL, including joins and grouped totals.' },
+		{ key: 'document_analysis', label: 'Document analysis', detail: 'Search supported text and text-based PDFs; no OCR.' },
+		{ key: 'python_analysis', label: 'Python calculations', detail: 'Run sandboxed calculations using read-only data results.' }
 	];
 
 	let currentProvider = $derived(session.settings?.provider ?? '');
 	let currentModel = $derived.by(() => {
-		const tabModel = session.activeChat?.model.trim() ?? '';
+		const conversationModel = session.activeChat?.model.trim() ?? '';
 		const defaultModel = session.settings?.model?.trim() ?? '';
-		return tabModel || defaultModel;
+		return conversationModel || defaultModel;
 	});
 	let provider = $derived(session.providers.find((item) => item.id === currentProvider));
 	let workspace = $derived(session.catalog.workspace);
@@ -69,7 +71,6 @@
 		const current = session.settings?.capabilities ?? defaultCapabilities;
 		const enabled = !current[key];
 		const next: AnalysisCapabilities = { ...current, [key]: enabled };
-		if (key === 'table_analysis' && !enabled) next.visualizations = false;
 		capabilityError = '';
 		try {
 			session.settings = await ipc.setSettings({ capabilities: next });
@@ -183,6 +184,7 @@
 		<div>
 			<h1 id="settings-title">Settings</h1>
 		</div>
+		<Button variant="ghost" size="sm" onclick={() => session.setWorkspaceView('ask')}><Icon name="ask" size={14} />Back to conversation</Button>
 	</header>
 
 	<div class="settings-grid">
@@ -190,72 +192,72 @@
 			<div class="card-head">
 				<div>
 					<h2 id="model-title">Model</h2>
-					<p>Fella reads and computes locally. Your chosen provider receives prompts, relevant context, and tool results—which may include document text or data rows.</p>
+					<p>Fella reads mounted files on this device. Your model provider receives prompts and relevant context or tool results, including text or data rows.</p>
 				</div>
-				{#if provider}<ProviderIcon providerId={provider.id} size={20} />{/if}
 			</div>
 			<div class="current-row">
 				<div>
 					<span class="label">Current provider</span>
 					<strong>{provider?.display ?? (currentProvider || 'Not connected')}</strong>
 				</div>
-				<button class="pill ghost" type="button" onclick={() => command('/login')}>Change</button>
+				<Button variant="ghost" size="sm" class="settings-action" onclick={() => command('/login')}>Change</Button>
 			</div>
 			<div class="current-row">
 				<div>
 					<span class="label">{session.activeChat?.model.trim() ? 'Conversation model' : 'Default model'}</span>
 					<strong title={currentModel}>{currentModel || 'Choose a model'}</strong>
 				</div>
-				<button class="pill ghost" type="button" onclick={() => command('/model')}>Choose</button>
+				<Button variant="ghost" size="sm" class="settings-action" onclick={() => command('/model')}>Choose</Button>
 			</div>
 			{#if session.providers.length}
+				<details class="provider-connections">
+					<summary>Manage model connections</summary>
 				<div class="provider-list">
 					<p class="section-label">Available providers</p>
 					{#each session.providers.filter((item) => item.auth === 'key') as item (item.id)}
-						<button
-							class="provider-row"
-							class:current={item.id === currentProvider}
-							type="button"
+						<Button
+							variant="ghost"
+							class={`provider-row${item.id === currentProvider ? ' current' : ''}`}
 							onclick={() => command(`/login ${item.id}`)}
 						>
 							<ProviderIcon providerId={item.id} size={16} />
 							<span>{item.display}</span>
 							<small>{item.id === currentProvider ? 'Current' : item.authed ? 'Connected' : 'Connect'}</small>
-						</button>
+						</Button>
 					{/each}
 				</div>
+				</details>
 			{/if}
-			<button
+			<Button
+				variant="link"
+				size="sm"
 				class="text-button"
-				type="button"
 				onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}
 			>
 				Privacy and security <Icon name="arrow-up-right" size={12} />
-			</button>
-			<button class="text-button" type="button" onclick={() => void refreshSettings()}>
-				<Icon name="check" size={16} /> Refresh connection status
-			</button>
+			</Button>
+			<Button variant="link" size="sm" class="text-button" onclick={() => void refreshSettings()}>
+				<Icon name="refresh" size={16} /> Refresh connection status
+			</Button>
 		</section>
 
 		<section class="settings-card" aria-labelledby="appearance-title">
 			<div class="card-head">
 				<div>
 					<h2 id="appearance-title">Appearance</h2>
-					<p>Choose the contrast that feels right for your workspace.</p>
+					<p>Choose light, dark, or system appearance.</p>
 				</div>
-				<Icon name={prefs.isDark ? 'moon' : 'sun'} size={20} />
 			</div>
 			<div class="appearance-list">
 				{#each appearances as option (option.id)}
-					<button
-						class="appearance-row"
-						class:selected={prefs.appearance === option.id}
-						type="button"
+					<Button
+						variant="ghost"
+						class={`appearance-row${prefs.appearance === option.id ? ' selected' : ''}`}
+						aria-pressed={prefs.appearance === option.id}
 						onclick={() => prefs.setAppearance(option.id)}
 					>
-						<span><strong>{option.label}</strong><small>{option.detail}</small></span>
-						{#if prefs.appearance === option.id}<Icon name="check" size={16} />{/if}
-					</button>
+						<strong>{option.label}</strong>
+					</Button>
 				{/each}
 			</div>
 		</section>
@@ -266,28 +268,23 @@
 					<h2 id="folder-title">Workspace</h2>
 					<p>Your mounted folder is the only data source Fella can analyze.</p>
 				</div>
-				<Icon name="folder" size={20} />
 			</div>
 			{#if workspace}
 				<code title={workspace}>{workspace}</code>
 			{:else}
 				<p class="muted">No folder mounted yet.</p>
 			{/if}
-			<button class="pill ghost" type="button" onclick={() => void openFolder()}>
-					<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose a folder'}
-			</button>
+			<Button variant="ghost" size="sm" class="settings-action" onclick={() => void openFolder()}>
+				<Icon name="folder" size={16} /> {workspace ? 'Change folder' : 'Choose a folder'}
+			</Button>
 		</section>
 
 		<section class="settings-card capability-card" aria-labelledby="capability-title">
 			<div class="card-head">
 				<div>
-					<div class="title-line">
-						<h2 id="capability-title">Analysis capabilities</h2>
-						<span class="experimental-badge">Experimental</span>
-					</div>
-					<p>Choose which analysis paths the model may use on this computer.</p>
+					<h2 id="capability-title">Analysis capabilities</h2>
+					<p>Choose which tools Fella can use when working with your data.</p>
 				</div>
-				<Icon name="settings" size={20} />
 			</div>
 			<div class="capability-list">
 				{#each capabilityOptions as item (item.key)}
@@ -296,22 +293,27 @@
 							<strong>{item.label}</strong>
 							<small>{item.detail}</small>
 						</div>
-						<button
-							class="capability-toggle"
-							class:on={capabilities[item.key]}
-							type="button"
-							role="switch"
-							aria-checked={capabilities[item.key]}
+						<Switch.Root
+							class="fella-ui-switch"
+							checked={capabilities[item.key]}
 							aria-label={`${item.label}: ${capabilities[item.key] ? 'on' : 'off'}`}
-							disabled={!capabilities.table_analysis && item.key === 'visualizations'}
-							onclick={() => void toggleCapability(item.key)}
+							onCheckedChange={() => void toggleCapability(item.key)}
 						>
-							<span></span>
-						</button>
+							<Switch.Thumb class="fella-ui-switch-thumb" />
+						</Switch.Root>
 					</div>
 				{/each}
 			</div>
-			<p class="capability-note">Evidence, verification, and the read-only boundary always stay on.</p>
+			<details class="capability-details">
+				<summary>Statistics and forecasting</summary>
+				<p>Python helpers include median, standard deviation, quantiles, correlation, regression, and distribution checks. Correlation returns r only (no p-value); pandas, NumPy, and SciPy are not available. The sandbox has no filesystem or network access.</p>
+				<p>Forecast regular numeric series with naive, mean, drift, linear-trend, or seasonal-naive methods. Fella compares a forecast with a baseline and reports rolling-origin MAE/RMSE when the history supports it; error bands appear only when there are enough varied holdout errors. Forecasting needs Table analysis and runs in Ask.</p>
+				<p>When a structured view helps, Fella can present saved analysis results with json-render components. The view cannot run queries or change verified analysis; if a layout cannot be composed, Fella still returns the answer in plain language.</p>
+			</details>
+			<div class="capability-core">
+				<strong>Always included</strong>
+				<p>Workspace inventory and field profiles; Investigation Questions, definitions, and source scope, plus saved Findings; recorded evidence, verification, and freshness checks; read-only access to mounted data.</p>
+			</div>
 			{#if capabilityError}<p class="error-note">{capabilityError}</p>{/if}
 		</section>
 
@@ -321,9 +323,9 @@
 					<h2 id="run-log-title">Run log</h2>
 					<p>Recent run timings and tool activity, kept on this computer. This is operational detail, not a correctness score.</p>
 				</div>
-				<button class="text-button refresh-log" type="button" disabled={runLogLoading} onclick={() => void refreshRunLog()}>
+				<Button variant="link" size="sm" class="text-button refresh-log" disabled={runLogLoading} onclick={() => void refreshRunLog()}>
 					<Icon name="refresh" size={16} /> {runLogLoading ? 'Refreshing' : 'Refresh'}
-				</button>
+				</Button>
 			</div>
 			<p class="run-log-note">Transcript and workspace contents aren’t copied into this view. Fella doesn’t transmit this log.</p>
 			{#if runLog.length > 0}
@@ -341,8 +343,8 @@
 			{:else}
 				<div class="run-log-list" role="log" aria-label="Recent Fella runs">
 					{#each runLog as entry (entry.id)}
-						<details class="run-log-entry">
-							<summary>
+						<Collapsible.Root class="run-log-entry">
+							<Collapsible.Trigger class="run-log-trigger">
 								<time datetime={timestampIso(entry.at_ms)}>{formatTimestamp(entry.at_ms)}</time>
 								<span class="run-kind" class:trigger-kind={entry.kind === 'trigger'}>{entry.kind === 'trigger' ? 'Trigger' : modeLabel(entry.mode)}</span>
 								<span class="run-outcome">{entry.kind === 'trigger' ? triggerLabel(entry.trigger) : outcomeLabel(entry.outcome)}</span>
@@ -353,39 +355,41 @@
 										{runCounts(entry)}
 									{/if}
 								</span>
-							</summary>
-							<div class="run-log-detail">
-								{#if entry.kind === 'turn'}
-									<div class="run-log-meta">
-										<span>{entry.model ?? 'Model not recorded'}</span>
-										{#if tokenSummary(entry)}<span>{tokenSummary(entry)}</span>{/if}
-										{#if entry.prior_analysis_count > 0}<span>{entry.prior_analysis_count} earlier {entry.prior_analysis_count === 1 ? 'analysis' : 'analyses'} reused</span>{/if}
-										{#if entry.context_reference_count > 0}<span>{entry.context_reference_count} attached context reference{entry.context_reference_count === 1 ? '' : 's'}</span>{/if}
-										{#if entry.clarification_continuation}<span>Clarification continuation</span>{/if}
-										{#if entry.rerun}<span>Rerun</span>{/if}
-										<code>{entry.id}</code>
-									</div>
-									{#if entry.model_calls.length}
-										<p class="run-log-group-label">Model calls</p>
-										<div class="run-log-operations">
-											{#each entry.model_calls as call, index (`${entry.id}-model-${index}`)}
-												<div><span>Model call · {call.model}</span><small class:call-failed={!call.success}>{formatDuration(call.duration_ms)}{call.success ? '' : ' · failed'}</small></div>
-											{/each}
+							</Collapsible.Trigger>
+							<Collapsible.Content>
+								<div class="run-log-detail">
+									{#if entry.kind === 'turn'}
+										<div class="run-log-meta">
+											<span>{entry.model ?? 'Model not recorded'}</span>
+											{#if tokenSummary(entry)}<span>{tokenSummary(entry)}</span>{/if}
+											{#if entry.prior_analysis_count > 0}<span>{entry.prior_analysis_count} earlier {entry.prior_analysis_count === 1 ? 'analysis' : 'analyses'} reused</span>{/if}
+											{#if entry.context_reference_count > 0}<span>{entry.context_reference_count} attached context reference{entry.context_reference_count === 1 ? '' : 's'}</span>{/if}
+											{#if entry.clarification_continuation}<span>Clarification continuation</span>{/if}
+											{#if entry.rerun}<span>Rerun</span>{/if}
+											<code>{entry.id}</code>
 										</div>
+										{#if entry.model_calls.length}
+											<p class="run-log-group-label">Model calls</p>
+											<div class="run-log-operations">
+												{#each entry.model_calls as call, index (`${entry.id}-model-${index}`)}
+													<div><span>Model call · {call.model}</span><small class:call-failed={!call.success}>{formatDuration(call.duration_ms)}{call.success ? '' : ' · failed'}</small></div>
+												{/each}
+											</div>
+										{/if}
+										{#if entry.operations.length}
+											<p class="run-log-group-label">Tool steps</p>
+											<div class="run-log-operations">
+												{#each entry.operations as operation, index (`${entry.id}-operation-${index}`)}
+													<div><span>{operation.operation}</span><small class:call-failed={!operation.success}>{formatDuration(operation.duration_ms)}{operation.success ? '' : ' · failed'}</small></div>
+												{/each}
+											</div>
+										{:else}<p class="run-log-empty-detail">No local analysis tool calls were recorded for this turn.</p>{/if}
+									{:else}
+										<p class="run-log-empty-detail">{entry.trigger_steps ?? 0} tool steps, {entry.trigger_errors ?? 0} errors. The signal contains no prompt, answer, tool arguments, or file data.</p>
 									{/if}
-									{#if entry.operations.length}
-										<p class="run-log-group-label">Tool steps</p>
-										<div class="run-log-operations">
-											{#each entry.operations as operation, index (`${entry.id}-operation-${index}`)}
-												<div><span>{operation.operation}</span><small class:call-failed={!operation.success}>{formatDuration(operation.duration_ms)}{operation.success ? '' : ' · failed'}</small></div>
-											{/each}
-										</div>
-									{:else}<p class="run-log-empty-detail">No local analysis tool calls were recorded for this turn.</p>{/if}
-								{:else}
-									<p class="run-log-empty-detail">{entry.trigger_steps ?? 0} tool steps, {entry.trigger_errors ?? 0} errors. The signal contains no prompt, answer, tool arguments, or file data.</p>
-								{/if}
-							</div>
-						</details>
+								</div>
+							</Collapsible.Content>
+						</Collapsible.Root>
 					{/each}
 				</div>
 			{/if}
@@ -394,13 +398,14 @@
 </section>
 
 <style>
+	.provider-connections > summary { color: var(--text-dim); font-size: var(--fs-sm); cursor: pointer; padding: 8px 0; }
 	.settings-page {
 		flex: 1;
 		min-height: 0;
 		width: 100%;
 		max-width: var(--content-max);
 		margin: 0 auto;
-		padding: var(--space-6) var(--pad) var(--space-6);
+		padding: var(--space-5) var(--pad) var(--space-6);
 		overflow: auto;
 	}
 	.page-head {
@@ -408,7 +413,7 @@
 	}
 	h1 {
 		margin: 0;
-		font-size: clamp(24px, 3vw, 32px);
+		font-size: var(--fs-xl);
 		font-weight: 650;
 		letter-spacing: -0.03em;
 	}
@@ -416,13 +421,13 @@
 		display: flex;
 		flex-direction: column;
 		gap: 0;
-		max-width: 760px;
+		max-width: 840px;
 	}
 	.settings-card {
 		min-width: 0;
 		display: flex;
 		flex-direction: column;
-		gap: var(--space-4);
+		gap: var(--space-3);
 		padding: var(--space-5) 0;
 		border: 0;
 		border-top: 1px solid var(--border);
@@ -453,39 +458,23 @@
 		font-weight: 650;
 	}
 	.card-head p {
-		max-width: 42ch;
+		max-width: 58ch;
 		margin: 4px 0 0;
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		line-height: 1.45;
-	}
-	.title-line {
-		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-	.experimental-badge {
-		padding: 3px 7px;
-		border: 1px solid var(--brand);
-		border-radius: 999px;
-		color: var(--brand);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.02em;
-		white-space: nowrap;
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		line-height: 1.5;
 	}
 	.current-row,
-	.provider-row,
-	.appearance-row {
+	.provider-list :global(.provider-row),
+	.appearance-list :global(.appearance-row) {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
 		gap: var(--space-3);
 	}
 	.current-row {
-		padding-top: var(--space-3);
-		border-top: 1px solid var(--border);
+		padding-top: var(--space-1);
+		max-width: 420px;
 	}
 	.current-row > div {
 		min-width: 0;
@@ -506,18 +495,29 @@
 		font-size: var(--fs-sm);
 		font-weight: 600;
 	}
-	.current-row .pill,
-	.workspace-card .pill {
+	.current-row :global(.settings-action),
+	.workspace-card :global(.settings-action) {
 		flex: none;
-		padding: 6px 9px;
-		font-size: var(--fs-xs);
+	}
+	.workspace-card :global(.settings-action) {
+		align-self: flex-start;
 	}
 	.provider-list,
 	.appearance-list {
-		border-top: 1px solid var(--border);
+		border-top: 0;
+	}
+	.appearance-list {
+		display: flex;
+		align-self: flex-start;
+		width: fit-content;
+		max-width: 100%;
+		gap: 2px;
+		padding: 3px;
+		border-radius: var(--radius-sm);
+		background: var(--bg-inset);
 	}
 	.capability-list {
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.capability-row {
 		display: flex;
@@ -527,7 +527,7 @@
 		padding: 10px 0;
 	}
 	.capability-row + .capability-row {
-		border-top: 1px solid var(--border);
+		border-top: 0;
 	}
 	.capability-copy {
 		min-width: 0;
@@ -540,106 +540,118 @@
 		font-weight: 600;
 	}
 	.capability-copy small,
-	.capability-note,
 	.error-note {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 		line-height: 1.45;
 	}
-	.capability-note,
+	.capability-details {
+		padding: var(--space-3);
+		border-radius: var(--radius-md);
+		background: var(--bg-inset);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		line-height: 1.5;
+	}
+	.capability-details summary {
+		color: var(--text-primary);
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.capability-details p {
+		margin: var(--space-2) 0 0;
+	}
+	.capability-core {
+		display: grid;
+		gap: 3px;
+		padding-top: var(--space-1);
+	}
+	.capability-core strong {
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	.capability-core p,
 	.error-note {
 		margin: 0;
+	}
+	.capability-core p {
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.45;
 	}
 	.error-note {
 		color: var(--danger, #c15d5d);
 	}
-	.capability-toggle {
-		position: relative;
-		flex: none;
-		width: 38px;
-		height: 22px;
-		padding: 2px;
-		border: 1px solid var(--border-strong, var(--border));
-		border-radius: 999px;
-		background: var(--bg-inset);
-		transition: background 120ms ease, border-color 120ms ease;
-	}
-	.capability-toggle span {
-		display: block;
-		width: 16px;
-		height: 16px;
-		border-radius: 50%;
-		background: var(--text-faint);
-		transition: transform 120ms ease, background 120ms ease;
-	}
-	.capability-toggle.on {
-		border-color: var(--brand);
-		background: var(--brand);
-	}
-	.capability-toggle.on span {
-		background: var(--on-brand, #fff);
-		transform: translateX(16px);
-	}
-	.capability-toggle:disabled {
-		cursor: not-allowed;
-		opacity: 0.45;
-	}
 	.section-label {
 		margin: var(--space-3) 0 var(--space-1);
 	}
-	.provider-row,
-	.appearance-row {
+	.provider-list :global(.provider-row),
+	.appearance-list :global(.appearance-row) {
 		width: 100%;
-		padding: 8px 0;
+		height: auto;
+		min-height: 0;
+		justify-content: space-between;
+		padding: 8px 10px;
+		margin-inline: -10px;
+		border-radius: var(--radius-sm);
+		background: transparent;
 		color: var(--text-dim);
 		text-align: left;
+		white-space: normal;
 	}
-	.provider-row + .provider-row,
-	.appearance-row + .appearance-row {
-		border-top: 1px solid var(--border);
+	.appearance-list :global(.appearance-row) {
+		width: auto;
+		min-width: 76px;
+		min-height: 30px;
+		justify-content: center;
+		padding: 4px 11px;
+		margin: 0;
+		border-radius: calc(var(--radius-sm) - 2px);
 	}
-	.provider-row:hover,
-	.provider-row.current,
-	.appearance-row:hover,
-	.appearance-row.selected {
+	.provider-list :global(.provider-row + .provider-row),
+	.appearance-list :global(.appearance-row + .appearance-row) {
+		border-top: 0;
+	}
+	.provider-list :global(.provider-row:hover),
+	.provider-list :global(.provider-row.current),
+	.appearance-list :global(.appearance-row:hover) {
+		background: color-mix(in srgb, var(--text) 8%, var(--bg-inset));
 		color: var(--text);
 	}
-	.provider-row > :global(.provider-icon) {
+	.provider-list :global(.provider-row.current) {
+		background: color-mix(in srgb, var(--text) 4%, transparent);
+	}
+	.appearance-list :global(.appearance-row.selected) {
+		background: var(--bg-raised);
+		color: var(--text);
+	}
+	.appearance-list :global(.appearance-row strong) {
+		font-weight: 650;
+	}
+	.provider-list :global(.provider-row > .provider-icon) {
 		margin-right: 2px;
 	}
-	.provider-row span:not(:global(.provider-icon)) {
+	.provider-list :global(.provider-row span:not(.provider-icon)) {
 		flex: 1;
 	}
-	.provider-row small {
+	.provider-list :global(.provider-row small) {
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	.text-button {
+	:global(.text-button) {
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
 		align-self: flex-start;
-		color: var(--link);
+		padding: 0;
 		font-size: var(--fs-xs);
 	}
-	.text-button:hover {
+	:global(.text-button:hover) {
 		text-decoration: underline;
 	}
-	.appearance-row > span {
-		display: flex;
-		flex-direction: column;
-		gap: 2px;
-	}
-	.appearance-row strong {
+	.appearance-list :global(.appearance-row strong) {
 		font-size: var(--fs-sm);
-		font-weight: 600;
-	}
-	.appearance-row small {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-	}
-	.appearance-row :global(svg:last-child) {
-		color: var(--text-dim);
+		font-weight: 550;
 	}
 	.workspace-card code {
 		padding: 8px 10px;
@@ -667,11 +679,11 @@
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
 	}
-	.refresh-log {
+	.run-log-card :global(.refresh-log) {
 		flex: none;
 		padding-top: 3px;
 	}
-	.refresh-log:disabled {
+	.run-log-card :global(.refresh-log:disabled) {
 		cursor: wait;
 		opacity: 0.55;
 	}
@@ -680,36 +692,34 @@
 		overflow: auto;
 		border-top: 1px solid var(--border);
 	}
-	.run-log-entry {
+	:global(.run-log-entry) {
 		border-bottom: 1px solid var(--border);
 	}
-	.run-log-entry summary {
+	:global(button.run-log-trigger) {
 		display: grid;
 		grid-template-columns: 116px 112px minmax(110px, 1fr) auto;
 		align-items: center;
 		gap: 10px;
+		width: 100%;
 		min-height: 38px;
+		font-weight: inherit;
 		cursor: pointer;
-		list-style: none;
 		color: var(--text-dim);
 		font-size: var(--fs-xs);
 	}
-	.run-log-entry summary::-webkit-details-marker {
-		display: none;
-	}
-	.run-log-entry summary:hover,
-	.run-log-entry[open] summary {
+	:global(button.run-log-trigger:hover),
+	:global(button.run-log-trigger[aria-expanded='true']) {
 		color: var(--text);
 	}
-	.run-log-entry time,
-	.run-log-entry code,
+	:global(.run-log-entry time),
+	:global(.run-log-entry code),
 	.run-counts,
 	.run-log-operations small {
 		font-family: var(--mono);
 		font-size: 10px;
 		font-variant-numeric: tabular-nums;
 	}
-	.run-log-entry time,
+	:global(.run-log-entry time),
 	.run-counts {
 		color: var(--text-faint);
 		white-space: nowrap;
@@ -780,7 +790,7 @@
 		.settings-grid {
 			width: 100%;
 		}
-		.run-log-entry summary {
+		:global(button.run-log-trigger) {
 			grid-template-columns: 94px 76px minmax(60px, 1fr);
 			gap: 6px;
 		}

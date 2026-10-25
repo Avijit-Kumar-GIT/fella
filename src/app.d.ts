@@ -6,6 +6,7 @@ declare global {
 	interface Window {
 		/** Secure Electron preload bridge. It is absent in a normal browser. */
 		fella?: {
+			platform: 'win32' | 'darwin' | 'linux' | string;
 			invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
 			openWorkspace(
 				path: string,
@@ -19,6 +20,9 @@ declare global {
 					mode: string | null;
 					contextRefs: import('./lib/types').ContextReference[];
 					clarificationReply?: import('./lib/types').ClarificationReply | null;
+					workspaceId?: string | null;
+					investigationId?: string | null;
+					questionId?: string | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;
@@ -27,14 +31,18 @@ declare global {
 					turnId: string;
 					model: string | null;
 					mode: string | null;
+					workspaceId?: string | null;
 				},
 				onEvent: (event: AskEvent) => void
 			): Promise<import('./lib/types').Answer>;
 			pickFolder(): Promise<string | null>;
+			sampleWorkspacePath(): Promise<string | null>;
 			openExternal(url: string): Promise<void>;
 			setWindowAppearance(dark: boolean): Promise<void>;
 			pathForFile(file: File): string;
 			windowAction(action: 'minimize' | 'toggleMaximize' | 'close'): Promise<void>;
+			popupMenu(name: 'file' | 'edit' | 'view' | 'help', x: number, y: number): Promise<boolean>;
+			onAppCommand(callback: (command: string) => void): void;
 		};
 	}
 

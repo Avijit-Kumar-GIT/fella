@@ -1,0 +1,817 @@
+{
+  "version": "fella-json-render-v1",
+  "componentNames": [
+    "Document",
+    "Card",
+    "Section",
+    "Columns",
+    "Row",
+    "Grid",
+    "Divider",
+    "Spacer",
+    "Title",
+    "Text",
+    "Caption",
+    "Badge",
+    "Callout",
+    "Metric",
+    "Select",
+    "SegmentedControl",
+    "Checkbox",
+    "Button",
+    "Table",
+    "Chart",
+    "Progress",
+    "Tabs",
+    "TabPanel",
+    "ResultFilter",
+    "FollowUp"
+  ],
+  "schema": {
+    "type": "object",
+    "properties": {
+      "root": {
+        "type": "string"
+      },
+      "elements": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "enum": [
+                "Document",
+                "Card",
+                "Section",
+                "Columns",
+                "Row",
+                "Grid",
+                "Divider",
+                "Spacer",
+                "Title",
+                "Text",
+                "Caption",
+                "Badge",
+                "Callout",
+                "Metric",
+                "Select",
+                "SegmentedControl",
+                "Checkbox",
+                "Button",
+                "Table",
+                "Chart",
+                "Progress",
+                "Tabs",
+                "TabPanel",
+                "ResultFilter",
+                "FollowUp"
+              ]
+            },
+            "props": {
+              "type": "object",
+              "additionalProperties": {}
+            },
+            "children": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "visible": {},
+            "repeat": {}
+          },
+          "required": [
+            "type",
+            "props",
+            "children"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": [
+      "root",
+      "elements"
+    ],
+    "additionalProperties": false
+  },
+  "componentSchemas": {
+    "Document": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "Card": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "plain",
+            "quiet",
+            "accent"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Section": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "Columns": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        }
+      },
+      "additionalProperties": false
+    },
+    "Row": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "gap": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 8
+        },
+        "align": {
+          "type": "string",
+          "enum": [
+            "start",
+            "center",
+            "end",
+            "stretch"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Grid": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "columns": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        }
+      },
+      "additionalProperties": false
+    },
+    "Divider": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "additionalProperties": false
+    },
+    "Spacer": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "size": {
+          "type": "string",
+          "enum": [
+            "sm",
+            "md",
+            "lg"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "Title": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Text": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 16000
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Caption": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Badge": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "neutral",
+            "positive",
+            "caution",
+            "negative",
+            "accent"
+          ]
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Callout": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "tone": {
+          "type": "string",
+          "enum": [
+            "neutral",
+            "info",
+            "positive",
+            "caution"
+          ]
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Metric": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "row": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "format": {
+          "type": "string",
+          "enum": [
+            "number",
+            "currency",
+            "percent",
+            "compact"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "resultId",
+        "field",
+        "row",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "Select": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "options": {
+          "minItems": 1,
+          "maxItems": 200,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "required": [
+              "value",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "stateKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "defaultValue": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "name",
+        "options",
+        "stateKey"
+      ],
+      "additionalProperties": false
+    },
+    "SegmentedControl": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "options": {
+          "minItems": 2,
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value": {
+                "type": "string",
+                "maxLength": 240
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 240
+              }
+            },
+            "required": [
+              "value",
+              "label"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "stateKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "defaultValue": {
+          "type": "string",
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "name",
+        "options",
+        "stateKey"
+      ],
+      "additionalProperties": false
+    },
+    "Checkbox": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "stateKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "defaultChecked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label",
+        "stateKey"
+      ],
+      "additionalProperties": false
+    },
+    "Button": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "action": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "follow_up"
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2000
+                }
+              },
+              "required": [
+                "type",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "set_state"
+                },
+                "stateKey": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 240
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 256
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "stateKey",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "label"
+      ],
+      "additionalProperties": false
+    },
+    "Table": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "fields": {
+          "minItems": 1,
+          "maxItems": 100,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "columnFormats": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "number",
+                  "currency",
+                  "percent",
+                  "compact"
+                ]
+              },
+              "unit": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "decimals": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "resultId"
+      ],
+      "additionalProperties": false
+    },
+    "Chart": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "spec": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {}
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "resultId",
+        "spec"
+      ],
+      "additionalProperties": false
+    },
+    "Progress": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "row": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "maximum": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      },
+      "required": [
+        "resultId",
+        "field",
+        "row",
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "Tabs": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "labels": {
+          "minItems": 1,
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          }
+        }
+      },
+      "required": [
+        "name",
+        "labels"
+      ],
+      "additionalProperties": false
+    },
+    "TabPanel": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 11
+        }
+      },
+      "required": [
+        "name",
+        "index"
+      ],
+      "additionalProperties": false
+    },
+    "ResultFilter": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "resultId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        }
+      },
+      "required": [
+        "resultId",
+        "field",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "FollowUp": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "required": [
+        "label",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "prompt": "Fella analytical answer output format: json-render spec fella-json-render-v1.\nOutput one JSON object matching the supplied schema: {\"root\":\"element-key\",\"elements\":{\"element-key\":{\"type\":\"Component\",\"props\":{},\"children\":[]}}}. The root element must be Document. Children are references to other element keys, never nested objects. Every referenced key must exist, every key must be reachable from root, and keys must be unique.\nCompose an answer for this question; the component catalog is a vocabulary, not a template. Select a presentation based on the actual question and results. Do not use a table merely because analysis returned rows. Use charts when they reveal a meaningful pattern, change, ranking, distribution, or relationship.\nAnalytical numbers must remain bound to the supplied saved result. Metric and Progress require exact resultId, field, and zero-based row references. Table and Chart require a supplied resultId. Never invent result IDs or fields, author replacement datasets, or use copied numeric values as analytical facts in Metric, Progress, chart data, or labels.\nChart.spec is a flexible Vega-Lite presentation of the bound result. Bind every encoding—including tooltip fields—to columns in that result. Choose an appropriate chart form and composition for the question; do not default to a table or repeat one chart form. Do not include data, datasets, URL loaders, JavaScript, signal expressions, or executable transforms.\nTable fields must exist in the bound result. Numeric formats change display only; exact saved values and source evidence remain authoritative. For incomplete results, keep the limitation visible and never imply full-dataset coverage.\nControls are presentation-only. Give each control a stable stateKey; changing it may only alter the visible presentation. ResultFilter only filters loaded rows from its declared result. FollowUp and Button follow_up actions are explicit user-clicked requests; they cannot run tools, queries, code, IPC, or external navigation.\nUse only registered component names and documented props. Do not add arbitrary styles, HTML, scripts, URLs, unknown fields, or hidden behavior. Each element must include type, props, and children; leaves use children: [].\nUse Tabs with one TabPanel child per label, in the same order, with matching zero-based indices. Keep labels concise. Avoid unnecessary tabs, dividers, spacers, cards, and duplicate representations.\nChoose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.\n\nChoose chart forms by the analytical task, not by a default template: when the user asks for a trend or change across three or more ordered time periods and the result has a numeric measure, make a chart the primary view unless that would mislead; line charts make observed values easy to compare, while area charts emphasize continuous volume or accumulated magnitude. Bars compare categories or rank values (use horizontal bars for long labels); pie or donut charts show a small, meaningful part-to-whole breakdown, not time trends or long rankings; points show relationships or distributions. Group, stack, facet, or layer only when it clarifies a real comparison and the scales remain interpretable. Other safe Vega-Lite compositions are welcome when they better fit the result. Use a tooltip for useful exact values, a legend only when it helps decode multiple series, and axis titles or captions for units and scope. Keep labels readable and avoid unnecessary precision. Do not imitate unsupported chart forms with custom executable expressions.\n\nUse Fella's registered components and design. Prefer a clear reading order, consistent spacing and type hierarchy, restrained surfaces, accessible labels, the Fella chart-color palette, and responsive layouts. Avoid cramped equal-weight cards, horizontal overflow, decorative controls, and repeated content. Keep caveats near affected values. Never imply completeness when a supplied result is incomplete.\n\nRegistered components:\nDocument: The root analytical answer. Organize it into a useful reading order.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}\nCard: A restrained surface grouping related information. Use sparingly, not around every element.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"detail\":{\"type\":\"string\",\"maxLength\":1000},\"tone\":{\"type\":\"string\",\"enum\":[\"plain\",\"quiet\",\"accent\"]}},\"additionalProperties\":false}\nSection: A titled, left-aligned group of analytical content.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240}},\"required\":[\"title\"],\"additionalProperties\":false}\nColumns: A responsive group of at most three content columns; collapses at narrow widths.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"count\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":3}},\"additionalProperties\":false}\nRow: A flexible horizontal group that wraps at narrow widths.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"gap\":{\"type\":\"number\",\"minimum\":0,\"maximum\":8},\"align\":{\"type\":\"string\",\"enum\":[\"start\",\"center\",\"end\",\"stretch\"]}},\"additionalProperties\":false}\nGrid: A responsive grid for a small set of related components.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"columns\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4}},\"additionalProperties\":false}\nDivider: A quiet separator between major content groups.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"maxLength\":240}},\"additionalProperties\":false}\nSpacer: A small amount of intentional breathing room.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"size\":{\"type\":\"string\",\"enum\":[\"sm\",\"md\",\"lg\"]}},\"additionalProperties\":false}\nTitle: A clear heading for the answer or one of its major sections.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"level\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":4}},\"required\":[\"content\"],\"additionalProperties\":false}\nText: Explanatory prose with Markdown emphasis, lists, and links. Use structured Table and Chart components for analytical results.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":16000}},\"required\":[\"content\"],\"additionalProperties\":false}\nCaption: Quiet supporting context such as units, date range, source, or caveat.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"content\"],\"additionalProperties\":false}\nBadge: A compact label for a category or meaningful status.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"content\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"tone\":{\"type\":\"string\",\"enum\":[\"neutral\",\"positive\",\"caution\",\"negative\",\"accent\"]}},\"required\":[\"content\"],\"additionalProperties\":false}\nCallout: An emphasized interpretation or caveat; not routine decoration.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"content\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":4000},\"tone\":{\"type\":\"string\",\"enum\":[\"neutral\",\"info\",\"positive\",\"caution\"]}},\"required\":[\"content\"],\"additionalProperties\":false}\nMetric: A prominent exact value read from a supplied saved result. Always bind resultId, field and zero-based row; literal metric values are not accepted.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"resultId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"field\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"row\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"unit\":{\"type\":\"string\",\"maxLength\":40},\"format\":{\"type\":\"string\",\"enum\":[\"number\",\"currency\",\"percent\",\"compact\"]},\"detail\":{\"type\":\"string\",\"maxLength\":1000}},\"required\":[\"resultId\",\"field\",\"row\",\"title\"],\"additionalProperties\":false}\nSelect: A local selector that changes only the presentation state, not the question or analysis.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"options\":{\"minItems\":1,\"maxItems\":200,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\",\"maxLength\":240},\"label\":{\"type\":\"string\",\"maxLength\":240}},\"required\":[\"value\",\"label\"],\"additionalProperties\":false}},\"stateKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"defaultValue\":{\"type\":\"string\",\"maxLength\":240}},\"required\":[\"name\",\"options\",\"stateKey\"],\"additionalProperties\":false}\nSegmentedControl: A compact single-choice local presentation control for a few mutually exclusive options.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"options\":{\"minItems\":2,\"maxItems\":6,\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"value\":{\"type\":\"string\",\"maxLength\":240},\"label\":{\"type\":\"string\",\"maxLength\":240}},\"required\":[\"value\",\"label\"],\"additionalProperties\":false}},\"stateKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"defaultValue\":{\"type\":\"string\",\"maxLength\":240}},\"required\":[\"name\",\"options\",\"stateKey\"],\"additionalProperties\":false}\nCheckbox: A local display toggle; it does not change analytical definitions.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"stateKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"defaultChecked\":{\"type\":\"boolean\"}},\"required\":[\"label\",\"stateKey\"],\"additionalProperties\":false}\nButton: A deliberate user action. Its only allowed effect is to set local display state or ask Fella a follow-up.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"action\":{\"oneOf\":[{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"const\":\"follow_up\"},\"message\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"type\",\"message\"],\"additionalProperties\":false},{\"type\":\"object\",\"properties\":{\"type\":{\"type\":\"string\",\"const\":\"set_state\"},\"stateKey\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"value\":{\"anyOf\":[{\"type\":\"string\",\"maxLength\":256},{\"type\":\"number\"},{\"type\":\"boolean\"},{\"type\":\"null\"}]}},\"required\":[\"type\",\"stateKey\",\"value\"],\"additionalProperties\":false}]}},\"required\":[\"label\"],\"additionalProperties\":false}\nTable: A result-bound table for exact records, lookups, and detailed comparisons. Do not choose it by default when a chart better explains a pattern.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"resultId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"fields\":{\"minItems\":1,\"maxItems\":100,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240}},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"columnFormats\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"additionalProperties\":{\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"format\":{\"type\":\"string\",\"enum\":[\"number\",\"currency\",\"percent\",\"compact\"]},\"unit\":{\"type\":\"string\",\"maxLength\":40},\"decimals\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":8}},\"additionalProperties\":false}}},\"required\":[\"resultId\"],\"additionalProperties\":false}\nChart: A flexible, responsive result-bound Vega-Lite visualization. Select a useful form for the task (for example, line or area for a time trend, bar for category comparisons, arc for a small part-to-whole view, or points for relationships), and compose, facet, layer, or add a legend and result-bound tooltip when they clarify the answer. Keep axes, labels, units, and number of series readable. The spec describes presentation only and cannot supply data or executable transforms.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"resultId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"spec\":{\"type\":\"object\",\"propertyNames\":{\"type\":\"string\"},\"additionalProperties\":{}},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240}},\"required\":[\"resultId\",\"spec\"],\"additionalProperties\":false}\nProgress: A compact indicator for an exact saved numeric value bound to a result row.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"resultId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"field\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"row\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":9007199254740991},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"maximum\":{\"type\":\"number\",\"exclusiveMinimum\":0},\"detail\":{\"type\":\"string\",\"maxLength\":1000}},\"required\":[\"resultId\",\"field\",\"row\",\"title\"],\"additionalProperties\":false}\nTabs: A local presentation tab set. Supply one TabPanel child per label in the same order.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"labels\":{\"minItems\":1,\"maxItems\":12,\"type\":\"array\",\"items\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240}}},\"required\":[\"name\",\"labels\"],\"additionalProperties\":false}\nTabPanel: One child panel of a Tabs component. index must match its zero-based position.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"index\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":11}},\"required\":[\"name\",\"index\"],\"additionalProperties\":false}\nResultFilter: A local exact-match selector over rows in a saved result; it never reruns analysis or changes source scope.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"resultId\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"field\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"name\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"title\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240}},\"required\":[\"resultId\",\"field\",\"name\"],\"additionalProperties\":false}\nFollowUp: An explicit user-pressed follow-up request to Fella.\nProps schema: {\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"type\":\"object\",\"properties\":{\"label\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":240},\"message\":{\"type\":\"string\",\"minLength\":1,\"maxLength\":2000}},\"required\":[\"label\",\"message\"],\"additionalProperties\":false}\n\nAvailable result bindings (metadata only; the result rows themselves are provided separately as evidence):\n[]",
+  "designGuidance": "Choose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.\n\nChoose chart forms by the analytical task, not by a default template: when the user asks for a trend or change across three or more ordered time periods and the result has a numeric measure, make a chart the primary view unless that would mislead; line charts make observed values easy to compare, while area charts emphasize continuous volume or accumulated magnitude. Bars compare categories or rank values (use horizontal bars for long labels); pie or donut charts show a small, meaningful part-to-whole breakdown, not time trends or long rankings; points show relationships or distributions. Group, stack, facet, or layer only when it clarifies a real comparison and the scales remain interpretable. Other safe Vega-Lite compositions are welcome when they better fit the result. Use a tooltip for useful exact values, a legend only when it helps decode multiple series, and axis titles or captions for units and scope. Keep labels readable and avoid unnecessary precision. Do not imitate unsupported chart forms with custom executable expressions.\n\nUse Fella's registered components and design. Prefer a clear reading order, consistent spacing and type hierarchy, restrained surfaces, accessible labels, the Fella chart-color palette, and responsive layouts. Avoid cramped equal-weight cards, horizontal overflow, decorative controls, and repeated content. Keep caveats near affected values. Never imply completeness when a supplied result is incomplete.",
+  "rules": [
+    "Output one JSON object matching the supplied schema: {\"root\":\"element-key\",\"elements\":{\"element-key\":{\"type\":\"Component\",\"props\":{},\"children\":[]}}}. The root element must be Document. Children are references to other element keys, never nested objects. Every referenced key must exist, every key must be reachable from root, and keys must be unique.",
+    "Compose an answer for this question; the component catalog is a vocabulary, not a template. Select a presentation based on the actual question and results. Do not use a table merely because analysis returned rows. Use charts when they reveal a meaningful pattern, change, ranking, distribution, or relationship.",
+    "Analytical numbers must remain bound to the supplied saved result. Metric and Progress require exact resultId, field, and zero-based row references. Table and Chart require a supplied resultId. Never invent result IDs or fields, author replacement datasets, or use copied numeric values as analytical facts in Metric, Progress, chart data, or labels.",
+    "Chart.spec is a flexible Vega-Lite presentation of the bound result. Bind every encoding—including tooltip fields—to columns in that result. Choose an appropriate chart form and composition for the question; do not default to a table or repeat one chart form. Do not include data, datasets, URL loaders, JavaScript, signal expressions, or executable transforms.",
+    "Table fields must exist in the bound result. Numeric formats change display only; exact saved values and source evidence remain authoritative. For incomplete results, keep the limitation visible and never imply full-dataset coverage.",
+    "Controls are presentation-only. Give each control a stable stateKey; changing it may only alter the visible presentation. ResultFilter only filters loaded rows from its declared result. FollowUp and Button follow_up actions are explicit user-clicked requests; they cannot run tools, queries, code, IPC, or external navigation.",
+    "Use only registered component names and documented props. Do not add arbitrary styles, HTML, scripts, URLs, unknown fields, or hidden behavior. Each element must include type, props, and children; leaves use children: [].",
+    "Use Tabs with one TabPanel child per label, in the same order, with matching zero-based indices. Keep labels concise. Avoid unnecessary tabs, dividers, spacers, cards, and duplicate representations.",
+    "Choose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.\n\nChoose chart forms by the analytical task, not by a default template: when the user asks for a trend or change across three or more ordered time periods and the result has a numeric measure, make a chart the primary view unless that would mislead; line charts make observed values easy to compare, while area charts emphasize continuous volume or accumulated magnitude. Bars compare categories or rank values (use horizontal bars for long labels); pie or donut charts show a small, meaningful part-to-whole breakdown, not time trends or long rankings; points show relationships or distributions. Group, stack, facet, or layer only when it clarifies a real comparison and the scales remain interpretable. Other safe Vega-Lite compositions are welcome when they better fit the result. Use a tooltip for useful exact values, a legend only when it helps decode multiple series, and axis titles or captions for units and scope. Keep labels readable and avoid unnecessary precision. Do not imitate unsupported chart forms with custom executable expressions.\n\nUse Fella's registered components and design. Prefer a clear reading order, consistent spacing and type hierarchy, restrained surfaces, accessible labels, the Fella chart-color palette, and responsive layouts. Avoid cramped equal-weight cards, horizontal overflow, decorative controls, and repeated content. Keep caveats near affected values. Never imply completeness when a supplied result is incomplete."
+  ],
+  "hash": "2c4d361b3e589ff478f86a3044025d2ed5d0418676feb6ef500da07e36b2cf7b"
+}

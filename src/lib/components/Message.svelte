@@ -1,30 +1,45 @@
 <script lang="ts">
-	import type { Answer, Message } from '$lib/types';
+	import type { Message } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import EvidenceBlock from './EvidenceBlock.svelte';
-	import EvidenceSummary from './EvidenceSummary.svelte';
-	import Chart from './Chart.svelte';
+	import EvidenceSummary, { answerNeedsReview, answerSemanticGaps } from './EvidenceSummary.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
-	import { renderMarkdown } from '$lib/markdown';
+	import MarkdownContent from './MarkdownContent.svelte';
+	import AnalyticalAnswer from './AnalyticalAnswer.svelte';
+	import Chart from './Chart.svelte';
 	import { enterUp } from '$lib/motion';
+	import { isRenderableChartEvidence } from '$lib/workbench';
+	import { transcriptPresentation } from '$lib/presentation/snapshot';
 
 	let {
 		message,
 		expanded = false,
 		ontoggle,
-		question = '',
-		showFollowups = false,
-		onfollowup,
-		onrerun
+		onrerun,
+		onopeninvestigationrun,
+		onopenchart,
+	openChartIndex = null,
 	}: {
 		message: Message;
 		expanded?: boolean;
 		ontoggle?: () => void;
-		question?: string;
-		showFollowups?: boolean;
-		onfollowup?: (question: string, clarificationTurnId?: string) => void;
 		onrerun?: () => Promise<void>;
+		onopeninvestigationrun?: (turnId: string) => void;
+		onopenchart?: (evidenceIndex: number) => void;
+		openChartIndex?: number | null;
 	} = $props();
+	let presentationPrimary = $derived(!!message.answer?.workspace && !message.answer?.clarification);
+	let fallbackCharts = $derived.by(() => {
+		const answer = message.answer;
+		if (message.role !== 'assistant' || !answer || message.artifact_id || transcriptPresentation(message)) return [];
+		return answer.evidence.flatMap((evidence, evidenceIndex) =>
+			isRenderableChartEvidence(evidence, answer.verification ?? []) ? [{ evidence, evidenceIndex }] : []
+		);
+	});
+	let needsAttention = $derived(!!message.answer && answerNeedsReview(message.answer)
+		&& message.answer.status !== 'failed' && message.answer.status !== 'insufficient_data');
 
 	// The model marks a one-line general-knowledge aside with "Background:" on
 	// its own line. Peel any leading such lines off so they render muted, apart
@@ -37,134 +52,41 @@
 		return { background: lines.slice(0, i).join('\n'), body: lines.slice(i).join('\n') };
 	});
 
-	// Only the assistant's prose is markdown. When a chart is present, keep the
-	// first plain paragraph as the takeaway and place the visual immediately
-	// after it; the remaining prose follows as supporting detail. This is a UI
-	// composition rule, not a new model-facing markup language.
-	function composeAnswer(body: string): { lead: string; remainder: string } {
-		const trimmed = body.trim();
-		if (!trimmed) return { lead: '', remainder: '' };
-		const boundary = trimmed.search(/\n\s*\n/);
-		if (boundary < 0) return { lead: trimmed, remainder: '' };
-		const lead = trimmed.slice(0, boundary).trim();
-		// Keep headings, lists, quotes, and code blocks together. Splitting one of
-		// those before the chart would make the answer feel arbitrary.
-		if (/^(?:#{1,6}\s|[-*+]\s|>\s|```)/.test(lead)) {
-			return { lead: trimmed, remainder: '' };
-		}
-		return { lead, remainder: trimmed.slice(boundary).trim() };
-	}
-
-	let composition = $derived(composeAnswer(split.body));
-	let bodyHtml = $derived(renderMarkdown(split.body));
-	let leadHtml = $derived(renderMarkdown(composition.lead));
-	let remainderHtml = $derived(renderMarkdown(composition.remainder));
-
-	// A chart is selected from evidence, independent of whether the model's text
-	// references it. Correctness shouldn't depend on a small model correctly
-	// placing a chart mention in freeform text.
-	let chartItems = $derived.by(() => {
-		const seenVisuals = new Set<string>();
-		return (message.answer?.evidence ?? []).filter((e) => {
-			if (
-				e.tool !== 'make_chart' ||
-				!e.chart ||
-				e.error ||
-				e.verifier_disposition?.state === 'excluded' ||
-				(e.verifier_disposition?.state === 'artifact_withheld' && e.verifier_disposition.artifact === 'chart') ||
-				(message.answer?.verification ?? []).some(
-					(check) =>
-						!check.ok &&
-						check.finding?.effect === 'withhold_artifact' &&
-						check.finding.target_id === e.id
-				)
-			) return false;
-
-			// A repair iteration can leave several evidence entries that render the
-			// same visual while using different SQL aliases/source metadata. Keep
-			// the first visible instance; all original calls remain in Analysis
-			// Details so this presentation cleanup doesn't discard audit history.
-			const visual = e.chart;
-			const key = JSON.stringify({
-				kind: visual.kind,
-				title: visual.title,
-				labels: visual.labels,
-				series: visual.series,
-				unit: visual.unit,
-				x_label: visual.x_label,
-				y_label: visual.y_label,
-				payload: visual.payload
-			});
-			if (seenVisuals.has(key)) return false;
-			seenVisuals.add(key);
-			return true;
-		});
-	});
-	let hasVisualAnswer = $derived(chartItems.length > 0 && !message.pending);
-
 	// Keep the useful trust signal close to the finding. This deliberately uses
 	// only evidence already returned by the engine; it never invents a row count
 	// or claims that a selected source was a hard filter when it was only a
 	// starting point for the model.
-	let answerSources = $derived.by(() => {
-		const names = new Set<string>();
-		for (const item of message.answer?.evidence ?? []) {
-			if (item.error || item.verifier_disposition?.state === 'excluded') continue;
-			for (const source of item.sources ?? []) {
-				if (source.source.trim()) names.add(source.source.trim());
-			}
-		}
-		return [...names];
-	});
-	let scopeLabel = $derived.by(() => {
-		if (answerSources.length === 1) return `Based on ${answerSources[0]}`;
-		if (answerSources.length > 1) return `Based on ${answerSources.length} sources`;
-		return message.answer?.workspace ? 'Based on this workspace' : 'Based on the available evidence';
-	});
-	function followupQuestions(text: string, answer: Answer): string[] {
-		const q = text.toLowerCase();
-		const suggestions: string[] = [];
-		const add = (value: string) => {
-			if (!suggestions.includes(value)) suggestions.push(value);
-		};
-		if (/\b(change|trend|over time|year|month|week|daily|monthly)\b/.test(q)) {
-			add('What explains the biggest change?');
-			add('Break this down by category');
-		} else if (/\b(total|how much|how many|average|mean|count|sum)\b/.test(q)) {
-			add('Show this over time');
-			add('Break this down by category');
-		} else {
-			add('What else stands out?');
-			add('Show this over time');
-		}
-		if (!answer.evidence.some((item) =>
-			item.tool === 'make_chart' &&
-			item.chart &&
-			!item.error &&
-			item.verifier_disposition?.state !== 'excluded' &&
-			!(item.verifier_disposition?.state === 'artifact_withheld' && item.verifier_disposition.artifact === 'chart')
-		)) {
-			add('Show this as a chart');
-		}
-		return suggestions.slice(0, 3);
-	}
-
-	let followups = $derived(
-		message.answer && question ? followupQuestions(question, message.answer) : []
-	);
 	let detailsLabel = $derived.by(() => {
 		switch (message.answer?.trace?.mode) {
 			case 'model_only':
 				return 'General answer';
 			case 'workspace_inspect':
 				return 'Inspection details';
-			default:
+			case 'workspace_ask':
 				return 'Analysis details';
+			default:
+				return 'How this was analyzed';
+		}
+	});
+	let answerCaveat = $derived.by(() => {
+		switch (message.answer?.status) {
+			case 'insufficient_data':
+				return {
+					title: 'Evidence is incomplete',
+					body: 'The available evidence is not enough to verify this answer.'
+				};
+			case 'failed':
+				return {
+					title: 'Verification failed',
+					body: 'Review the recorded checks before relying on this answer.'
+				};
+			default:
+				return null;
 		}
 	});
 </script>
 
-<div class="msg {message.role}" transition:enterUp>
+<div class="msg {message.role}" data-message-id={message.id} data-analysis-turn-id={message.role === 'assistant' ? message.answer?.turn_id : undefined} transition:enterUp>
 	{#if message.role === 'user'}
 		<span class="sr-only">You asked: </span>
 		<div class="you">
@@ -174,9 +96,19 @@
 		<span class="sr-only">Fella replied: </span>
 		<div class="assistant-heading">
 			<div class="assistant-identity">
-				<Logo size={18} active={message.pending} />
-				<strong>Fella</strong>
-				{#if message.pending}<span class="status">Working through the workspace</span>{/if}
+				<Logo size={16} active={message.pending} />
+				{#if needsAttention}
+					<Badge
+						variant="default"
+						class="answer-review"
+						role="status"
+						aria-label="Answer status"
+						data-testid="answer-review-status"
+						data-answer-status="needs_review"
+						title={answerSemanticGaps(message.answer!).at(0) ?? 'Open How this was analyzed to review the recorded checks.'}
+					>Needs review</Badge>
+				{/if}
+				{#if message.pending}<span class="status">Working…</span>{/if}
 			</div>
 			{#if message.answer}
 				<EvidenceSummary
@@ -187,30 +119,17 @@
 				/>
 			{/if}
 		</div>
-		{#if message.plan}
-			<div class="plan">{message.plan}</div>
-		{/if}
-		{#if split.background}
+		{#if split.background && !presentationPrimary}
 			<div class="background">{split.background}</div>
 		{/if}
-		{#if hasVisualAnswer}
-			<div class="text rich answer-lead">{@html leadHtml}</div>
-			<div class="answer-visuals" aria-label="Visual answer">
-				{#each chartItems as e, i (e.id ?? `chart-${i}`)}
-					{#if e.chart}
-						<Chart spec={e.chart} source={scopeLabel} />
-					{/if}
-				{/each}
-			</div>
-			{#if composition.remainder}
-				<div class="text rich answer-supporting">{@html remainderHtml}</div>
-			{/if}
+		{#if presentationPrimary}
+			<AnalyticalAnswer {message} {onopeninvestigationrun} />
 		{:else}
 			<div class="text rich" class:pending={message.pending}>
 				{#if message.answer?.clarification}
 					<p class="clarification-transcript-note">Choose an option below to continue.</p>
 				{:else}
-					{@html bodyHtml}
+					<MarkdownContent text={split.body} />
 				{/if}
 				{#if message.pending}<span class="thinking" aria-hidden="true"></span>{/if}
 			</div>
@@ -218,41 +137,86 @@
 	{:else}
 		<div class="text">{message.text}</div>
 	{/if}
+	{#if fallbackCharts.length}
+		<div class="fallback-charts" aria-label="Charts from analysis">
+			{#each fallbackCharts as { evidence, evidenceIndex } (`${message.id}-${evidence.id ?? evidenceIndex}`)}
+				{#if evidence.chart}
+					{#if openChartIndex === evidenceIndex}
+						<div class="chart-open-reference" role="status">Chart open beside conversation</div>
+					{:else}
+						<Chart
+							spec={evidence.chart}
+							source={evidence.chart.metadata?.source_label ?? ''}
+							sourceEvidence={evidence}
+							sourceRunId={message.answer?.turn_id}
+							originLabel="Model-produced visualization"
+							onopen={onopenchart ? () => onopenchart?.(evidenceIndex) : undefined}
+						/>
+					{/if}
+				{/if}
+			{/each}
+		</div>
+	{/if}
+	{#if message.answer && answerCaveat}
+		<div
+			class="answer-caveat"
+			role="status"
+			aria-label="Answer limitation"
+			data-answer-status={message.answer.status}
+		>
+			<Icon name="alert" size={14} />
+			<div>
+				<strong>{answerCaveat.title}</strong>
+				<p>{answerCaveat.body}</p>
+			</div>
+		</div>
+	{/if}
 	{#if message.answer}
 		<EvidenceBlock
 			answer={message.answer}
 			bodyId={`evidence-${message.id}`}
 			{expanded}
+			suppressReviewStatus={needsAttention}
 			onrerun={message.answer.turn_id ? onrerun : undefined}
 		/>
-		{#if showFollowups && onfollowup && followups.length && !message.answer.clarification}
-			<div class="followups" aria-label="Suggested follow-up questions">
-				<span class="followup-label">Continue with</span>
-				{#each followups as next (next)}
-			<button type="button" onclick={() => onfollowup?.(next)}>{next}<Icon name="arrow-up-right" size={12} /></button>
-				{/each}
-			</div>
+		{#if !presentationPrimary && message.answer.turn_id && onopeninvestigationrun}
+			<Button type="button" variant="ghost" size="sm" class="investigation-run-link" onclick={() => onopeninvestigationrun?.(message.answer!.turn_id!)}>
+				Open in Investigation
+			</Button>
 		{/if}
 	{/if}
 </div>
 
 <style>
+	:global(.answer-review) { padding:2px 8px; border:0; border-radius:999px; background:color-mix(in srgb,var(--warn) 10%,transparent); color:var(--warn); font-size:12px; font-weight:400; line-height:18px; }
 	.msg {
-		padding: var(--space-3) 0;
+		padding: 8px 0;
+	}
+	.fallback-charts { min-width: 0; }
+	.chart-open-reference {
+		padding: 10px 12px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-md);
+		color: var(--text-dim);
+		font-size: 12px;
+	}
+	.investigation-run-link {
+		margin-top: var(--space-1);
+		color: var(--text-dim);
 	}
 	.msg.user {
 		display: flex;
 		justify-content: flex-end;
-		padding: var(--space-4) 0 var(--space-2);
+		padding:8px 0 0;
 	}
 	.you {
-		max-width: min(72%, 58ch);
-		padding: 9px 14px 10px;
+		max-width:min(100%, 420px);
+		padding:10px 14px;
 		border-radius: var(--radius-conversation) var(--radius-conversation) var(--radius-sm) var(--radius-conversation);
 		background: var(--user-bubble);
 		color: var(--user-bubble-text);
-		font-size: var(--fs);
-		line-height: 1.48;
+		font-size:13px;
+		line-height:21px;
 		text-align: left;
 	}
 	.you-copy {
@@ -266,17 +230,13 @@
 		gap: var(--space-2);
 		margin-bottom: var(--space-2);
 		color: var(--chat-meta);
-		font-size: var(--fs-sm);
+		font-size: 12px;
 	}
 	.assistant-identity {
 		display: flex;
 		align-items: center;
 		gap: var(--space-2);
 		min-width: 0;
-	}
-	.assistant-heading strong {
-		color: var(--chat-meta);
-		font-weight: 600;
 	}
 	.assistant-heading .status {
 		color: var(--text-faint);
@@ -286,8 +246,12 @@
 		word-break: break-word;
 	}
 	.msg.assistant .text {
-		font-size: var(--fs-lg);
-		line-height: 1.6;
+		padding:14px 16px;
+		border: 0;
+		border-radius: 16px;
+		background: var(--bg-raised);
+		font-size: var(--fs-sm);
+		line-height:21px;
 		color: var(--chat-body);
 	}
 	/* Markdown emphasis is deliberately brighter, not dramatically heavier.
@@ -295,16 +259,7 @@
 	   every bold phrase into an accent-colored badge. */
 	.msg.assistant .text :global(strong) {
 		color: var(--chat-strong);
-		font-weight: 650;
-	}
-	/* The model's one-line plan, shown dimmed while its tools run. */
-	.plan {
-		white-space: pre-wrap;
-		word-break: break-word;
-		color: var(--chat-meta);
-		font-size: 0.95em;
-		margin-bottom: 4px;
-		font-style: italic;
+		font-weight:600;
 	}
 	/* A "Background:" aside general knowledge, not computed from the files. */
 	.background {
@@ -329,46 +284,19 @@
 	.text.pending {
 		color: var(--text-dim);
 	}
-	.answer-visuals {
-		margin-top: var(--space-3);
-	}
-	.answer-visuals :global(.chart-card) {
-		margin-top: 0;
-	}
-	.answer-supporting {
-		margin-top: var(--space-3);
-	}
-	.followups {
+	.answer-caveat {
 		display: flex;
-		align-items: center;
-		flex-wrap: wrap;
-		gap: var(--space-3);
-		margin-top: var(--space-3);
-		padding-top: var(--space-3);
-		border-top: 1px solid var(--border);
+		align-items: flex-start;
+		gap: var(--space-2);
+		margin: var(--space-3) 0;
+		padding: var(--space-2) var(--space-3);
+		border-left: 2px solid var(--warn);
+		background: var(--bg-inset);
+		color: var(--warn);
 	}
-	.followup-label {
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		margin-right: 2px;
-	}
-	.followups button {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		padding: 0;
-		border: 0;
-		border-radius: 0;
-		color: var(--link);
-		background: transparent;
-		font-size: var(--fs-sm);
-		text-align: left;
-		transition: color var(--dur-fast) var(--ease);
-	}
-	.followups button:hover {
-		color: var(--text);
-		text-decoration: underline;
-	}
+	.answer-caveat :global(svg) { flex: none; margin-top: 2px; }
+	.answer-caveat strong { color: var(--text); font-size: var(--fs-sm); font-weight: 600; }
+	.answer-caveat p { margin: 2px 0 0; color: var(--text-dim); font-size: var(--fs-xs); line-height: 1.45; }
 	.clarification-transcript-note {
 		margin: 0;
 		color: var(--chat-meta);
@@ -396,7 +324,7 @@
 	.msg.assistant .text :global(h4) {
 		font-size: 1.05em;
 		color: var(--chat-strong);
-		font-weight: 650;
+		font-weight:600;
 		margin: 0.6em 0 0.25em;
 	}
 	.msg.assistant .text :global(blockquote) {
@@ -404,13 +332,6 @@
 		padding-left: 0.6em;
 		border-left: 2px solid var(--border-strong);
 		color: var(--chat-meta);
-	}
-	/* markdown tables can't be wrapped in a scroll container (they come from
-	   @html), so let the table itself scroll. */
-	.msg.assistant .text :global(table) {
-		display: block;
-		overflow-x: auto;
-		margin: 4px 0;
 	}
 	/* the shared .thinking dots sit on the baseline after streamed text */
 	.text .thinking {

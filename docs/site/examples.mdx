@@ -27,7 +27,7 @@ Check inferred numeric types, date formats, nulls, units, capitalization, skippe
 Using transactions.csv, calculate total grocery spending for January 2025 and February 2025. Show both totals, the absolute change, and the percentage change. Treat refunds as negative amounts.
 ```
 
-Inspect the date boundaries, category filter, refund handling, denominator, and units in the working fold.
+Open **How this was analyzed** and inspect the date boundaries, category filter, refund handling, denominator, and units recorded for the run.
 
 ## Rank categories
 
@@ -89,7 +89,7 @@ recorded with the same evidence as the calculation behind it.
 /sql SELECT category, ROUND(SUM(amount), 2) AS total FROM transactions GROUP BY category ORDER BY total DESC LIMIT 10
 ```
 
-Direct SQL remains read-only and prints a system result; unlike an agent tool call, it does not create an evidence fold or run post-answer verification. The shipped backend is SQLite, so use SQLite syntax. A DuckDB-only function will not work in a normal release build.
+Direct SQL remains read-only and prints a system result; unlike an agent tool call, it does not create an assistant analysis record or run post-answer verification. The shipped backend is SQLite, so use SQLite syntax. A DuckDB-only function will not work in a normal release build.
 
 ## Ask for a forecast responsibly
 

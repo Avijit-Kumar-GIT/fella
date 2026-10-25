@@ -21,7 +21,7 @@ rather than including a working exploit.
   writes, moves, or deletes anything there, and the model never emits a file.
   The user may explicitly edit the root `fella.md` context file from the
   Workspace surface; that editor is separate from the agent and is the only
-  workspace write in the personal release.
+  workspace write performed by Fella itself.
 - **BYOK model access.** The only model network call the base app makes on its
   own is the request to the provider you chose with your own API key.
   `/update` reaches GitHub only when you type the command, never automatically
@@ -39,7 +39,7 @@ The personal release has no pack manager, augment runtime, or MCP connector.
 `/mcp` is retained as an inert signpost and creates no connector or network
 activity. The root `fella.md` file is the supported user-authored context
 surface. The current boundary is described in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/ARCHITECTURE.md`](./docs/architecture/ARCHITECTURE.md).
 
 `run_python` executes code the model writes inside the checked-in
 `wasm32-unknown-unknown` RustPython guest through Wasmi. The guest receives no

@@ -24,6 +24,10 @@ export type ChartKind =
 
 export interface ChartMetadata {
 	source_evidence_id?: string;
+	/** Immutable AnalysisTurn that produced this visualization. */
+	source_run_id?: string;
+	/** The answer's visible lead conclusion when this run was saved. */
+	finding_snapshot?: string;
 	source_label?: string;
 	fields: string[];
 	aggregation?: string;
@@ -104,6 +108,8 @@ export interface EvidenceItem {
 	python_input_trace?: PythonInputTrace;
 	ms: number;
 	error?: string;
+	/** Stable tool failure category, when this evidence item is an error. */
+	error_kind?: string;
 	/** Verifier decision; separate from whether the tool itself executed. */
 	verifier_disposition?:
 		| { state: 'excluded'; reason: string }
@@ -137,6 +143,8 @@ export interface EvidenceSource {
 export interface VerificationCheck {
 	label: string;
 	ok: boolean;
+	/** Optional for older records; distinguishes checks that were skipped. */
+	outcome?: 'passed' | 'flagged' | 'not_run';
 	detail?: string;
 	finding?: VerificationFinding;
 }
@@ -190,6 +198,8 @@ export interface Answer {
 	/** Typed links to evidence, included context, and clarification lineage. */
 	provenance?: AnswerProvenance;
 	text: string;
+	/** Native json-render UI spec for workspace answers. */
+	presentation_spec?: import('./presentation/types').PresentationSpec;
 	evidence: EvidenceItem[];
 	verification: VerificationCheck[];
 	/** One user-facing semantic choice that must be answered before computing. */
@@ -232,6 +242,32 @@ export interface ContextSectionAudit {
 
 export interface ContextAssemblyAudit {
 	sections: ContextSectionAudit[];
+}
+
+export type SemanticFactKind = 'vocabulary' | 'definition' | 'field_binding' | 'preference';
+export type SemanticFactAuthority = 'user' | 'observed' | 'model_suggestion' | 'confirmed';
+export type SemanticFactState = 'active' | 'proposed' | 'superseded' | 'conflict';
+
+/** Workspace-scoped learned fact with its source turn, evidence, and freshness revision. */
+export interface SemanticFact {
+	id: string;
+	kind: SemanticFactKind;
+	key: string;
+	statement: string;
+	authority: SemanticFactAuthority;
+	state: SemanticFactState;
+	workspace: string;
+	/** Investigation that owns this fact's current scope, when it is not workspace-wide. */
+	investigation_id?: string;
+	/** The Investigation that originally produced the model suggestion, retained after promotion. */
+	origin_investigation_id?: string;
+	revision?: string;
+	supporting_turn?: string;
+	evidence_ids?: string[];
+	created_at_ms: number;
+	updated_at_ms: number;
+	supersedes?: string[];
+	conflicts_with?: string[];
 }
 
 export interface AnalysisContract {
@@ -392,6 +428,8 @@ export interface AnalysisTurn {
 	workspace?: string;
 	workspace_revision?: string;
 	workspace_snapshot?: WorkspaceRevisionSnapshot;
+	source_scope?: AnalysisSourceScope;
+	investigation_context?: InvestigationContextSnapshot;
 	context_audit?: ContextAssemblyAudit;
 	provenance?: AnswerProvenance;
 	rerun_of?: string;
@@ -402,11 +440,193 @@ export interface AnalysisTurn {
 	verification?: { status: VerificationStatus; checks: VerificationCheck[] };
 	result: {
 		text: string;
+		presentation_spec?: import('./presentation/types').PresentationSpec;
 		status: VerificationStatus;
 		usage?: { prompt_tokens: number; completion_tokens: number };
 		verification: VerificationCheck[];
 		evidence: unknown[];
 	};
+}
+
+export interface AnalysisSourceReference {
+	source: string;
+	table?: string;
+	evidence_ids: string[];
+}
+
+export interface AnalysisSourceScope {
+	used_sources: AnalysisSourceReference[];
+	skipped_sources: string[];
+}
+
+/** Durable parent record for workspace-scoped analyst work. */
+export interface Investigation {
+	id: string;
+	workspace_id: string;
+	/** Stable ID of the canonical archived Conversation transcript. */
+	conversation_id?: string;
+	/** Current analyst-authored work plan. `undefined` is a legacy record. */
+	questions?: InvestigationQuestion[];
+	/** Active saved meanings and assumptions for this Investigation. */
+	definitions?: InvestigationDefinition[];
+	/** Durable analyst conclusions, independent from the conversation transcript. */
+	findings?: InvestigationFinding[];
+	/** Current file boundary for subsequent Investigation runs. */
+	source_selection: InvestigationSourceSelection;
+	title: string;
+	brief: InvestigationBrief;
+	brief_source_message_id?: string;
+	brief_reviewed_message_id?: string;
+	analysis_turn_ids?: string[];
+	status: 'active' | 'complete' | 'archived';
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationQuestion {
+	id: string;
+	investigation_id: string;
+	parent_id?: string;
+	text: string;
+	position: number;
+	/** Optional source set that narrows the owning Investigation; absent means inherit. */
+	source_selection?: InvestigationSourceSelection | null;
+	status: 'active' | 'removed';
+	answer_status: InvestigationQuestionAnswerStatus;
+	answer_status_reason?: string;
+	latest_analysis_turn_id?: string;
+	/** Canonical run history for this Question; older records may omit it. */
+	analysis_turn_ids?: string[];
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export type InvestigationQuestionAnswerStatus =
+	| 'not_started'
+	| 'running'
+	| 'answered'
+	| 'incomplete'
+	| 'unsupported'
+	| 'insufficient_data'
+	| 'needs_review'
+	| 'waiting_for_input'
+	| 'blocked'
+	| 'outdated';
+
+export interface InvestigationQuestionInput {
+	id: string;
+	parent_id?: string;
+	text: string;
+	source_selection?: InvestigationSourceSelection | null;
+}
+
+export type InvestigationDefinitionKind = 'definition' | 'assumption';
+export type InvestigationDefinitionStatus = 'active' | 'removed';
+
+export interface InvestigationDefinitionRevision {
+	revision: number;
+	kind: InvestigationDefinitionKind;
+	text: string;
+	recorded_at_ms: number;
+}
+
+export interface InvestigationDefinition {
+	id: string;
+	investigation_id: string;
+	kind: InvestigationDefinitionKind;
+	text: string;
+	revision: number;
+	history: InvestigationDefinitionRevision[];
+	status: InvestigationDefinitionStatus;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationDefinitionInput {
+	id: string;
+	kind: InvestigationDefinitionKind;
+	text: string;
+}
+
+export interface InvestigationDefinitionSnapshot {
+	id: string;
+	revision: number;
+	kind: InvestigationDefinitionKind;
+	text: string;
+}
+
+export interface InvestigationFinding {
+	id: string;
+	investigation_id: string;
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
+	revision: number;
+	revision_note: string;
+	revisions: InvestigationFindingRevision[];
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationFindingRevision {
+	revision: number;
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
+	revision_note: string;
+	created_at_ms: number;
+	updated_at_ms: number;
+}
+
+export interface InvestigationFindingInput {
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
+}
+
+export interface InvestigationFindingUpdate {
+	question_id: string;
+	analysis_turn_id: string;
+	evidence_ids: string[];
+	claim: string;
+	caveats: string[];
+	assumptions: string[];
+	revision_note: string;
+}
+
+export interface InvestigationContextSnapshot {
+	investigation_id: string;
+	question_id?: string;
+	question_text?: string;
+	definitions: InvestigationDefinitionSnapshot[];
+	source_selection: InvestigationSourceSelection;
+}
+
+export type InvestigationSourceSelectionMode = 'all_sources' | 'selected_sources';
+
+export interface InvestigationSourceSelection {
+	mode: InvestigationSourceSelectionMode;
+	included_paths: string[];
+}
+
+export interface QuestionBreakdownProposal {
+	subquestions: string[];
+}
+
+export interface InvestigationBrief {
+	goal: string;
+	audience: string;
+	desired_output: string;
+	constraints: string[];
 }
 
 export type WorkspaceChangeKind = 'added' | 'removed' | 'changed';
@@ -428,6 +648,7 @@ export interface AnalysisTurnReplayStatus {
 	snapshot_available: boolean;
 	can_rerun: boolean;
 	source_changes: WorkspaceSourceChange[];
+	source_scope?: AnalysisSourceScope;
 }
 
 /** The two user-facing ways to work with a mounted workspace. Ask is the
@@ -440,10 +661,11 @@ export type AskMode = 'ask' | 'inspect';
  * read and the backend remains the source of truth for access. */
 export type ContextReference =
 	| { kind: 'source'; key: string; label: string; detail?: string }
-	| { kind: 'column'; key: string; label: string; detail?: string };
+	| { kind: 'column'; key: string; label: string; detail?: string }
+	| { kind: 'artifact'; key: string; label: string; detail?: string };
 
 /** One observable step in a local question run. Kept in the conversation so
- * switching tabs never loses the small amount of run history shown in the UI. */
+ * switching workspaces never loses the small amount of run history shown in the UI. */
 export interface RunStep {
 	id: string;
 	label: string;
@@ -451,19 +673,36 @@ export interface RunStep {
 	started_at_ms: number;
 	finished_at_ms?: number;
 	tool?: string;
-	note?: string;
-	evidence?: EvidenceItem;
+	/** Observable tool output, not model-authored reasoning. */
+	summary?: string;
+	sources?: string[];
+	evidence_id?: string;
 }
 
 export interface Message {
 	id: string;
 	role: Role;
 	text: string;
-	/** The one-line plan the model streamed before its first tool call, kept
-	 *  visible (dimmed) while the tools run. Cleared when the answer lands. */
+	/** Legacy model preamble captured by older versions; not rendered as a plan. */
 	plan?: string;
+	/** Parent canonical run when this message is a rerun attempt. */
+	rerun_of?: string;
+	/** Archived progress snapshot for failed/clarification runs without a final trace. */
+	run_steps?: RunStep[];
+	run_state?: RuntimeTurnState;
+	run_question_id?: string;
+	run_duration_ms?: number;
 	/** Present on assistant messages once the answer is complete. */
 	answer?: Answer;
+	/** Projection link only; Rust artifact/run stores own the analytical output. */
+	artifact_id?: string;
+	artifact_revision?: number;
+	/** Local presentation control choices, independent of analytical source or result state. */
+	presentation_state?: Record<string, unknown>;
+	/** Small validated display cache; permits immediate rendering after restart. */
+	presentation_snapshot?: import('./presentation/snapshot').PresentationSnapshot;
+	/** Existing artifact revision this answer should revise, if requested in chat. */
+	artifact_target?: { artifactId: string; baseRevision: number; instruction: string };
 	/** True while the assistant message is still streaming. */
 	pending?: boolean;
 	ts: number;
@@ -655,11 +894,51 @@ export interface ConversationSummary {
 	id: string;
 	saved_at_ms: number;
 	workspace: string | null;
+	/** First real user message ID, for upgrading older Investigation links. */
+	first_question_message_id?: string;
 	preview: string;
 	message_count: number;
 	/** A user-given name, if this conversation was renamed. */
 	title: string | null;
 }
+
+/** Stable reference from a Project to an Investigation-owned conclusion. */
+export interface ProjectFindingReference {
+	kind: 'finding';
+	investigation_id: string;
+	finding_id: string;
+	/** Pins the exact reviewed interpretation that the Project curated. */
+	finding_revision: number;
+}
+
+/** Stable reference to an artifact carried by a canonical analysis run.
+ *  `evidence_id` is scoped by the run until artifacts have first-class records. */
+export interface ProjectArtifactReference {
+	kind: 'analysis_artifact';
+	analysis_turn_id: string;
+	evidence_id: string;
+}
+
+/** Revision-pinned reference to an Investigation-owned definition or assumption. */
+export interface ProjectDefinitionReference {
+	kind: 'definition';
+	investigation_id: string;
+	definition_id: string;
+	definition_revision: number;
+}
+
+/** Stable reference to a current Question record; its current state remains canonical in the Investigation. */
+export interface ProjectQuestionReference {
+	kind: 'question';
+	investigation_id: string;
+	question_id: string;
+}
+
+export type ProjectReference =
+	| ProjectFindingReference
+	| ProjectArtifactReference
+	| ProjectDefinitionReference
+	| ProjectQuestionReference;
 
 /** A user-created local wiki attached to one mounted repository. */
 export interface Project {
@@ -667,6 +946,8 @@ export interface Project {
 	name: string;
 	workspace: string;
 	body: string;
+	/** Optional so Projects saved before evidence-backed curation remain valid. */
+	references?: ProjectReference[];
 	created_at_ms: number;
 	updated_at_ms: number;
 }

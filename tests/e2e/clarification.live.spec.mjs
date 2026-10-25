@@ -115,7 +115,7 @@ test('G5: real OpenAI clarification is submitted and resumes the same analysis',
 		await expect(finalAnswer.locator('.thinking')).toHaveCount(0);
 		assert.ok((await finalText.innerText()).trim(), 'the resumed turn should produce a settled response');
 
-		const analysisDetails = finalAnswer.getByRole('button', { name: 'Analysis details' });
+		const analysisDetails = finalAnswer.getByRole('button', { name: 'How this was analyzed' });
 		await expect(analysisDetails).toBeVisible();
 		await analysisDetails.click();
 		await expect(analysisDetails).toHaveAttribute('aria-expanded', 'true');

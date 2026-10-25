@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 const listeners = new Map();
 let nextAskId = 1;
+let appCommandCallback;
 
 ipcRenderer.on('fella:ask-event', (_event, message) => {
 	listeners.get(message.requestId)?.(message.event);
@@ -9,8 +10,13 @@ ipcRenderer.on('fella:ask-event', (_event, message) => {
 ipcRenderer.on('fella:workspace-progress', (_event, message) => {
 	listeners.get(message.requestId)?.(message.event);
 });
+ipcRenderer.on('fella:app-command', (_event, command) => {
+	appCommandCallback?.(command);
+});
 
 contextBridge.exposeInMainWorld('fella', {
+	platform: process.platform,
+
 	invoke(command, args) {
 		return ipcRenderer.invoke('fella:invoke', { command, args });
 	},
@@ -43,6 +49,10 @@ contextBridge.exposeInMainWorld('fella', {
 		return ipcRenderer.invoke('fella:pick-folder');
 	},
 
+	sampleWorkspacePath() {
+		return ipcRenderer.invoke('fella:sample-workspace-path');
+	},
+
 	openExternal(url) {
 		return ipcRenderer.invoke('fella:open-external', url);
 	},
@@ -57,5 +67,13 @@ contextBridge.exposeInMainWorld('fella', {
 
 	windowAction(action) {
 		return ipcRenderer.invoke('fella:window-action', action);
+	},
+
+	popupMenu(name, x, y) {
+		return ipcRenderer.invoke('fella:popup-menu', { name, x, y });
+	},
+
+	onAppCommand(callback) {
+		appCommandCallback = callback;
 	}
 });

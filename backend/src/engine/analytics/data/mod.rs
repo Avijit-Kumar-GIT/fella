@@ -7,6 +7,7 @@
 
 use serde::Serialize;
 use serde_json::Value as Json;
+use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -97,10 +98,61 @@ pub struct SourceIngestProgress {
 pub enum PythonBridge {
     /// The host opens this SQLite file read-only on behalf of the guest.
     SqliteFile(std::path::PathBuf),
+    /// Same bridge, with SQLite's authorizer restricting reads to this set.
+    ScopedSqliteFile {
+        path: std::path::PathBuf,
+        allowed_sources: HashSet<String>,
+    },
     /// The host recreates these `(table, FROM-expression)` views in its own
     /// DuckDB connection; the guest never receives the paths or expressions.
     #[cfg(feature = "duckdb")]
     DuckReaders(Vec<(String, String)>),
+    /// A filtered set of DuckDB readers for one Investigation run.
+    #[cfg(feature = "duckdb")]
+    ScopedDuckReaders(Vec<(String, String)>),
+}
+
+impl PythonBridge {
+    pub fn scoped(self, allowed_sources: &HashSet<String>) -> Self {
+        match self {
+            Self::SqliteFile(path) => Self::ScopedSqliteFile {
+                path,
+                allowed_sources: allowed_sources
+                    .iter()
+                    .map(|source| source.to_ascii_lowercase())
+                    .collect(),
+            },
+            #[cfg(feature = "duckdb")]
+            Self::DuckReaders(readers) => Self::ScopedDuckReaders(
+                readers
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        allowed_sources
+                            .iter()
+                            .any(|source| source.eq_ignore_ascii_case(name))
+                    })
+                    .collect(),
+            ),
+            Self::ScopedSqliteFile { path, .. } => Self::ScopedSqliteFile {
+                path,
+                allowed_sources: allowed_sources
+                    .iter()
+                    .map(|source| source.to_ascii_lowercase())
+                    .collect(),
+            },
+            #[cfg(feature = "duckdb")]
+            Self::ScopedDuckReaders(readers) => Self::ScopedDuckReaders(
+                readers
+                    .into_iter()
+                    .filter(|(name, _)| {
+                        allowed_sources
+                            .iter()
+                            .any(|source| source.eq_ignore_ascii_case(name))
+                    })
+                    .collect(),
+            ),
+        }
+    }
 }
 
 pub trait DataEngine: Send {
@@ -136,6 +188,16 @@ pub trait DataEngine: Send {
     /// Run a read-only query; materialise up to `max_rows` rows.
     fn query(&self, sql: &str, max_rows: usize) -> EngineResult<QueryOutcome>;
 
+    /// Run a read-only query that can read only the named mounted sources.
+    /// Backends enforce this at their query boundary, not by relying on model
+    /// instructions or SQL text matching.
+    fn query_scoped(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        allowed_sources: &HashSet<String>,
+    ) -> EngineResult<QueryOutcome>;
+
     /// Run a read-only query while observing a question's stop flag. Backends
     /// that can interrupt an in-flight statement should override this. The
     /// default keeps the API safe for optional backends and checks the flag at
@@ -150,6 +212,23 @@ pub trait DataEngine: Send {
             return Err(EngineError::msg("query stopped by user"));
         }
         let result = self.query(sql, max_rows)?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::msg("query stopped by user"));
+        }
+        Ok(result)
+    }
+
+    fn query_with_cancel_scoped(
+        &self,
+        sql: &str,
+        max_rows: usize,
+        allowed_sources: &HashSet<String>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<QueryOutcome> {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(EngineError::msg("query stopped by user"));
+        }
+        let result = self.query_scoped(sql, max_rows, allowed_sources)?;
         if cancel.load(Ordering::Relaxed) {
             return Err(EngineError::msg("query stopped by user"));
         }

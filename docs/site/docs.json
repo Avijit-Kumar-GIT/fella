@@ -9,9 +9,9 @@
     }
   },
   "colors": {
-    "primary": "#3fc7bc",
-    "light": "#74d8cf",
-    "dark": "#3fc7bc"
+    "primary": "#008080",
+    "light": "#008080",
+    "dark": "#008080"
   },
   "favicon": "/favicon.svg",
   "logo": {
@@ -46,7 +46,7 @@
       {
         "tab": "Overview",
         "icon": "house",
-        "pages": ["index"]
+        "pages": ["index", "product-model", "whats-new"]
       },
       {
         "tab": "Getting started",
@@ -80,7 +80,8 @@
             "pages": [
               "developer-platform/using-fella/open-folder",
               "developer-platform/using-fella/files",
-              "developer-platform/using-fella/context-and-memory"
+              "developer-platform/using-fella/context-and-memory",
+              "developer-platform/using-fella/investigations"
             ]
           },
           {
@@ -88,11 +89,12 @@
             "icon": "search-check",
             "pages": [
               "developer-platform/using-fella/asking-questions",
-              "developer-platform/using-fella/evidence"
+              "developer-platform/using-fella/evidence",
+              "developer-platform/using-fella/reports"
             ]
           },
           {
-            "group": "Models and sessions",
+            "group": "Models and conversations",
             "icon": "cpu",
             "pages": [
               "developer-platform/using-fella/models",

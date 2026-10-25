@@ -1,99 +1,56 @@
 ---
 title: "The model layer"
-description: "Current model providers, protocols, credentials, selection, and network boundaries."
+description: "How provider selection, model requests, and local execution fit together."
 icon: "cpu"
 ---
 
-> The model proposes work and writes answers; the harness and engine own execution and checks.
+The model interprets requests, chooses analytical steps, and writes explanations and presentations. It does not own file access, database execution, saved evidence, or deterministic verification.
 
-## Definition
+## Providers
 
-The model layer is Fella's replaceable connection to a chat model. Changing it does not change workspace ingestion, the built-in tool implementations, or deterministic verification.
+The app supports OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, and custom OpenAI-compatible endpoints. Fella is BYOK-only. See [Models and providers](/developer-platform/using-fella/models) for connection steps and the defaults in the current source.
 
-The model receives prompts, registered tool schemas, and selected tool results. It does not receive a direct filesystem, database handle, or Electron API.
+## Model selection
 
-## Architecture
+The user selects a model for each conversation from the composer. Provider credentials are stored at the app level. Fella does not automatically route an Investigation across different providers or models. When a consistency check is enabled and triggered, it uses the same selected provider and model.
 
-Fella currently ships these provider registry entries:
+This keeps model choice separate from the analytics engine. The model can direct tool use, but the Rust engine decides whether a tool call is valid and performs the local computation.
 
-| Provider | Authentication | Wire protocol |
-| --- | --- | --- |
-| OpenAI | API key | OpenAI-compatible |
-| Vercel AI Gateway | API key | OpenAI-compatible |
-| xAI (Grok) | API key | OpenAI-compatible |
-| Ollama Cloud | API key | Ollama |
-| OpenRouter | API key | OpenAI-compatible |
-| Custom endpoint | API key | OpenAI-compatible |
+## Request and response path
 
-Fella is BYOK-only and starts the connection flow on Ollama Cloud. Ollama Cloud
-uses Ollama's API shape at a hosted endpoint; it is not an OpenAI-compatible
-provider. The custom option expects an OpenAI-compatible API root.
+1. The harness sends the selected provider the user request, relevant conversation and workspace context, and the schemas for available tools.
+2. The provider returns text, structured tool calls, or a final answer.
+3. The Rust harness validates and dispatches tool calls; the engine returns bounded results.
+4. The answer and evidence are saved locally with the conversation and analysis run.
+5. When useful result data is available, the model composes a JSON-render view that references those saved results.
 
-Some registry rows describe embedding endpoints, but Fella does not currently use embeddings for document retrieval.
+OpenAI-compatible providers use the chat-completions protocol. Ollama Cloud uses its hosted Ollama API. Provider-specific response framing is normalized before it reaches the same harness.
 
-## Flow
+## Generated presentation boundary
 
-Use `/login` to view and authenticate supported providers. Use `/model` to inspect or change the active provider, base URL, and model; where supported, Fella fetches the service's current model list.
+JSON-render is the current structured answer renderer. The model composes from Fella’s registered component catalog, which includes prose, layout, metrics, tables, charts, callouts, and presentation controls. The model may choose different layouts for different questions.
 
-```text filename="fella commands"
-/login
-/login ollama-cloud
-/model
-/model gemma4:31b
-```
+Presentation output is declarative data, not executable markup or code. Analytical values must reference supplied result IDs and fields. Validation checks the component tree, props, and result bindings before the Svelte renderer mounts it. A presentation error does not invalidate the canonical answer or its evidence.
 
-For a custom endpoint:
+The component catalog is a safety and consistency boundary. It does not mean every response must contain a chart, nor does it prescribe one fixed table layout.
 
-```text filename="fella commands"
-/model provider custom
-/model base_url https://example.com/v1
-/model key YOUR_API_KEY
-/model YOUR_MODEL_ID
-```
+## Data sent to providers
 
-Each tab can select a model. Provider authentication is stored at the application level rather than inside a conversation.
-
-## Behavior
-
-Ollama connections use `/api/chat`; OpenAI-compatible connections use `/chat/completions`. Both stream output into the same harness, which assembles tool calls, executes them through the registry, and returns results in later turns. Transient provider failures retry with backoff.
-
-Provider API keys are kept in `auth.json` under Fella's application data directory, with mode `0600` on platforms that support it. Secret-bearing configuration commands are redacted from conversation transcripts. The inert `/mcp` command stores no connector tokens and makes no network request.
-
-Document search remains local and direct through `grep_files` and `read_file`, so it works even when the provider has no embeddings endpoint.
-
-The wire choice is independent of which hosted service you choose:
-
-```rust
-let response = if self.is_openai() {
-    self.chat_openai(messages, tools, on_retry, on_delta).await?
-} else {
-    self.chat_ollama(messages, tools, on_retry, on_delta).await?
-};
-```
-
-That is why Ollama Cloud uses the Ollama wire, while OpenAI, Vercel AI Gateway,
-xAI, OpenRouter, and custom endpoints use the OpenAI-compatible wire. The
-streamed response is normalized before it reaches `agent::run`; provider-specific
-framing does not leak into the tool loop.
+The selected provider may receive the question, recent conversation context, workspace context, tool schemas, and requested tool results. Results can include file-derived text, table rows, aggregates, or Python output. Fella does not upload the whole folder as a single file. Read [Privacy and security](/developer-platform/using-fella/privacy) before analyzing sensitive data.
 
 ## Limits
 
-- With a hosted or custom provider, prompts and tool results sent for the conversation leave the machine and are subject to that provider's policies.
-- The inert `/mcp` command does not create a connector or make a separate network request.
-- `run_python` is local execution inside the embedded WASM guest. The guest has no filesystem, network, environment, or subprocess capability; the prompt describes the boundary, while the host ABI enforces it.
-- Provider model catalogs and default model IDs can change. `/model` is the source of the active service's available models when listing is supported.
-- The model can make reasoning and tool-selection mistakes regardless of provider. Deterministic checks cover evidence consistency, not every semantic error.
-
-## Next steps
+- Provider model catalogs and identifiers can change; the composer’s current list is authoritative when available.
+- A model can select the wrong source or misunderstand the question.
+- Evidence and deterministic checks can expose some errors but do not prove semantic correctness.
+- Fella does not provide a hosted inference service or automatic multi-model routing.
+- The inert /mcp command does not add model tools or connector traffic.
 
 <CardGroup cols={2}>
   <Card title="The harness" icon="workflow" href="/concepts/harness">
-    See how provider output enters the tool loop.
+    Follow context, tool calls, evidence, and presentation generation.
   </Card>
   <Card title="Privacy and security" icon="shield-check" href="/developer-platform/using-fella/privacy">
-    Review provider, credential, and local-execution boundaries.
-  </Card>
-  <Card title="Using Fella" icon="folder-open" href="/developer-platform/using-fella">
-    Configure a workspace and ask a first question.
+    Review provider egress, credentials, and local execution.
   </Card>
 </CardGroup>

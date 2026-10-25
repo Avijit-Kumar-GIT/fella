@@ -50,6 +50,13 @@ pub struct SemanticFact {
     pub state: FactState,
     /// Canonical workspace path. Facts never cross this boundary.
     pub workspace: String,
+    /// Optional scope narrower than the workspace. Investigation knowledge is
+    /// supplied only to runs owned by this Investigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub investigation_id: Option<String>,
+    /// Origin remains visible if a suggestion is later promoted to a broader scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_investigation_id: Option<String>,
     /// The catalog revision against which this fact was observed or confirmed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revision: Option<String>,
@@ -105,6 +112,8 @@ impl SemanticFact {
                 FactState::Active
             },
             workspace,
+            investigation_id: None,
+            origin_investigation_id: None,
             revision,
             supporting_turn,
             evidence_ids,
@@ -184,6 +193,16 @@ impl SemanticMemory {
         &self.facts
     }
 
+    pub fn fact_mut(&mut self, id: &str) -> Option<&mut SemanticFact> {
+        self.facts.iter_mut().find(|fact| fact.id == id)
+    }
+
+    pub fn remove(&mut self, id: &str) -> bool {
+        let previous_len = self.facts.len();
+        self.facts.retain(|fact| fact.id != id);
+        self.facts.len() != previous_len
+    }
+
     pub fn has_kind(&self, kind: FactKind) -> bool {
         self.facts.iter().any(|fact| fact.kind == kind)
     }
@@ -196,7 +215,10 @@ impl SemanticMemory {
             fact.kind == incoming.kind
                 && fact.key.eq_ignore_ascii_case(&incoming.key)
                 && normalize(&fact.statement) == normalize(&incoming.statement)
-                && fact.state == FactState::Active
+                && fact.state == incoming.state
+                && fact.investigation_id == incoming.investigation_id
+                && fact.origin_investigation_id == incoming.origin_investigation_id
+                && matches!(fact.state, FactState::Active | FactState::Proposed)
         });
         if let Some(index) = same {
             let existing = &mut self.facts[index];
@@ -222,6 +244,7 @@ impl SemanticMemory {
             .filter(|fact| {
                 fact.kind == incoming.kind
                     && fact.key.eq_ignore_ascii_case(&incoming.key)
+                    && fact.investigation_id == incoming.investigation_id
                     && matches!(fact.state, FactState::Active | FactState::Conflict)
                     && normalize(&fact.statement) != normalize(&incoming.statement)
             })
@@ -243,7 +266,9 @@ impl SemanticMemory {
                             fact.updated_at_ms = incoming.updated_at_ms;
                         }
                     }
-                    incoming.supersedes = conflicting;
+                    incoming.supersedes.extend(conflicting);
+                    incoming.supersedes.sort();
+                    incoming.supersedes.dedup();
                     self.push(incoming);
                     UpsertOutcome::SupersededExisting
                 } else {
@@ -330,10 +355,43 @@ impl SemanticMemory {
     /// across revisions, while observed facts only become guidance when they
     /// match the current catalog revision. Stale observations and conflicts
     /// are surfaced explicitly so the model cannot silently select one.
-    pub fn prompt_block(&self, current_revision: Option<&str>) -> Option<String> {
+    pub fn prompt_block(
+        &self,
+        current_revision: Option<&str>,
+        current_investigation_id: Option<&str>,
+    ) -> Option<String> {
         let mut trusted = Vec::new();
+        let mut provisional = Vec::new();
         let mut review = Vec::new();
         for fact in &self.facts {
+            let in_scope = fact
+                .investigation_id
+                .as_deref()
+                .is_none_or(|owner| Some(owner) == current_investigation_id);
+            if !in_scope {
+                continue;
+            }
+            if fact.authority == FactAuthority::ModelSuggestion
+                && fact.state == FactState::Proposed
+                && fact.investigation_id.as_deref() == current_investigation_id
+                && current_investigation_id.is_some()
+            {
+                if provisional.len() < 24 {
+                    let age = if fact.is_stale(current_revision) {
+                        "; from an earlier data revision, re-check"
+                    } else {
+                        ""
+                    };
+                    provisional.push(format!(
+                        "- {}: {} [unconfirmed; turn={}{}]",
+                        fact.key,
+                        fact.statement,
+                        fact.supporting_turn.as_deref().unwrap_or("unknown"),
+                        age
+                    ));
+                }
+                continue;
+            }
             if fact.is_promptable(current_revision) {
                 let age = if fact.is_stale(current_revision) {
                     ", prior revision"
@@ -362,17 +420,26 @@ impl SemanticMemory {
                 ));
             }
         }
-        if trusted.is_empty() && review.is_empty() {
+        if trusted.is_empty() && provisional.is_empty() && review.is_empty() {
             return None;
         }
         let mut block = String::from(
-            "Versioned semantic facts for this folder (reference only; the runtime still checks them against the current data):\n",
+            "Versioned semantic facts for this workspace and its current Investigation. They are context, not evidence; the runtime still checks analytical claims against current data:\n",
         );
         if !trusted.is_empty() {
             block.push_str(&trusted.join("\n"));
         }
-        if !review.is_empty() {
+        if !provisional.is_empty() {
             if !trusted.is_empty() {
+                block.push('\n');
+            }
+            block.push_str(
+                "Model-proposed notes from this Investigation only (unconfirmed hypotheses; validate against current evidence before relying on them):\n",
+            );
+            block.push_str(&provisional.join("\n"));
+        }
+        if !review.is_empty() {
+            if !trusted.is_empty() || !provisional.is_empty() {
                 block.push('\n');
             }
             block.push_str(
@@ -398,6 +465,12 @@ impl SemanticMemory {
                 state_label(fact.state),
                 fact.revision.as_deref().unwrap_or("unknown")
             );
+            if let Some(investigation_id) = &fact.investigation_id {
+                metadata.push_str(&format!("; scope=investigation:{investigation_id}"));
+            }
+            if let Some(origin_investigation_id) = &fact.origin_investigation_id {
+                metadata.push_str(&format!("; origin=investigation:{origin_investigation_id}"));
+            }
             if let Some(turn) = &fact.supporting_turn {
                 metadata.push_str(&format!("; turn={turn}"));
             }
@@ -418,10 +491,14 @@ impl SemanticMemory {
 /// Replace the generated `## Semantic facts` section without disturbing the
 /// user-authored notes or unknown sections in `memory.md`.
 pub fn sync_markdown_projection(memory_path: &Path, memory: &SemanticMemory) {
-    if memory.facts.is_empty() {
+    let existing = std::fs::read_to_string(memory_path).unwrap_or_default();
+    if memory.facts.is_empty()
+        && !existing
+            .lines()
+            .any(|line| line.trim().eq_ignore_ascii_case("## Semantic facts"))
+    {
         return;
     }
-    let existing = std::fs::read_to_string(memory_path).unwrap_or_default();
     let mut kept = Vec::new();
     let mut in_generated = false;
     for line in existing.lines() {
@@ -440,8 +517,11 @@ pub fn sync_markdown_projection(memory_path: &Path, memory: &SemanticMemory) {
     if !output.trim().is_empty() {
         output.push_str("\n\n");
     }
-    output.push_str(&memory.markdown_projection());
-    if let Err(error) = std::fs::write(memory_path, output + "\n") {
+    if !memory.facts.is_empty() {
+        output.push_str(&memory.markdown_projection());
+        output.push('\n');
+    }
+    if let Err(error) = std::fs::write(memory_path, output) {
         log::warn!(
             "semantic memory: projection {}: {error}",
             memory_path.display()
@@ -566,7 +646,7 @@ mod tests {
         assert_eq!(memory.facts[0].state, FactState::Superseded);
         assert!(memory.facts[1].is_promptable(Some("r2")));
         assert!(memory
-            .prompt_block(Some("r2"))
+            .prompt_block(Some("r2"), None)
             .unwrap()
             .contains("category = 'rent'"));
     }
@@ -597,7 +677,7 @@ mod tests {
             .facts
             .iter()
             .all(|fact| fact.state == FactState::Conflict));
-        let prompt = memory.prompt_block(Some("r2")).unwrap();
+        let prompt = memory.prompt_block(Some("r2"), None).unwrap();
         assert!(prompt.contains("re-check before using"));
         assert!(!memory.facts[1].is_promptable(Some("r2")));
     }
@@ -627,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn model_suggestions_are_stored_but_never_promptable() {
+    fn model_suggestions_are_not_workspace_promptable() {
         let mut memory = SemanticMemory::default();
         memory.upsert(fact(
             FactKind::Definition,
@@ -638,8 +718,90 @@ mod tests {
             1,
         ));
         assert_eq!(memory.facts[0].state, FactState::Proposed);
-        assert!(memory.prompt_block(Some("r1")).is_none());
+        assert!(memory.prompt_block(Some("r1"), None).is_none());
         assert!(memory.markdown_projection().contains("model suggestion"));
+    }
+
+    #[test]
+    fn investigation_knowledge_is_only_promptable_in_its_own_investigation() {
+        let mut memory = SemanticMemory::default();
+        memory.upsert(fact(
+            FactKind::Definition,
+            "workspace-rule",
+            "use the fiscal calendar",
+            FactAuthority::Confirmed,
+            "r1",
+            1,
+        ));
+        let mut first = fact(
+            FactKind::Definition,
+            "local-rule",
+            "Northstar returns are netted against sales",
+            FactAuthority::Confirmed,
+            "r1",
+            2,
+        );
+        first.investigation_id = Some("investigation-one".into());
+        memory.upsert(first);
+        let mut second = fact(
+            FactKind::Definition,
+            "local-rule",
+            "exclude test accounts from retention",
+            FactAuthority::Confirmed,
+            "r1",
+            3,
+        );
+        second.investigation_id = Some("investigation-two".into());
+        memory.upsert(second);
+        let mut proposed = fact(
+            FactKind::Definition,
+            "revenue-rule",
+            "Northstar net revenue excludes shipping",
+            FactAuthority::ModelSuggestion,
+            "r0",
+            4,
+        );
+        proposed.investigation_id = Some("investigation-one".into());
+        proposed.origin_investigation_id = Some("investigation-one".into());
+        memory.upsert(proposed);
+
+        let first_prompt = memory
+            .prompt_block(Some("r1"), Some("investigation-one"))
+            .unwrap();
+        assert!(first_prompt.contains("use the fiscal calendar"));
+        assert!(first_prompt.contains("Northstar returns are netted against sales"));
+        assert!(first_prompt.contains("Northstar net revenue excludes shipping"));
+        assert!(first_prompt.contains("unconfirmed hypotheses"));
+        assert!(first_prompt.contains("from an earlier data revision, re-check"));
+        assert!(!first_prompt.contains("exclude test accounts"));
+
+        let workspace_prompt = memory.prompt_block(Some("r1"), None).unwrap();
+        assert!(workspace_prompt.contains("use the fiscal calendar"));
+        assert!(!workspace_prompt.contains("Northstar returns"));
+        assert!(!workspace_prompt.contains("exclude test accounts"));
+        assert!(!workspace_prompt.contains("Northstar net revenue"));
+    }
+
+    #[test]
+    fn removing_last_fact_clears_only_generated_projection() {
+        let dir = std::env::temp_dir().join(format!("fella-semantic-empty-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("memory.md");
+        std::fs::write(
+            &path,
+            "# Notes\n\n## User notes\nkeep this\n\n## Semantic facts\nold generated fact\n",
+        )
+        .unwrap();
+        let memory = SemanticMemory {
+            path: facts_path_for(&path),
+            facts: Vec::new(),
+        };
+        sync_markdown_projection(&path, &memory);
+        let output = std::fs::read_to_string(&path).unwrap();
+        assert!(output.contains("keep this"));
+        assert!(!output.contains("Semantic facts"));
+        assert!(!output.contains("old generated fact"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

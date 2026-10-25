@@ -11,26 +11,43 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev",
+		"generate:presentation-catalog": "node scripts/generate-presentation-catalog.mjs",
+		"prebuild": "pnpm generate:presentation-catalog",
 		"build": "vite build",
 		"electron:build": "pnpm build && cargo build --release --locked --manifest-path backend/Cargo.toml && node electron/prepare-engine.mjs",
 		"electron:dev": "pnpm electron:build && node electron/dev.mjs",
 		"electron:run": "pnpm electron:build && electron electron/main.mjs",
 		"electron:package": "pnpm electron:build && electron-builder --publish never",
 		"electron:package:dir": "pnpm electron:build && electron-builder --dir --publish never",
+		"icons:build": "node scripts/generate-app-icons.mjs",
 		"release:check": "node scripts/check-release-version.mjs",
 		"preview": "vite preview",
-		"test:electron-bridge": "node --test scripts/test-electron-bridge.mjs",
-		"test:electron-update": "node --test scripts/test-electron-update.mjs",
-		"test:electron:packaged": "node scripts/test-packaged-electron.mjs",
-		"test:e2e:release:live": "playwright test --config=playwright.live.config.mjs",
+		"test:electron-bridge": "node --test tests/unit/javascript/test-electron-bridge.mjs",
+		"test:ipc-payloads": "node tests/unit/javascript/test-ipc-payloads.mjs",
+		"test:electron-update": "node --test tests/unit/javascript/test-electron-update.mjs",
+		"test:electron:packaged": "node tests/unit/javascript/test-packaged-electron.mjs",
+		"test:e2e:release:live": "playwright test --config=tests/e2e/playwright.live.config.mjs",
+		"test:e2e:workspace": "playwright test --config=tests/e2e/playwright.workspace.config.mjs",
+		"test:e2e:desktop-ui": "playwright test --config=tests/e2e/playwright.desktop-ui.config.mjs",
 		"test:e2e:clarification:live": "pnpm test:e2e:release:live",
-		"test:e2e:release-ui": "playwright test --config=playwright.live.config.mjs --grep=G3",
-		"test:e2e:visual:live": "playwright test --config=playwright.live.config.mjs --grep=G7",
-		"test:e2e:charts:journey": "playwright test --config=playwright.live.config.mjs tests/e2e/charts.journey.live.spec.mjs",
-		"test:e2e:analysis-families:real": "playwright test --config=playwright.live.config.mjs tests/e2e/analysis-families.real.live.spec.mjs",
-		"test:chart-renderer": "node scripts/test-chart-renderer.mjs",
-		"test:release-artifacts": "node --test scripts/test-release-artifacts.mjs",
-		"test:release-config": "node --test scripts/test-release-config.mjs",
+		"test:e2e:release-ui": "playwright test --config=tests/e2e/playwright.live.config.mjs --grep=G3",
+		"test:e2e:visual:live": "playwright test --config=tests/e2e/playwright.live.config.mjs --grep=G7",
+		"test:e2e:charts:journey": "playwright test --config=tests/e2e/playwright.live.config.mjs tests/e2e/charts.journey.live.spec.mjs",
+		"test:e2e:analysis-families:real": "playwright test --config=tests/e2e/playwright.live.config.mjs tests/e2e/analysis-families.real.live.spec.mjs",
+		"test:chart-renderer": "node tests/unit/javascript/test-chart-renderer.mjs",
+		"test:json-render": "node tests/unit/javascript/test-json-render.mjs",
+		"test:presentation-format": "node --experimental-strip-types tests/unit/javascript/test-presentation-format.mjs",
+		"test:studio-report": "node tests/unit/javascript/test-studio-report.mjs",
+		"test:e2e:generative": "playwright test --config=tests/e2e/playwright.generative.config.mjs",
+		"test:e2e:studio-artifacts": "playwright test --config=tests/e2e/playwright.studio-artifacts.config.mjs",
+		"test:workbench": "node tests/unit/javascript/test-workbench-layout.mjs",
+		"test:investigation-brief-proposal": "node tests/unit/javascript/test-investigation-brief-proposal.mjs",
+		"test:investigation-runs": "node tests/unit/javascript/test-investigation-runs.mjs",
+		"test:investigation-report": "node tests/unit/javascript/test-investigation-report.mjs",
+		"test:release-artifacts": "node --test tests/unit/javascript/test-release-artifacts.mjs",
+		"test:release-config": "node --test tests/unit/javascript/test-release-config.mjs",
+		"test:byok-surface": "bash tests/scripts/check-byok-test-surface.sh",
+		"test:visualizations": "bash tests/evals/run-visualizations.sh",
 		"prepare": "svelte-kit sync || echo ''",
 		"postinstall": "install-electron",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
@@ -41,12 +58,18 @@
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.63.0",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tailwindcss/vite": "^4.3.3",
 		"@types/d3-scale": "^4.0.9",
 		"@types/d3-shape": "^3.2.0",
+		"bits-ui": "^2.19.5",
+		"clsx": "^2.1.1",
 		"electron": "44.5.1",
 		"electron-builder": "26.15.2",
 		"svelte": "^5.57.1",
 		"svelte-check": "^4.6.0",
+		"tailwind-merge": "^3.7.0",
+		"tailwind-variants": "^3.3.1",
+		"tailwindcss": "^4.3.3",
 		"typescript": "^6.0.3",
 		"vite": "^8.3.0"
 	},
@@ -55,31 +78,77 @@
 		"productName": "Fella",
 		"asar": true,
 		"artifactName": "Fella_${version}_${arch}.${ext}",
-		"files": ["build/**/*", "electron/**/*", "!electron/engine/**/*", "package.json"],
-		"extraResources": [{ "from": "electron/engine", "to": "fella-engine", "filter": ["fella-engine-*"] }],
-		"directories": { "output": "dist-electron" },
+		"files": [
+			"build/**/*",
+			"electron/**/*",
+			"!electron/engine/**/*",
+			"package.json"
+		],
+		"extraResources": [
+			{
+				"from": "electron/engine",
+				"to": "fella-engine",
+				"filter": [
+					"fella-engine-*"
+				]
+			},
+			{
+				"from": "electron/fella-sample-data",
+				"to": "fella-sample-data"
+			}
+		],
+		"directories": {
+			"output": "dist-electron"
+		},
 		"mac": {
 			"icon": "electron/icons/icon.icns",
-			"target": [{ "target": "dmg", "arch": ["universal"] }, { "target": "zip", "arch": ["universal"] }],
+			"target": [
+				{
+					"target": "dmg",
+					"arch": [
+						"universal"
+					]
+				},
+				{
+					"target": "zip",
+					"arch": [
+						"universal"
+					]
+				}
+			],
 			"x64ArchFiles": "**/fella-engine-*",
 			"category": "public.app-category.productivity"
 		},
 		"win": {
 			"icon": "electron/icons/icon.ico",
-			"target": ["nsis", "msi"]
+			"target": [
+				"nsis",
+				"msi"
+			]
 		},
 		"linux": {
 			"icon": "electron/icons/icon.png",
 			"artifactName": "Fella_${version}_x64.${ext}",
 			"maintainer": "Avijit Kumar and contributors",
 			"syncDesktopName": true,
-			"target": ["AppImage", "deb"],
+			"target": [
+				"AppImage",
+				"deb"
+			],
 			"category": "Utility"
 		}
 	},
 	"dependencies": {
+		"@json-render/core": "0.21.1",
+		"@json-render/svelte": "0.21.1",
+		"@lucide/svelte": "^1.53.0",
 		"d3-scale": "^4.0.2",
 		"d3-shape": "^3.2.0",
-		"marked": "^18.0.13"
+		"html-to-image": "^1.11.13",
+		"marked": "^18.0.13",
+		"vega": "6.4.0",
+		"vega-interpreter": "2.3.2",
+		"vega-lite": "6.5.0",
+		"zod": "4.6.6"
 	}
 }

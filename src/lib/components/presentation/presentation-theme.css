@@ -1,0 +1,497 @@
+/* Shared visual language for generated analytical presentations. Keep this
+   local to the presentation renderer; it reuses Fella's application tokens. */
+.analytical-document {
+	container-type: inline-size;
+	display: grid;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+	gap:12px;
+	color:var(--chat-body);
+	font-size: var(--fs);
+	line-height: var(--lh);
+	overflow-wrap: anywhere;
+}
+
+.analytical-document *,
+.analytical-document *::before,
+.analytical-document *::after {
+	box-sizing: border-box;
+}
+
+.analytical-document :where(img, svg, canvas, video) {
+	max-width: 100%;
+}
+
+.analytical-document :where(h1, h2, h3, h4, h5, p, figure, dl) {
+	margin-block-start: 0;
+}
+
+.analytical-document :where(h1, h2, h3, h4, h5) {
+	color: var(--text);
+	line-height: 1.28;
+	letter-spacing: -0.02em;
+}
+
+.analytical-document :where(button, select, summary, input) {
+	font: inherit;
+}
+
+.analytical-document :where(button, select, summary) {
+	-webkit-tap-highlight-color: transparent;
+}
+
+.analytical-document :where(button, select, summary, input):focus-visible,
+.analytical-document [role='tabpanel']:focus-visible {
+	outline: 2px solid color-mix(in srgb, var(--link) 55%, transparent);
+	outline-offset: 2px;
+}
+
+.analytical-document :where(.presentation-card, .presentation-metric) {
+	min-width: 0;
+	border: 1px solid var(--border);
+	border-radius: var(--radius-window);
+	background: var(--bg-raised);
+}
+
+.analytical-document .presentation-card {
+	container-type: inline-size;
+	padding: var(--space-4);
+}
+
+.analytical-document .presentation-card .presentation-metric {
+	border-color: transparent;
+	background: var(--bg-inset);
+}
+
+.analytical-document .presentation-metric {
+	display: flex;
+	min-height: 124px;
+	flex-direction: column;
+	padding: var(--space-4);
+}
+
+.analytical-document .presentation-metric dl {
+	display: grid;
+	min-width: 0;
+	gap: 3px;
+	margin: 0;
+}
+
+.analytical-document .presentation-metric dt {
+	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-1) var(--space-2);
+	color: var(--text-dim);
+	font-size: var(--fs-sm);
+	line-height: 1.4;
+}
+
+.analytical-document .presentation-metric dd {
+	min-width: 0;
+	margin: 0;
+	color: var(--text);
+	font-size: clamp(1.25rem, 5cqi, 1.75rem);
+	font-weight: 620;
+	line-height: 1.28;
+	letter-spacing: -0.025em;
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.analytical-document .presentation-metric dd.detail {
+	margin-top: 2px;
+	color: var(--text-faint);
+	font-size: var(--fs-sm);
+	font-weight: 400;
+	line-height: 1.45;
+	letter-spacing: 0;
+}
+
+.analytical-document .presentation-exact-value {
+	margin-top: auto;
+	padding-top: var(--space-2);
+	color: var(--text-faint);
+	font-size: var(--fs-xs);
+}
+
+.analytical-document .presentation-exact-value summary {
+	width: fit-content;
+	cursor: pointer;
+}
+
+.analytical-document .presentation-exact-value code {
+	display: block;
+	margin-top: var(--space-1);
+	color: var(--text-dim);
+	font-family: var(--mono);
+	font-size: var(--fs-xs);
+	font-variant-numeric: tabular-nums;
+	overflow-wrap: anywhere;
+}
+
+.analytical-document :where(.presentation-grid, .presentation-columns) {
+	container-type: inline-size;
+	display: grid;
+	min-width: 0;
+	grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
+	gap: var(--space-3);
+}
+
+.analytical-document :where(.presentation-grid > *, .presentation-columns > *) {
+	min-width: 0;
+}
+
+/* Grid's anonymous child wrappers are layout containers too. Without this,
+   a nested Grid measures its wide ancestor instead of the actual cell it is
+   rendered in, so it can keep several columns inside a narrow column and
+   squeeze its content down to character-width. */
+.analytical-document .presentation-grid > * {
+	container-type: inline-size;
+}
+
+.analytical-document :where(.presentation-section-content, .presentation-card-content, .presentation-column, .presentation-row-item, .presentation-tab-panel) {
+	container-type: inline-size;
+	min-width: 0;
+}
+
+.analytical-document .presentation-row {
+	container-type: inline-size;
+	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
+	align-items: var(--align, center);
+	gap: var(--gap, var(--space-3));
+}
+
+.analytical-document .presentation-row-item {
+	flex: 0 1 auto;
+	max-width: 100%;
+}
+
+.analytical-document .presentation-row-item[data-kind='Chart'],
+.analytical-document .presentation-row-item[data-kind='Table'],
+.analytical-document .presentation-row-item[data-kind='Card'],
+.analytical-document .presentation-row-item[data-kind='Section'],
+.analytical-document .presentation-row-item[data-kind='Columns'],
+.analytical-document .presentation-row-item[data-kind='Grid'],
+.analytical-document .presentation-row-item[data-kind='Tabs'],
+.analytical-document .presentation-row-item[data-kind='Metric'] {
+	flex: 1 1 min(17rem, 100%);
+}
+
+.analytical-document .presentation-table-scroll {
+	width: 100%;
+	max-width: 100%;
+	max-height: 28rem;
+	overflow-x: hidden;
+	overflow-y: auto;
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	outline-offset: 3px;
+}
+
+.analytical-document .presentation-table-scroll table {
+	width: 100%;
+	max-width: 100%;
+	table-layout: fixed;
+	border-collapse: collapse;
+	color: var(--text);
+	text-align: left;
+	font:11.5px/1.5 var(--mono);
+	font-variant-numeric:tabular-nums;
+}
+
+.analytical-document .presentation-table-scroll th,
+.analytical-document .presentation-table-scroll td {
+	max-width: 30rem;
+	padding:6px 8px;
+	border-bottom: 1px solid var(--border);
+	vertical-align: top;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: normal;
+}
+
+.analytical-document .presentation-table-scroll th {
+	position: sticky;
+	top: 0;
+	background:color-mix(in srgb,var(--bg-raised-2) 60%,var(--bg-raised));
+	color: var(--text-dim);
+	font-weight: 550;
+}
+
+.analytical-document .presentation-table-scroll tbody tr:last-child td {
+	border-bottom: 0;
+}
+
+.analytical-document :where(.presentation-page-nav, .presentation-result-nav) {
+	display: flex;
+	min-width: 0;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--space-2);
+	margin-top: var(--space-2);
+	color: var(--text-faint);
+	font-size: var(--fs-xs);
+}
+
+.analytical-document :where(.presentation-button, .presentation-action, .presentation-page-nav button, .presentation-result-nav button) {
+	display: inline-flex;
+	max-width: 100%;
+	min-height: 34px;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	padding: 6px 12px;
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	background: var(--bg-raised);
+	color: var(--text);
+	font-size: var(--fs-sm);
+	line-height: 1.3;
+	text-align: center;
+	text-decoration: none;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+	transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+}
+
+.analytical-document :where(.presentation-button, .presentation-action, .presentation-page-nav button, .presentation-result-nav button):hover:not(:disabled) {
+	border-color: var(--border-strong);
+	background: var(--bg-inset);
+}
+
+.analytical-document :where(.presentation-button, .presentation-action, .presentation-page-nav button, .presentation-result-nav button):disabled {
+	color: var(--text-faint);
+	cursor: default;
+	opacity: 0.55;
+}
+
+.analytical-document :where(.presentation-filter details, .presentation-filter summary, .presentation-select select) {
+	max-width: 100%;
+}
+
+.analytical-document .presentation-filter summary {
+	min-height: 36px;
+	border: 1px solid var(--border-strong);
+	border-radius: 999px;
+	background: var(--bg-raised);
+	color: var(--text);
+}
+
+.analytical-document .presentation-filter-options {
+	box-sizing: border-box;
+	width: max-content;
+	min-width: min(13rem, calc(100vw - 2rem));
+	max-width: min(24rem, calc(100vw - 2rem));
+	border: 1px solid var(--border);
+	border-radius: var(--radius-window);
+	background: var(--bg-raised);
+	box-shadow: var(--shadow-pop);
+	overflow-x: hidden;
+	overflow-y: auto;
+}
+
+.analytical-document .presentation-filter-options button {
+	max-width: 100%;
+	white-space: normal;
+	overflow-wrap: anywhere;
+}
+
+.analytical-document .presentation-select select {
+	min-height: 38px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	color: var(--text);
+}
+
+.analytical-document .presentation-segments,
+.analytical-document .presentation-tab-list {
+	display: flex;
+	width: fit-content;
+	max-width: 100%;
+	flex-wrap: wrap;
+	gap: 3px;
+	padding: 3px;
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	background: var(--bg-inset);
+}
+
+.analytical-document :where(.presentation-segments, .presentation-tab-list) button {
+	min-width: 0;
+	max-width: 100%;
+	min-height: 32px;
+	flex: 0 1 auto;
+	padding: 5px 11px;
+	border: 0;
+	border-radius: 999px;
+	background: transparent;
+	color: var(--text-dim);
+	font-size: var(--fs-sm);
+	line-height: 1.35;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	cursor: pointer;
+}
+
+.analytical-document :where(.presentation-segments, .presentation-tab-list) button[aria-pressed='true'],
+.analytical-document .presentation-tab-list button[aria-selected='true'] {
+	background: var(--bg-raised);
+	color: var(--text);
+	box-shadow: var(--shadow-sm);
+}
+
+.analytical-document .presentation-chart {
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.analytical-document .presentation-chart-target,
+.analytical-document .presentation-chart-target :where(.vega-embed, canvas, svg) {
+	display: block;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.analytical-document .fella-chart-view {
+	position: relative;
+}
+
+.analytical-document .fella-chart-tooltip {
+	position: absolute;
+	z-index: 2;
+	box-sizing: border-box;
+	width: max-content;
+	max-width: min(216px, calc(100% - 16px));
+	padding: 8px 10px;
+	border: 1px solid var(--border-strong);
+	border-radius: var(--radius);
+	background: var(--bg-raised);
+	color: var(--text);
+	box-shadow: var(--shadow-pop);
+	font-size: var(--fs-xs);
+	line-height: 1.4;
+	font-variant-numeric: tabular-nums;
+	white-space: normal;
+	overflow-wrap: anywhere;
+	pointer-events: none;
+}
+
+.analytical-document .fella-chart-tooltip[hidden] {
+	display: none;
+}
+
+.analytical-document .fella-chart-tooltip-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: baseline;
+	gap: 12px;
+}
+
+.analytical-document .fella-chart-tooltip-row + .fella-chart-tooltip-row {
+	margin-top: 3px;
+}
+
+.analytical-document .fella-chart-tooltip-label {
+	min-width: 0;
+	color: var(--text-dim);
+}
+
+.analytical-document .fella-chart-tooltip-value {
+	min-width: 0;
+	color: var(--text);
+	text-align: right;
+	font-weight: 550;
+}
+
+.analytical-document .presentation-chart-target :where(canvas, svg) {
+	height: auto;
+}
+
+@container (max-width: 620px) {
+	.analytical-document :where(.presentation-grid, .presentation-columns) {
+		grid-template-columns: repeat(min(var(--columns), 2), minmax(0, 1fr));
+	}
+}
+
+@container (max-width: 480px) {
+	.analytical-document :where(.presentation-grid, .presentation-columns) {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.analytical-document .presentation-table-scroll {
+		border: 0;
+		border-radius: 0;
+		background: transparent;
+	}
+
+	.analytical-document .presentation-table-scroll table,
+	.analytical-document .presentation-table-scroll tbody,
+	.analytical-document .presentation-table-scroll tr,
+	.analytical-document .presentation-table-scroll td {
+		display: block;
+		width: 100%;
+		max-width: 100%;
+	}
+
+	.analytical-document .presentation-table-scroll thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip: rect(0, 0, 0, 0);
+		white-space: nowrap;
+		clip-path: inset(50%);
+	}
+
+	.analytical-document .presentation-table-scroll tbody {
+		display: grid;
+		gap: var(--space-2);
+	}
+
+	.analytical-document .presentation-table-scroll tbody tr {
+		min-width: 0;
+		padding: var(--space-2) var(--space-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+	}
+
+	.analytical-document .presentation-table-scroll td {
+		display: grid;
+		grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+		gap: var(--space-2);
+		padding: 6px 0;
+		border-bottom: 1px solid var(--border);
+		font-size: var(--fs-sm);
+	}
+
+	.analytical-document .presentation-table-scroll td:last-child {
+		border-bottom: 0;
+	}
+
+	.analytical-document .presentation-table-scroll td::before {
+		content: attr(data-label);
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.45;
+	}
+
+	.analytical-document .presentation-tab-list {
+		width: 100%;
+		border-radius: var(--radius-window);
+	}
+
+	.analytical-document .presentation-tab-list button {
+		flex: 1 1 auto;
+	}
+}

@@ -158,13 +158,15 @@ test('G3: Stop retains completed SQL evidence and prevents later streamed text',
 		await composer.press('Enter');
 		const assistant = page.locator('.msg.assistant').last();
 		await expect(assistant.locator('.text.rich')).toContainText('The total is', { timeout: 20_000 });
-		await expect(page.getByRole('button', { name: 'Stop' })).toBeVisible();
-		await page.getByRole('button', { name: 'Stop' }).click();
+		const stopButton = page.getByRole('button', { name: 'Stop' });
+		await expect(stopButton).toBeVisible();
+		await expect(stopButton).toHaveAttribute('data-slot', 'button');
+		await stopButton.click();
 		await expect(assistant.locator('.text.rich')).toContainText('Stopped.', { timeout: 10_000 });
 		await expect(assistant.locator('.text.rich')).not.toContainText('LATE_TOKEN_SHOULD_NOT_APPEAR');
 		await expect.poll(() => slowResponseClosed, { timeout: 5_000 }).toBe(true);
 
-		const details = assistant.getByRole('button', { name: 'Analysis details' });
+		const details = assistant.getByRole('button', { name: 'How this was analyzed' });
 		await expect(details).toBeVisible();
 		await details.click();
 		await expect(assistant).toContainText('sales.csv');
@@ -271,14 +273,18 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 		const clarification = page.locator('.dock .clarification-field');
 		await expect(clarification).toBeVisible({ timeout: 30_000 });
 		await expect(page.getByRole('combobox', { name: /Ask about/ })).toHaveCount(0);
-		await expect(clarification.locator('.clarification-options button')).toHaveCount(2);
+		const clarificationChoices = clarification.locator('.clarification-options button');
+		await expect(clarificationChoices).toHaveCount(2);
+		await expect(clarificationChoices.first()).toHaveAttribute('data-slot', 'button');
 		await expect(clarification.getByRole('textbox', { name: 'Other interpretation' })).toBeVisible();
 		const clarificationScreenshot = test.info().outputPath('clarification-composer.png');
 		await mkdir(dirname(clarificationScreenshot), { recursive: true });
 		await clarification.screenshot({ path: clarificationScreenshot });
 
 		const assistantCountBeforeChoice = await page.locator('.msg.assistant').count();
-		await clarification.getByRole('button', { name: /Rent and utilities/ }).click();
+		const clarificationChoice = clarification.getByRole('button', { name: /Rent and utilities/ });
+		await expect(clarificationChoice).toHaveAttribute('data-slot', 'button');
+		await clarificationChoice.click();
 		await expect(page.locator('.msg.user').last()).toContainText('Rent and utilities');
 		await expect.poll(() => page.locator('.msg.assistant').count(), {
 			timeout: 30_000,
@@ -293,8 +299,12 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 		await composer.press('Enter');
 		await expect(clarification).toBeVisible({ timeout: 30_000 });
 		const other = clarification.getByRole('textbox', { name: 'Other interpretation' });
+		const continueClarification = clarification.getByRole('button', { name: 'Continue with this interpretation' });
+		await expect(continueClarification).toHaveAttribute('data-slot', 'button');
+		await expect(continueClarification).toBeDisabled();
 		await other.fill('Rent only, excluding utilities and repairs.');
-		await clarification.getByRole('button', { name: 'Continue with this interpretation' }).click();
+		await expect(continueClarification).toBeEnabled();
+		await continueClarification.click();
 		await expect(page.locator('.msg.user').last()).toContainText('Rent only, excluding utilities and repairs.');
 		await expect(page.locator('.msg.assistant').last().locator('.text.rich')).toContainText(
 			'Thanks, I will continue with that scope.',
@@ -311,7 +321,7 @@ test('G5: typed clarification replaces the composer, accepts a choice and Other,
 	}
 });
 
-test('G8: the mounted-workspace composer remains visible at the reported and compact sizes', async () => {
+test('G8: the mounted-workspace composer stays inside its conversation pane at reported and compact sizes', async () => {
 	const dataDir = await mkdtemp(join(tmpdir(), 'fella-electron-composer-layout-'));
 	const workspace = join(dataDir, 'workspace');
 	await mkdir(workspace);
@@ -323,8 +333,9 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 		await page.waitForLoadState('domcontentloaded');
 		await mountWorkspace(app, page, workspace);
 
-		const composer = page.locator('.dock .wrap');
+		const composer = page.locator('.workspace-preset-conversation .dock .wrap');
 		await expect(composer).toBeVisible();
+		await expect(page.locator('.workspace-window > .dock')).toHaveCount(0);
 		for (const viewport of [
 			{ width: 1288, height: 832 },
 			{ width: 1024, height: 640 }
@@ -354,15 +365,16 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 						clientHeight: document.documentElement.clientHeight,
 						scrollHeight: document.documentElement.scrollHeight
 					},
-					dock: rect('.dock'),
-					composer: rect('.dock .wrap'),
-					field: rect('.dock .field'),
-					context: rect('.dock .context-row'),
-					contextButton: rect('.dock .context-add'),
-					question: rect('.dock textarea'),
-					controls: rect('.dock .bottom-row'),
-					modeControl: rect('.dock .mode-trigger'),
-					modelControl: rect('.dock .model-trigger')
+					conversation: rect('.workspace-preset-conversation'),
+					dock: rect('.workspace-preset-conversation .dock'),
+					composer: rect('.workspace-preset-conversation .dock .wrap'),
+					field: rect('.workspace-preset-conversation .dock .field'),
+					context: rect('.workspace-preset-conversation .dock .context-row'),
+					contextButton: rect('.workspace-preset-conversation .dock .context-add'),
+					question: rect('.workspace-preset-conversation .dock textarea'),
+					controls: rect('.workspace-preset-conversation .dock .bottom-row'),
+					modeControl: rect('.workspace-preset-conversation .dock .mode-trigger'),
+					modelControl: rect('.workspace-preset-conversation .dock .model-trigger')
 				};
 			});
 			assert.equal(layout.viewport.width, viewport.width, 'renderer width should match the requested test viewport');
@@ -378,6 +390,10 @@ test('G8: the mounted-workspace composer remains visible at the reported and com
 				assert.ok(bounds.top >= 0 && bounds.bottom <= layout.viewport.height,
 					`${name} should remain fully inside the viewport at ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
 			}
+			assert.ok(layout.composer.left >= layout.conversation.left && layout.composer.right <= layout.conversation.right,
+				`composer should remain horizontally inside its conversation pane: ${JSON.stringify(layout)}`);
+			assert.ok(layout.composer.top >= layout.conversation.top && layout.composer.bottom <= layout.conversation.bottom,
+				`composer should remain vertically inside its conversation pane: ${JSON.stringify(layout)}`);
 			assert.ok(layout.root.scrollHeight <= layout.root.clientHeight,
 				`the renderer document should not extend below its viewport at ${viewport.width}x${viewport.height}: ${JSON.stringify(layout)}`);
 		}
@@ -514,7 +530,7 @@ test('G7 forecast: live forecast completes and exposes its method and source det
 		await expect(forecastAnswer.locator('.thinking')).toHaveCount(0);
 		assert.ok((await answerText.innerText()).trim(), 'the forecast request should produce a settled response');
 
-		const analysisDetails = forecastAnswer.getByRole('button', { name: 'Analysis details' });
+		const analysisDetails = forecastAnswer.getByRole('button', { name: 'How this was analyzed' });
 		await expect(analysisDetails).toBeVisible();
 		await analysisDetails.click();
 		await expect(analysisDetails).toHaveAttribute('aria-expanded', 'true');

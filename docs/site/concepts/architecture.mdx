@@ -1,113 +1,78 @@
 ---
 title: "Architecture"
-description: "How Fella separates the model, harness, and analytics engine."
+description: "How the desktop shell, model harness, Rust engine, and saved analytical work fit together."
 icon: "layers"
 ---
 
-> Fella separates model judgment from application control and data execution.
+Fella separates model judgment from data execution and saved analytical state. The model can direct an investigation, but the app and Rust engine control what it can inspect and how results are recorded.
 
-## Definition
-
-Fella has three cooperating parts:
+## The main parts
 
 | Part | Responsibility |
 | --- | --- |
-| Model | Proposes tool calls and writes the response |
-| Harness | Builds context, exposes tools, runs the loop, records evidence, and finishes the answer |
-| Engine | Catalogs files and implements local SQL, document, Python, chart, and verification operations |
+| Electron desktop shell | Owns the native window, menus, OS integration, and application lifecycle. |
+| Svelte 5 interface | Renders Chat, Files, Reports, Notebook, answer presentations, and review controls. |
+| Rust sidecar | Owns provider requests, the agent loop, data access, analysis records, artifacts, and deterministic verification. |
+| Model provider | Interprets the request, proposes tool calls, and composes the answer and structured presentation. |
+| Local workspace engine | Catalogs supported files and runs bounded SQL, document, Python, and chart operations. |
 
-The separation keeps providers replaceable and puts tool execution outside the model request.
+The renderer communicates through an allowlisted preload bridge. Electron starts the Rust engine as a local JSON-lines sidecar. The model has no direct filesystem path, database handle, shell, or Electron API.
 
-## Architecture
+## One analytical request
 
-```text filename="architecture overview"
-question + context
-        |
-        v
-  +-----+------+       +----------------+
-  |  Harness   |<----->| Model provider |
-  +-----+------+       +----------------+
-        |
-   tool calls
-        v
-  +-----+------+     +----------------+
-  |  Registry  |---->| Analytics      |
-  +-----+------+     | engine         |
-        |            +-------+--------+
-        |                    |
-        +--------> ToolOutput/results
-                         |
-                         v
-                      Evidence
-                         |
-                         v
-                      Verification
-```
+1. The user asks in a conversation and may select a mounted workspace.
+2. The harness snapshots the workspace revision and assembles the immediate request, relevant context, Question scope, and tool schemas.
+3. The selected model directs the analysis. The engine runs only registered operations and returns bounded results.
+4. The harness records each tool result as evidence and runs deterministic checks against the saved work.
+5. The canonical answer is saved with its analysis run. When useful results support a structured view, the model composes a JSON-render document bound to those results.
+6. The renderer validates and displays the view. The saved answer and evidence remain available if presentation composition or rendering fails.
 
-The model receives text context, tool schemas, and returned tool results. It does not receive a database handle or a general application API. The harness is the only path from model tool calls to the registered implementations. The registry turns a tool result into an evidence item; the analytics engine itself returns computation, not evidence.
+## Product data model
 
-## Flow
+An explicit mounted folder is the **workspace**. It is not the window’s panel layout. A workspace can contain many conversations and Investigations. Creating an Investigation creates its linked conversation; an ordinary new conversation does not automatically create one.
 
-1. The engine scans an open folder and prepares a catalog and queryable tables.
-2. The harness combines that schema with the question, conversation context, `fella.md`, and folder memory.
-3. The selected model either answers or proposes one or more tool calls.
-4. The harness executes registered calls and records their results as evidence.
-5. The loop repeats until the model answers or a stop condition is reached.
-6. Deterministic verification runs before the completed answer is emitted. Some warnings can also trigger an optional, tool-free model second opinion.
+The Investigation owns a brief, Questions, source selections, definitions and assumptions, linked analysis runs, and Findings. Each run preserves the workspace revision and context it used. Saved artifacts and reports live separately from the transcript, so deleting a conversation can retain intentionally saved work and its supporting records.
 
-## Behavior
+The user-facing report destination is **Reports**. A report document can place exact revisions of workspace-owned artifacts and keep authored narrative. Report placements do not rerun analysis.
 
-The engine does not call an LLM and is exposed to analytics code through a narrow `AnalyticsSource` trait. The Svelte frontend communicates with Electron's main process through a context-isolated preload; Electron launches the Rust engine as a sidecar over newline-delimited JSON. The frontend renders answers, evidence, tabs, and controls.
+## Analytical presentations
 
-The standard registry contains seven fixed built-in tools. There is no runtime
-connector or plugin expansion path in the personal release.
+JSON-render is a presentation layer over engine-produced results, not a second analytics runtime. The model selects registered components and composes an answer-specific hierarchy. Tables and charts bind to accepted result IDs and fields; presentation controls are limited to display state or explicit user-triggered follow-ups.
 
-## The narrow engine seam
-
-The verifier does not receive the whole application state. It receives only the catalog and read-only SQL capability it needs:
-
-```rust
-pub trait AnalyticsSource {
-    fn catalog(&self) -> Catalog;
-    fn run_sql(&self, sql: &str) -> EngineResult<QueryResult>;
-}
-```
-
-`EngineState` implements this trait by delegation. That keeps verification independent of desktop-shell IPC, credentials, conversation state, and the model provider. See the [engine implementation](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/analytics/mod.rs) and the [state adapter](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/state.rs).
+The renderer receives no permission to query files or execute arbitrary code. A structured view can be validated independently of the canonical prose answer. If validation fails, the answer and analysis record remain inspectable.
 
 ## Ownership map
 
-| Concern | Current owner | Boundary |
-| --- | --- | --- |
-| Prompt, model turns, stopping, cancellation | [`agent.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/agent.rs) | Does not implement SQL, parsing, or statistics |
-| Built-in and runtime tool dispatch | [`tools.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/tools.rs) | Converts tool output into the shape the harness records |
-| Catalog and data access | [`analytics/data/`](https://github.com/Avijit-Kumar-GIT/fella/tree/main/backend/src/engine/analytics/data) and `catalog.rs` | Does not call an LLM |
-| Evidence and streamed answer contract | [`evidence.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/evidence.rs) | Serializes results for the Svelte client |
-| Post-answer checks | [`analytics/verify.rs`](https://github.com/Avijit-Kumar-GIT/fella/blob/main/backend/src/engine/analytics/verify.rs) | Checks recorded work; does not prove intent |
+| Concern | Owner |
+| --- | --- |
+| Provider request and model loop | Rust harness |
+| Source catalog, SQL, Python bridge, and chart data | Rust analytics engine |
+| Evidence and verification records | Rust engine and analysis store |
+| Investigation Questions, definitions, Findings, and coverage | Investigation store |
+| Saved output revisions and report documents | Artifact and report store |
+| Component rendering and responsive layout | Svelte client |
 
-For the user-facing version of this flow, see [read the evidence](/developer-platform/using-fella/evidence). For provider and Python network boundaries, see [privacy and security](/developer-platform/using-fella/privacy).
+The split makes the model replaceable without changing local ingestion, tool boundaries, or verification. It also keeps presentations from becoming an alternate source of analytical facts.
 
 ## Limits
 
-- The model can still choose the wrong query or misread an ambiguous question.
-- Deterministic verification checks evidence consistency and known query patterns; it does not prove the user's intended meaning.
-- The SQL and document paths are bounded and read-only. `run_python` uses the same host-side data boundary from an embedded WASM guest; it has no filesystem, network, environment, or subprocess capability and is bounded by Wasmi resource limits.
-- A hosted model provider sees the prompt and tool results sent to it. The
-  inert `/mcp` command makes no separate network request.
-
-## Next steps
+- A valid computation can still use the wrong interpretation or population.
+- Verification checks recorded work and known failure patterns; it cannot prove every conclusion.
+- Hosted providers receive prompt context and the results requested during analysis.
+- The fixed tool registry has no shell, file-write, web-search, or general connector capability.
+- The report dependency view discovers explicit report placements and checkpoints, not every prose reference or external copy.
 
 <CardGroup cols={2}>
-  <Card title="Follow the loop" icon="workflow" href="/concepts/harness">
-    See how context, tool calls, stopping, and verification fit together.
+  <Card title="The harness" icon="workflow" href="/concepts/harness">
+    See the control flow from a question to its recorded result.
   </Card>
-  <Card title="Inspect the engine" icon="database" href="/concepts/engine">
-    See how files become local tables, documents, and evidence.
+  <Card title="The analytics engine" icon="database" href="/concepts/engine">
+    See how supported files become bounded local analysis inputs.
   </Card>
-  <Card title="Inspect the tools" icon="wrench" href="/concepts/tools">
-    Review the seven fixed built-ins and their execution boundaries.
+  <Card title="Verification" icon="badge-check" href="/concepts/verification">
+    Understand what checks can and cannot establish.
   </Card>
-  <Card title="Choose a model" icon="cpu" href="/concepts/model-layer">
-    Review provider protocols, credentials, and network boundaries.
+  <Card title="Product model" icon="layers" href="/product-model">
+    See the user-facing objects and their relationships.
   </Card>
 </CardGroup>

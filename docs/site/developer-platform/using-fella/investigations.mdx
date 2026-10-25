@@ -1,0 +1,60 @@
+---
+title: "Investigations"
+description: "Organize a named analytical effort, its Questions, sources, runs, Findings, and coverage."
+icon: "notebook-pen"
+---
+
+An Investigation is the persistent record for one bounded analytical effort. It has a name, objective, Questions, source choices, analysis history, and saved Findings. Its linked conversation is where you ask the model to do the work.
+
+## Start an Investigation
+
+In a mounted workspace, use the **Investigations** section in Chat and choose **New Investigation**. Give it a useful name. Fella creates a linked conversation for it; later, select the Investigation to return to that conversation and its Notebook.
+
+A normal new conversation remains an ordinary chat. It does not create an Investigation just because a folder is mounted. Use an Investigation when you want a named, resumable plan with tracked Questions and results.
+
+## Work in Notebook
+
+Open the Investigation in Notebook beside Chat. The main sections are:
+
+| Section | What you can do |
+| --- | --- |
+| Brief | Rename the Investigation and edit its objective and constraints. |
+| Sources | Review the workspace catalog and choose which files are in scope. |
+| Questions | Add, edit, order, and scope the root Question and its subquestions. |
+| Analysis | Open a saved run, inspect its method and source revision, and review evidence and checks. |
+| Results | Review current answers, Findings, caveats, unresolved Questions, and coverage. |
+
+The separate **Share** action previews and exports a report from saved Investigation work. The Conversation is still the place to ask and follow up. Notebook summarizes and organizes that work; switching to it does not rerun a query. Analysis details are collapsed until opened, so current Question coverage remains easier to scan.
+
+## Questions and source scope
+
+An Investigation can have one main Question and smaller Questions beneath it. Suggested decompositions are drafts until saved. Each Question has a state such as not started, running, answered, incomplete, unsupported, insufficient data, needs review, waiting for input, blocked, or outdated.
+
+A Question can inherit the Investigation’s selected files or narrow the scope to a chosen source set. The run records the actual files used and the exact workspace revision. The catalog’s available tables and documents are readiness information; their presence alone does not prove they cover the requested population or period.
+
+## Definitions, assumptions, and Findings
+
+Definitions and assumptions are explicit Investigation context. Later runs record the exact revisions they received, so editing a definition does not change the historical context of an earlier run.
+
+A Finding is a saved conclusion attached to a Question, analysis run, and evidence. It can carry caveats and assumptions. Editing a Finding creates a revision with history; it does not overwrite the earlier claim or replace its supporting run.
+
+## Completion and changed sources
+
+Run completion and Investigation completion are different. An Investigation is complete only when its active Questions have an answer or a clearly documented gap. Unresolved work remains visible in Results and in report handoff.
+
+After the mounted folder changes, refresh the workspace catalog. Fella can mark Questions and Findings based on an older source revision as outdated. The saved answer stays unchanged; review it and explicitly choose whether to rerun.
+
+## Share the work
+
+The Share action builds a preview from the saved brief, active Questions, Findings, runs, methods, evidence, checks, and caveats. Review unresolved Questions and the preview before exporting. The output is a Markdown file; it does not require the model to repeat the analysis.
+
+For reports that combine multiple saved outputs and authored notes, use the **Reports** sidebar section. See [Reports and saved outputs](/developer-platform/using-fella/reports).
+
+<CardGroup cols={2}>
+  <Card title="Read analysis evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Inspect a run without confusing it with the generated presentation.
+  </Card>
+  <Card title="Product model" icon="layers" href="/product-model">
+    Understand how the Investigation relates to Chat, Findings, and Reports.
+  </Card>
+</CardGroup>

@@ -6,6 +6,7 @@ authors = ["Avijit Kumar and contributors"]
 license = "MIT"
 edition = "2021"
 rust-version = "1.93"   # RustPython 0.5 (the embedded Python guest) needs 1.93
+autotests = false
 
 [lib]
 name = "fella_lib"
@@ -31,12 +32,88 @@ eval = []
 name = "agent_eval"
 required-features = ["eval"]
 
+[[example]]
+name = "python_e2e"
+path = "../tests/evals/python_e2e.rs"
+
+[[test]]
+name = "agent_loop"
+path = "../tests/rust/agent_loop.rs"
+
+[[test]]
+name = "auth"
+path = "../tests/rust/auth.rs"
+
+[[test]]
+name = "capability_policy"
+path = "../tests/rust/capability_policy.rs"
+
+[[test]]
+name = "conversations"
+path = "../tests/rust/conversations.rs"
+
+[[test]]
+name = "electron_sidecar"
+path = "../tests/rust/electron_sidecar.rs"
+
+[[test]]
+name = "fs_tools"
+path = "../tests/rust/fs_tools.rs"
+
+[[test]]
+name = "ingest_cap"
+path = "../tests/rust/ingest_cap.rs"
+
+[[test]]
+name = "max_steps"
+path = "../tests/rust/max_steps.rs"
+
+[[test]]
+name = "messy_fixture"
+path = "../tests/rust/messy_fixture.rs"
+
+[[test]]
+name = "mount_scale"
+path = "../tests/rust/mount_scale.rs"
+
+[[test]]
+name = "python_tool"
+path = "../tests/rust/python_tool.rs"
+
+[[test]]
+name = "qc"
+path = "../tests/rust/qc.rs"
+
+[[test]]
+name = "recovery"
+path = "../tests/rust/recovery.rs"
+
+[[test]]
+name = "semantic_filters"
+path = "../tests/rust/semantic_filters.rs"
+
+[[test]]
+name = "session_memory"
+path = "../tests/rust/session_memory.rs"
+
+[[test]]
+name = "sql_timeout"
+path = "../tests/rust/sql_timeout.rs"
+
+[[test]]
+name = "workspace"
+path = "../tests/rust/workspace.rs"
+
+[[test]]
+name = "workspace_inventory"
+path = "../tests/rust/workspace_inventory.rs"
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 log = "0.4"
 thiserror = "2"
-rusqlite = { version = "0.40.2", features = ["bundled", "window"] }
+rusqlite = { version = "0.40.2", features = ["bundled", "window", "hooks"] }
 csv = "1"
 walkdir = "2.5.0"
 regex = "1"
@@ -45,14 +122,13 @@ futures-util = { version = "0.3", default-features = false }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 ring = "0.17"
 async-trait = "0.1.92"
-nix = { version = "0.31.3", features = ["resource"] }
-tokio = { version = "1.53.1", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
+tokio = { version = "1.53.3", features = ["rt", "rt-multi-thread", "time", "macros", "sync"] }
 getrandom = "0.4.3"
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate", "auto-dispatch", "extra-checks"] }
 
 # optional
 duckdb = { version = "1.4.0", features = ["bundled"], optional = true }
-calamine = { version = "0.36", optional = true }
+calamine = { version = "0.37", optional = true }
 pdf-extract = { version = "0.12.0", optional = true }
 
 [profile.dev]
@@ -87,4 +163,4 @@ lto = "fat"
 strip = true
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread"] }
+tokio = { version = "1.53.3", features = ["macros", "rt", "rt-multi-thread"] }

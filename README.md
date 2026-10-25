@@ -41,10 +41,10 @@ service.
 
 For analytics, a plausible answer is not good enough. The goal is to reach the
 right answer the first time, with as little unnecessary reasoning between the
-question and result as possible. Fella does not need file writes, shell
+question and result as possible. The model does not need file writes, shell
 commands, desktop control, or the ability to act on your behalf. When a
-question benefits from outside information, the intended route is bounded,
-read-only, and visible—not an unrestricted browser agent.
+question benefits from outside information, the intended route is
+bounded, read-only, and visible—not an unrestricted browser agent.
 
 The result is an opinionated system: a model-led analysis loop with reviewed,
 read-only tools, deterministic execution where exact computation matters, and
@@ -60,7 +60,7 @@ computer understandable without making the reasoning needlessly complicated.
 | **Consistency** | A coherent model-led loop and reviewed tools keep the route from question to answer understandable. |
 | **Correctness** | The engine computes the numbers, the harness checks the work, and the result should be right the first time whenever the data can support it. |
 | **Efficiency** | Deliberate context and proportionate tool use keep wasted reasoning down without an arbitrary tool-count limit. |
-| **Read-only analysis** | Analysis tools can inspect and compute over mounted files, but cannot alter them, run shell commands, or take external actions. |
+| **Read-only analysis** | Model-facing analysis tools can inspect and compute over mounted files, but cannot alter source files, run shell commands, or take external actions. |
 | **Useful on real files** | Mount the folder when a question depends on it; ask in plain language and get an analysis or chart without building a warehouse or learning SQL first. |
 | **Bring your own model** | Connect OpenAI, Vercel AI Gateway, xAI, Ollama Cloud, OpenRouter, or a custom OpenAI-compatible endpoint. |
 
@@ -180,12 +180,12 @@ Useful commands:
   endpoint can be configured to point to a local service.
 - Updates happen only when explicitly requested with `/update`.
 
-Read the [security policy](SECURITY.md) and [product commitments](docs/PRODUCT.md).
+Read the [security policy](SECURITY.md) and [product commitments](./docs/product/PRODUCT.md).
 
 ## Build from source
 
 The desktop shell is Electron, with the SvelteKit UI and Rust analytics engine
-running as a local sidecar. See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for
+running as a local sidecar. See [`docs/DEVELOPMENT.md`](./docs/development/DEVELOPMENT.md) for
 toolchain requirements and provider setup.
 
 ```sh
@@ -204,19 +204,13 @@ cargo test --manifest-path backend/Cargo.toml --locked
 ```
 
 The Electron shell and its line-delimited JSON bridge are described in
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+[`docs/ARCHITECTURE.md`](./docs/architecture/ARCHITECTURE.md).
 
 ## Documentation
 
-- [Product](docs/PRODUCT.md) — Fella's purpose, analyst loop, and boundaries
-- [Architecture](docs/ARCHITECTURE.md) — the Electron shell and Rust analytics runtime
-- [Roadmap](docs/ROADMAP.md) — current quality priorities and deferred work
-- [Development](docs/DEVELOPMENT.md) — setup and contributor conventions
-- [Testing](docs/TESTING.md) — regression, end-to-end, and model evaluation
-- [Performance](docs/PERFORMANCE.md) — ingestion, build, and memory measurement
-- [Release](docs/RELEASE.md) — packaging and release procedure
-- [Design](docs/DESIGN.md) — UI tokens and interaction guidance
-- [Mintlify deployment](docs/DOCS-DEPLOYMENT.md) — public docs hosting
+- [Documentation guide](docs/README.md) — product, architecture, design,
+  contributor guides, and dated audit records
+- [User documentation](docs/site/) — Mintlify content
 - [Contributing](CONTRIBUTING.md) — contribution guidelines
 
 ## Status

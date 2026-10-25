@@ -1,21 +1,23 @@
 // Slash-command parsing and input dispatch for the REPL.
 
-import { ipc, isDesktop, isElectron, pickFolder } from './ipc';
+import { ipc, isDesktop, isElectron, pickFolder, sampleWorkspacePath } from './ipc';
 import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
 	ConversationSummary,
 	Message,
+	Investigation,
+	InvestigationQuestion,
 	ProviderHealth,
 	ProviderInfo
 } from './types';
+import type { ResolvedArtifact } from './analytics-artifacts';
+import type { OutputTarget } from './analytical-output.svelte';
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
 
-  Ask / Inspect     choose the normal answer flow or a stricter source-first,
-                   read-only inspection flow from the composer
-  + Add source / @  attach a source or field to your next question
+  @                attach a source or field to your next question
 
   /open <path>     choose the folder Fella looks at
   /files           see what Fella found in your folder
@@ -32,19 +34,18 @@ showing the exact steps it took. You never need these commands, but here they ar
   /context         open the workspace guide (fella.md)
   /update          check for a newer version of Fella and install it
   /mcp             experimental and inert; no connectors are enabled
-  /tab             open another conversation in a new tab
-  /focus           hide the tabs and header for a plain view (again to undo)
+  /new             start a new conversation in this workspace
+  /plain           hide navigation and the header for a plain view (again to undo)
   /clear           start this conversation over (the old one is saved)
   /history         list your saved conversations, /history <n> to reopen one
   /retry           ask the last question again
   /help            this list
 
 keys  Enter send · Shift+Enter new line · Ctrl/Cmd+K or Ctrl/Cmd+Shift+P search Fella
-      Ctrl/Cmd+N new conversation · Ctrl/Cmd+T new tab · Ctrl/Cmd+W close tab
-      Ctrl/Cmd+[ / ] previous or next tab · Ctrl/Cmd+1…9 switch tab
-      Ctrl/Cmd+Shift+A new conversation · Ctrl/Cmd+Shift+S Sources · Ctrl/Cmd+Shift+C Context
+      Ctrl/Cmd+N new conversation · Ctrl/Cmd+Shift+A new conversation
+      Ctrl/Cmd+Shift+S Investigation data · Ctrl/Cmd+Shift+C Context
       Ctrl/Cmd+, settings · Ctrl/Cmd+O open folder · Ctrl/Cmd+B sidebar · Ctrl/Cmd+L clear
-      Ctrl/Cmd+Shift+F focus mode · Esc stop a run / hide details`;
+      Ctrl/Cmd+Shift+F plain view · Esc stop a run / hide details`;
 
 export const SLASH_COMMANDS = [
 	'/open',
@@ -60,8 +61,8 @@ export const SLASH_COMMANDS = [
 	'/context',
 	'/update',
 	'/mcp',
-	'/tab',
-	'/focus',
+	'/new',
+	'/plain',
 	'/clear',
 	'/history',
 	'/retry',
@@ -85,8 +86,8 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/context': 'open the workspace guide (fella.md)',
 	'/update': 'check for a newer version of Fella and install it',
 	'/mcp': 'experimental and inert; no connectors are enabled',
-	'/tab': 'open another conversation in a new tab',
-	'/focus': 'hide the tabs and header for a plain view',
+	'/new': 'start a new conversation in this workspace',
+	'/plain': 'hide navigation and the header for a plain view',
 	'/clear': 'start this conversation over (the old one is saved)',
 	'/history': 'list your saved conversations, /history <n> to reopen one',
 	'/retry': 'ask the last question again',
@@ -154,12 +155,15 @@ export function completionsFor(input: string): string[] {
 }
 
 /** Open a folder as the workspace. With no path, shows the native picker. */
-export async function openFolder(path?: string): Promise<void> {
-	if (session.mountProgress) return;
+export async function openFolder(
+	path?: string,
+	options: { reportError?: boolean; focusAfterOpen?: boolean } = {}
+): Promise<boolean> {
+	if (session.mountProgress) return false;
 	if (!isDesktop()) {
 		session.setWorkspaceView('ask');
-		session.addSystem('Fella needs the desktop app to do that.');
-		return;
+		if (options.reportError !== false) session.addSystem('Fella needs the desktop app to do that.');
+		return false;
 	}
 
 	let chosen = path;
@@ -168,7 +172,19 @@ export async function openFolder(path?: string): Promise<void> {
 		(document.activeElement as HTMLElement | null)?.blur();
 		chosen = (await pickFolder()) ?? undefined;
 	}
-	if (!chosen) return;
+	if (!chosen) return false;
+	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
+	if (alreadyOpen && !alreadyOpen.historyOnly) {
+		if (session.focusWorkspace(alreadyOpen.id)) {
+			if (options.focusAfterOpen) {
+				session.setWorkspaceView('ask');
+				session.setWorkspacePaneOpen(false);
+			}
+			return true;
+		}
+		if (options.reportError !== false) session.addSystem('Could not open this workspace. Try selecting it again.');
+		return false;
+	}
 	try {
 		session.mountProgress = {
 			phase: 'scanning',
@@ -177,60 +193,135 @@ export async function openFolder(path?: string): Promise<void> {
 			prepared_files: 0,
 			skipped_files: 0
 		};
-		session.catalog = await ipc.openWorkspace(chosen, (progress) => {
+		const catalog = await ipc.openWorkspace(chosen, (progress) => {
 			session.mountProgress = progress;
 		});
-		session.rememberRepository(session.catalog.workspace ?? chosen);
+		if (!session.registerWorkspace(catalog)) {
+			throw new Error('Fella could not open this workspace. Try again or choose another folder.');
+		}
+		if (options.focusAfterOpen) {
+			session.setWorkspaceView('ask');
+			session.setWorkspacePaneOpen(false);
+		}
 		session.addSystem(summarizeCatalog());
+		return true;
 	} catch (e) {
-		session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
+		if (options.reportError !== false) session.addSystem(`Couldn't open that folder: ${errMsg(e)}`);
+		return false;
 	} finally {
 		session.mountProgress = null;
 	}
 }
 
-/** On launch, load the (empty) catalog and note the last session's folder so
- *  the welcome screen can offer a one-click reopen. Fella no longer opens that
- *  folder automatically the user picks. Called once from the page's onMount. */
-export async function loadStartupCatalog(): Promise<void> {
-	if (!isDesktop() || session.catalog.workspace) return;
+/** Open the bundled fictional dataset without changing the user's files. */
+export async function openSampleWorkspace(): Promise<boolean> {
 	try {
-		session.catalog = await ipc.getCatalog();
-		session.rememberRepository(session.catalog.workspace);
+		const path = await sampleWorkspacePath();
+		if (!path) {
+			session.addSystem('Sample data is available in the Fella desktop app. You can choose a folder here instead.');
+			return false;
+		}
+		return await openFolder(path, { focusAfterOpen: true });
+	} catch (error) {
+		session.addSystem(`Couldn't locate the sample workspace: ${errMsg(error)}. You can choose a folder instead.`);
+		return false;
+	}
+}
+
+/** Reopen a remembered repository without writing a low-level mount error into chat.
+ *  A failed attempt keeps the path as a history group and lets the sidebar explain
+ *  that its conversations remain available. */
+export async function openRepository(
+	path: string,
+	options: { reportFailure?: boolean } = {}
+): Promise<boolean> {
+	if (!path.trim()) return false;
+	if (session.mountProgress) return false;
+	const openedWorkspace = session.workspaceAt(path);
+	if (openedWorkspace && !openedWorkspace.historyOnly) {
+		const focused = session.focusWorkspace(openedWorkspace.id);
+		if (!focused) session.addSystem('Could not open this workspace. Try selecting it again.');
+		return focused;
+	}
+	if (!isDesktop()) return openFolder(path);
+	const opened = await openFolder(path, { reportError: false });
+	if (opened) session.markRepositoryAvailable(path);
+	else if (!session.mountProgress) {
+		session.markRepositoryHistoryOnly(path);
+		if (options.reportFailure) {
+			const name = path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
+			session.addSystem(
+				`The folder “${name}” isn’t available at its saved location. Its conversations remain in history only; reopen the folder to continue analysis.`
+			);
+		}
+	}
+	return opened;
+}
+
+/** On launch, restore the user's saved workspaces, layout, and focused owner.
+ *  Missing folders remain available in history-only state without borrowing
+ *  another workspace's catalog. Called once from page onMount. */
+export async function loadStartupCatalog(): Promise<void> {
+	if (!isDesktop()) return;
+	try {
+		const catalog = await ipc.getCatalog();
+		if (catalog.workspace && session.pendingWorkspacePaths.includes(catalog.workspace)) {
+			const existing = session.workspaceAt(catalog.workspace);
+			if (existing) {
+				existing.catalog = catalog;
+				existing.historyOnly = false;
+			} else if (session.pendingWorkspacePaths.includes(catalog.workspace)) {
+				session.registerWorkspace(catalog);
+			}
+		}
 	} catch {
 		/* no engine yet the welcome screen handles it */
 	}
-	try {
-		session.lastFolder = await ipc.lastWorkspacePath();
-	} catch {
-		session.lastFolder = null;
+	const paths = session.pendingWorkspacePaths;
+	for (const path of paths) {
+		await openRepository(path);
 	}
+	session.restoreActiveWorkspace();
 }
 
-/** Reopen the folder from the last session (the welcome screen's "Reopen"
- *  button, and Enter on an empty composer with no folder open). */
-export async function resumeLastFolder(): Promise<void> {
-	if (session.lastFolder) await openFolder(session.lastFolder);
-}
-
-/** Reopen an archived conversation and restore the folder it belongs to. */
-export async function openConversation(summary: ConversationSummary): Promise<void> {
+/** Select an archived conversation inside its owning workspace. */
+export async function openConversation(summary: ConversationSummary): Promise<boolean> {
 	if (!isDesktop()) {
 		session.addSystem('Saved conversations need the desktop app.');
-		return;
+		return false;
 	}
 	try {
-		session.setWorkspaceView('ask');
+		const workspaceId = summary.workspace ?? null;
+		if (workspaceId && !session.workspaceAt(workspaceId)) {
+			if (!session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+				await openRepository(workspaceId);
+			}
+			if (!session.workspaceAt(workspaceId) && session.historyOnlyRepositoryPaths.includes(workspaceId)) {
+				if (!session.openHistoryOnlyWorkspace(workspaceId, summary.id)) {
+					session.addSystem('Could not open the saved conversation in its workspace.');
+					return false;
+				}
+			}
+			if (!session.workspaceAt(workspaceId)) return false;
+		}
 		const raw = await ipc.conversationLoad(summary.id);
-		const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
+		const saved: { workspace?: string | null; messages?: unknown; title?: string | null; companionPane?: unknown; model?: string | null } =
 			JSON.parse(raw);
 		const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-		session.loadArchivedTab(summary.id, messages, saved.title ?? null, summary.workspace);
-		if (summary.workspace && summary.workspace !== session.catalog.workspace) {
-			await openFolder(summary.workspace);
-		}
+		session.loadConversation(summary.id, messages, saved.title ?? null, summary.workspace, saved.companionPane, saved.model);
+		const focused = workspaceId
+			? session.focusWorkspace(workspaceId, summary.id)
+			: session.activateConversation(session.conversations.findIndex((conversation) => conversation.id === summary.id));
+		if (!focused) return false;
+		// Opening a saved conversation is an explicit navigation action. Do not
+		// restore the workspace's previous auxiliary surface here. The sidebar
+		// decides whether an Investigation's details pane should be shown.
+		session.setWorkspacePaneOpen(false);
+		if (session.contentLayout === 'notebook' && workspaceId) session.setWorkspacePane('investigation');
+		return true;
 	} catch (e) {
 		session.addSystem(`error: ${errMsg(e)}`);
+		return false;
 	}
 }
 
@@ -243,17 +334,17 @@ export async function openContext(): Promise<void> {
 		session.addSystem('Open a folder first with /open — fella.md saves into it.');
 		return;
 	}
+	session.workspaceSection = 'chat';
 	session.setWorkspacePane('context');
 }
 
-/** Ask the engine to stop one tab's in-progress run (the active tab by
- *  default). The `ask` promise then resolves normally (a "Stopped." answer) and
- *  clears that tab's `busy`. */
+/** Stop one conversation's in-progress run. The `ask` promise then resolves
+ *  normally (a "Stopped." answer) and clears that conversation's busy state. */
 export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
 	if (!conv || !conv.busy || !isDesktop()) return;
 	conv.activity = 'stopping…';
 	try {
-		await ipc.cancel(conv.id);
+		await ipc.cancel(conv.id, conv.workspaceScope);
 	} catch {
 		/* the run may have already finished nothing to stop */
 	}
@@ -303,31 +394,19 @@ export async function dispatch(raw: string, clarificationTurnId?: string): Promi
 	}
 
 	const conv = session.ensureChat();
-	conv.bindWorkspaceScope(session.catalog.workspace ?? null);
+	const origin = conv.workspaceScope;
+	if (origin && (!session.workspaceAt(origin) || session.workspaceAt(origin)?.historyOnly)) {
+		const name = origin.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || 'workspace';
+		conv.addSystem(
+			session.historyOnlyRepositoryPaths.includes(origin)
+				? `“${name}” is available as history only. Reconnect its folder before continuing analysis.`
+				: `“${name}” isn’t available right now. Reopen its folder before continuing this conversation.`
+		);
+		return;
+	}
+	conv.bindWorkspaceScope(session.activeRepositoryPath);
 	conv.addUser(text);
 	await ask(text, conv, clarificationTurnId);
-}
-
-/** Change the active conversation's model from a UI picker without writing a
- * slash command into the transcript. The selected model is also remembered as
- * the default for new conversations, matching `/model <name>`. */
-export async function selectModel(model: string): Promise<boolean> {
-	const next = model.trim();
-	if (!next) return false;
-
-	const conv = session.ensureChat();
-	const previous = conv.model;
-	conv.model = next;
-	if (!isDesktop()) return true;
-
-	try {
-		session.settings = await ipc.setSettings({ model: next });
-		return true;
-	} catch (e) {
-		conv.model = previous;
-		session.addSystem(`Couldn't choose ${next}: ${errMsg(e)}`);
-		return false;
-	}
 }
 
 /** Fetch the provider list and cache it on the session so the composer hint
@@ -403,16 +482,18 @@ async function runCommand(text: string): Promise<void> {
 			await session.clear();
 			return;
 
-		case '/tab':
-			session.newTab();
+		case '/new':
+		case '/tab': // legacy alias; conversation navigation is workspace-owned now
+			session.newConversation();
 			return;
 
-		case '/focus':
+		case '/plain':
+		case '/focus': // legacy alias
 			session.focus = !session.focus;
 			session.addSystem(
 				session.focus
-					? 'Focus mode on. The tabs and header are hidden. /focus again to bring them back.'
-					: 'Focus mode off.'
+					? 'Plain view on. The app header is hidden. Type /plain again to bring it back.'
+					: 'Plain view off.'
 			);
 			return;
 
@@ -435,7 +516,7 @@ async function runCommand(text: string): Promise<void> {
 			try {
 				const list = await ipc.conversationsList();
 				if (list.length === 0) {
-					session.addSystem("No past conversations yet — they're saved here once you /clear or close a tab.");
+					session.addSystem("No past conversations yet — they're saved here once you /clear or leave a conversation.");
 					return;
 				}
 				const n = arg ? Number.parseInt(arg, 10) : NaN;
@@ -445,19 +526,10 @@ async function runCommand(text: string): Promise<void> {
 						session.addSystem(`No conversation #${n}. Type /history to see the list again.`);
 						return;
 					}
-					const raw = await ipc.conversationLoad(chosen.id);
-					const saved: { workspace?: string | null; messages?: unknown; title?: string | null } =
-						JSON.parse(raw);
-					const messages = Array.isArray(saved.messages) ? (saved.messages as Message[]) : [];
-					session.loadArchivedTab(chosen.id, messages, saved.title ?? null, chosen.workspace);
-					session.addSystem(
-						`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
-					);
-					// Auto-mount the folder this conversation was about (openFolder
-					// reports a failure -- moved/deleted folder -- as a system
-					// message on its own, nothing extra needed here for that).
-					if (chosen.workspace && chosen.workspace !== session.catalog.workspace) {
-						await openFolder(chosen.workspace);
+					if (await openConversation(chosen)) {
+						session.addSystem(
+							`Reopened: "${chosen.title ?? chosen.preview}" (${dateLabel(chosen.saved_at_ms)}).`
+						);
 					}
 					return;
 				}
@@ -481,8 +553,13 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/files':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.catalog = { workspace: null, sources: [] };
+				session.addSystem('General has no mounted folder. Open a repository workspace to inspect its files.');
+				return;
+			}
 			try {
-				session.catalog = await ipc.getCatalog();
+				session.catalog = await ipc.getCatalog(session.activeRepositoryPath);
 				session.addSystem(
 					session.catalog.workspace
 						? summarizeCatalog(true)
@@ -495,6 +572,10 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/schema':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder. Open a repository workspace to inspect its schema.');
+				return;
+			}
 			if (!arg) {
 				const tables = session.catalog.sources.filter((s) => s.view).map((s) => s.name);
 				session.addSystem(
@@ -505,7 +586,7 @@ async function runCommand(text: string): Promise<void> {
 				return;
 			}
 			try {
-				const s = await ipc.describe(arg);
+				const s = await ipc.describe(arg, session.activeRepositoryPath);
 				const lines = (s.columns ?? []).map(
 					(c) =>
 						`  ${c.name.padEnd(24)} ${c.type.padEnd(12)} ` +
@@ -527,6 +608,10 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/sql':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder. Open a repository workspace to run a folder query.');
+				return;
+			}
 			if (!arg) {
 				session.addSystem('Type a query after /sql, e.g. /sql select * from transactions limit 5');
 				return;
@@ -536,7 +621,7 @@ async function runCommand(text: string): Promise<void> {
 				try {
 					conv.busy = true;
 					conv.activity = 'running your query…';
-					const r = await ipc.runSqlDirect(arg);
+					const r = await ipc.runSqlDirect(arg, session.activeRepositoryPath);
 					conv.addSystem(renderTable(r.columns, r.rows, r.row_count, r.ms, r.truncated));
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -697,10 +782,10 @@ async function runCommand(text: string): Promise<void> {
 					const patch = parseModelArg(arg);
 					if (!patch) {
 						session.addSystem(
-							'To switch this tab’s model, type /model followed by a name from the list ' +
-								'(names have no spaces). Each tab can use a different model; they all share ' +
+							'To switch this conversation’s model, type /model followed by a name from the list ' +
+							'(names have no spaces). Conversations can use different models; they share ' +
 								'one provider.\n' +
-								'To change a setting: /model <field> <value> where field is provider, base_url, or embed_model.\n' +
+							'To change a setting: /model <field> <value> where field is provider, base_url, or embed_model.\n' +
 								'To connect to a new model service, use /login.'
 						);
 						return;
@@ -714,13 +799,13 @@ async function runCommand(text: string): Promise<void> {
 					}
 					if (Object.keys(rest).length > 0) {
 						session.settings = await ipc.setSettings(rest);
-						// A provider / endpoint change invalidates every tab's model.
+						// A provider / endpoint change invalidates per-conversation overrides.
 						if (rest.provider || rest.base_url)
-							for (const t of session.tabs) if (t.kind === 'chat') t.model = '';
+							for (const conversation of session.conversations) conversation.model = '';
 					}
 					if (newModel !== undefined) {
-						// Per-tab: only the focused conversation switches. Also remember
-						// it as the default a fresh tab / next launch starts from.
+						// Only the focused conversation switches. Also remember it as the
+						// default for future conversations.
 						session.ensureChat().model = newModel;
 						session.settings = await ipc.setSettings({ model: newModel });
 					}
@@ -730,18 +815,13 @@ async function runCommand(text: string): Promise<void> {
 				// Re-probe so the model list reflects the provider you're signed in to.
 				await refreshHealthSoon();
 				const prov = session.providers.find((p) => p.id === s.provider);
-				const tabModel = session.model;
-				const perTab =
-					session.tabs.length > 1
-						? `\n\n${session.tabs.length} tabs open each can /model its own; the provider is shared.`
-						: '';
+				const conversationModel = session.model;
 				session.addSystem(
 					`model service:   ${prov?.display ?? s.provider}\n` +
 						`address:         ${s.base_url}\n` +
-					`model:           ${tabModel}   (this tab)\n` +
+						`model:           ${conversationModel}   (this conversation)\n` +
 					`connected:       ${s.has_credential ? 'yes' : 'no'}` +
-					renderModelChoices(session.health?.models ?? [], tabModel) +
-					perTab
+						renderModelChoices(session.health?.models ?? [], conversationModel)
 				);
 			} catch (e) {
 				session.addSystem(`error: ${errMsg(e)}`);
@@ -750,12 +830,20 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/reindex':
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no mounted folder to reindex. Open a repository workspace first.');
+				return;
+			}
 			{
 				const conv = session.ensureChat();
 				try {
 					conv.busy = true;
 					conv.activity = 'checking the folder…';
-					session.catalog = await ipc.reindex();
+					session.catalog = await ipc.reindex(session.activeRepositoryPath);
+					if (session.activeWorkspaceId) {
+						const workspace = session.workspaceAt(session.activeWorkspaceId);
+						if (workspace) workspace.catalog = session.catalog;
+					}
 					conv.addSystem(`Checked the folder again.\n${summarizeCatalog()}`);
 				} catch (e) {
 					conv.addSystem(`error: ${errMsg(e)}`);
@@ -768,9 +856,13 @@ async function runCommand(text: string): Promise<void> {
 
 		case '/memory': {
 			if (!requireEngine()) return;
+			if (!session.activeRepositoryPath) {
+				session.addSystem('General has no folder-specific memory. Open a repository workspace to view its memory.');
+				return;
+			}
 			try {
 				if (arg.trim().toLowerCase() === 'forget') {
-					const had = await ipc.forgetMemory();
+					const had = await ipc.forgetMemory(session.activeRepositoryPath);
 					session.addSystem(
 						had
 							? 'Cleared what Fella had learned about this folder.'
@@ -778,7 +870,7 @@ async function runCommand(text: string): Promise<void> {
 					);
 					return;
 				}
-				const res = await ipc.memoryFile();
+				const res = await ipc.memoryFile(session.activeRepositoryPath);
 				if (!res) {
 					session.addSystem('Open a folder first, then /memory shows what Fella has learned about it.');
 					return;
@@ -841,17 +933,33 @@ async function runCommand(text: string): Promise<void> {
 		}
 	}
 
-/** Run one question in `conv` (its own tab). Bound to the tab, not "the active
- *  tab", so it keeps streaming there after the user switches away. */
+/** Run one question in its owning conversation, so it keeps streaming there
+ *  after the user focuses a different workspace. */
 async function ask(
 	question: string,
 	conv: Conversation,
-	clarificationTurnId?: string
+	clarificationTurnId?: string,
+	questionRef?: { investigationId: string; questionId: string },
+	knownInvestigation?: Investigation,
+	outputTarget?: OutputTarget
 ): Promise<void> {
 	if (!requireEngine()) return;
-
+	conv.busy = true;
+	conv.activity = 'preparing the analysis…';
+	// Ordinary chat stays an Ask conversation. Only explicit Investigation
+	// actions pass an owning record and Question reference into this run.
+	const investigation = knownInvestigation;
+	if (questionRef && investigation?.id !== questionRef.investigationId) {
+		conv.busy = false;
+		conv.activity = '';
+		conv.addSystem(
+			'This Question is no longer linked to the active workspace Investigation. Reopen the Investigation and try again.'
+		);
+		return;
+	}
 	const msg = conv.addAssistant('');
-	conv.startRun();
+	if (outputTarget) msg.artifact_target = outputTarget;
+	conv.startRun(question, questionRef?.questionId ?? null, msg.id);
 	conv.busy = true;
 	conv.activity = 'thinking…';
 
@@ -874,19 +982,17 @@ async function ask(
 
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
+			case 'turn_state':
+				conv.updateRunState(e.state);
+				break;
 			case 'assistant_delta':
-				msg.text += e.text;
+				// Incremental model text can be private scratch work. The final,
+				// user-facing answer arrives through answer_done; progress is shown
+				// from observable tool and verification events instead.
 				break;
 			case 'tool_start': {
-				// The sentence the model streamed before calling a tool is its
-				// plan keep it visible (dimmed) instead of the raw answer body,
-				// so the wait shows what it's doing. Set once, from the first
-				// tool_start; later rounds just clear any stray preamble.
-				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
-				msg.text = '';
-				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
-				conv.beginRunStep(e.tool, note || undefined);
-				conv.activity = note ? `${note}…` : 'working…';
+				const activity = conv.beginRunStep(e.tool);
+				conv.activity = `${activity}…`;
 				break;
 			}
 			case 'tool_end':
@@ -902,7 +1008,6 @@ async function ask(
 			case 'answer_done':
 				msg.answer = e.answer;
 				msg.text = e.answer.text;
-				msg.plan = undefined;
 				break;
 		}
 	};
@@ -915,23 +1020,19 @@ async function ask(
 			conv.model || undefined,
 			conv.mode,
 			conv.contextRefs,
-		clarificationTurnId
-			? { turn_id: clarificationTurnId, response: question }
-			: undefined
+			clarificationTurnId
+				? { turn_id: clarificationTurnId, response: question }
+				: undefined,
+			conv.workspaceScope,
+			investigation?.id ?? null,
+			questionRef?.questionId ?? null
 		);
 		msg.answer = answer;
 		msg.text = answer.text;
 	} catch (e) {
 		failed = true;
 		const kind = errKind(e);
-		// If the model already streamed part of an answer, keep it rather than
-		// replacing what the user watched appear with a bare "error:".
-		const streamed = msg.text.trim();
-		if (streamed && !msg.answer) {
-			msg.text = `${streamed}\n\n(the connection dropped, so this answer may be incomplete)`;
-		} else {
-			msg.text = `error: ${errMsg(e)}`;
-		}
+		msg.text = `error: ${errMsg(e)}`;
 		if (kind === 'transient') {
 			msg.text += `\n\nType /retry to try again, or /model to switch model.`;
 		}
@@ -941,11 +1042,63 @@ async function ask(
 	} finally {
 		clearInterval(tick);
 		msg.pending = false;
-		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);
+		if (questionRef) session.investigationsVersion += 1;
 	}
+}
+
+/** Explicit artifact targets survive tab switches; source scope remains the
+ * receiving conversation's boundary and Rust validates the selected reference. */
+export async function requestArtifactChange(artifact: ResolvedArtifact, instruction: string): Promise<void> {
+	const text = instruction.trim();
+	const workspace = artifact.artifact.workspace;
+	if (!text || !requireEngine()) return;
+	if (session.catalog.workspace !== workspace) throw new Error('Open this analysis’s workspace before requesting a change.');
+	const conv = session.ensureChat();
+	if (conv.busy) throw new Error('Finish the current analysis before requesting this change.');
+	conv.bindWorkspaceScope(workspace);
+	if (conv.workspaceScope !== workspace) throw new Error('The conversation belongs to another workspace.');
+	const key = `${artifact.artifact.id}#${artifact.revision.revision}`;
+	conv.addContext({ kind: 'artifact', key, label: artifact.artifact.title });
+	conv.addUser(text);
+	try {
+		await ask(text, conv, undefined, undefined, undefined, { artifactId: artifact.artifact.id, baseRevision: artifact.artifact.current_revision, instruction: text });
+	} finally { conv.removeContext('artifact', key); session.persist(); }
+}
+
+/** Launch a saved Investigation Question from its linked conversation. The
+ * Question ID travels with the run so its source scope and actual evidence can
+ * be inspected together in the canonical AnalysisTurn. */
+export async function analyzeInvestigationQuestion(
+	investigation: Investigation,
+	questionId: string
+): Promise<void> {
+	if (!requireEngine()) return;
+	const conv = session.activeChat;
+	if (conv.busy) return;
+	if (investigation.workspace_id !== conv.workspaceScope || investigation.conversation_id !== conv.id) {
+		conv.addSystem(
+			'Open the conversation linked to this Investigation before analyzing its Question.'
+		);
+		return;
+	}
+	const question = investigation.questions?.find(
+		(item) => item.id === questionId && item.status === 'active'
+	);
+	if (!question) {
+		conv.addSystem('This Question is no longer active. Refresh the Investigation and try again.');
+		return;
+	}
+	conv.addUser(question.text);
+	await ask(
+		question.text,
+		conv,
+		undefined,
+		{ investigationId: investigation.id, questionId },
+		investigation
+	);
 }
 
 /** Re-execute a persisted analytical turn against the current mount. The
@@ -959,23 +1112,33 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		conv.addSystem('Finish the current question before rerunning this answer.');
 		return;
 	}
-
+	conv.busy = true;
+	conv.activity = 'preparing the analysis…';
 	const msg = conv.addAssistant('');
-	conv.startRun();
+	msg.rerun_of = turnId;
+	const messageIndex = conv.messages.indexOf(message);
+	let runQuestion = '';
+	for (let i = messageIndex - 1; i >= 0; i--) {
+		if (conv.messages[i].role === 'user') {
+			runQuestion = conv.messages[i].text;
+			break;
+		}
+	}
+	conv.startRun(runQuestion, null, msg.id);
 	conv.busy = true;
 	conv.activity = 'rechecking the workspace…';
 	let failed = false;
 	const onEvent = (e: AskEvent) => {
 		switch (e.kind) {
+			case 'turn_state':
+				conv.updateRunState(e.state);
+				break;
 			case 'assistant_delta':
-				msg.text += e.text;
+				// Show only the final answer, not incremental model scratch work.
 				break;
 			case 'tool_start': {
-				if (!msg.plan && msg.text.trim()) msg.plan = msg.text.trim();
-				msg.text = '';
-				const note = typeof e.args?.note === 'string' ? e.args.note.trim() : '';
-				conv.beginRunStep(e.tool, note || undefined);
-				conv.activity = note ? `${note}…` : 'rechecking…';
+				const activity = conv.beginRunStep(e.tool);
+				conv.activity = `${activity}…`;
 				break;
 			}
 			case 'tool_end':
@@ -988,7 +1151,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 			case 'answer_done':
 				msg.answer = e.answer;
 				msg.text = e.answer.text;
-				msg.plan = undefined;
 				break;
 		}
 	};
@@ -998,7 +1160,8 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 			turnId,
 			onEvent,
 			conv.model || undefined,
-			conv.mode
+			conv.mode,
+			conv.workspaceScope
 		);
 		msg.answer = answer;
 		msg.text = answer.text;
@@ -1007,7 +1170,6 @@ export async function rerunAnalysisTurn(message: Message): Promise<void> {
 		msg.text = `error: ${errMsg(e)}`;
 	} finally {
 		msg.pending = false;
-		msg.plan = undefined;
 		conv.busy = false;
 		conv.activity = '';
 		conv.finishRun(failed);

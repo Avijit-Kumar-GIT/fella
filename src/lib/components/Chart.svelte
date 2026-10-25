@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onDestroy } from 'svelte';
 	import { scaleLinear, scalePoint } from 'd3-scale';
 	import {
 		arc,
@@ -8,12 +9,37 @@
 		pie,
 		type PieArcDatum
 	} from 'd3-shape';
-	import type { ChartMetadata, ChartPayload, VisualizationSpec } from '$lib/types';
+	import { Button } from '$lib/components/ui/button';
+	import { Collapsible } from '$lib/components/ui/collapsible';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { chartExportFilename, serializeDelimited } from '$lib/chart-export';
+	import type { ChartMetadata, ChartPayload, EvidenceItem, VisualizationSpec } from '$lib/types';
+	import Icon from './Icon.svelte';
 
 	let {
 		spec,
-		source = ''
-	}: { spec: VisualizationSpec; source?: string } = $props();
+		source = '',
+		sourceEvidence = null,
+		sourceRunId,
+		findingSnapshot,
+		originLabel = '',
+		onopen
+	}: {
+		spec: VisualizationSpec;
+		source?: string;
+		sourceEvidence?: EvidenceItem | null;
+		sourceRunId?: string;
+		findingSnapshot?: string;
+		originLabel?: string;
+		onopen?: () => void;
+	} = $props();
+	let chartDetailsOpen = $state(false);
+	let exactValuesOpen = $state(false);
+	let exportNode = $state<HTMLElement | null>(null);
+	let exportStatus = $state('');
+	let exportComplete = $state(false);
+	let exportBusy = $state(false);
+	let exportFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
 	// Chart colors are deliberately separate from verification/status colors.
 	// Every mark also gets a label or a data-table equivalent.
@@ -368,26 +394,146 @@
 		};
 	});
 
-	function metadataEntries(metadata: ChartMetadata) {
-		const fields = metadata.fields ?? [];
-		const filters = metadata.filters ?? [];
+	function exactTableHeadingsWithUnits(): string[] {
+		if (!spec.unit) return exactTable.headings;
+		const numericColumns = new Set(
+			spec.kind === 'scatter'
+				? [0, 1]
+				: spec.kind === 'box_plot'
+					? [2, 3, 4, 5, 6, 7]
+					: exactTable.headings.map((_, index) => index).filter((index) => index > 0)
+		);
+		return exactTable.headings.map((heading, index) =>
+			numericColumns.has(index) ? `${heading} (${spec.unit})` : heading
+		);
+	}
+
+	function reportExport(message: string, success: boolean): void {
+		exportStatus = message;
+		exportComplete = success;
+		if (exportFeedbackTimer) clearTimeout(exportFeedbackTimer);
+		exportFeedbackTimer = setTimeout(() => {
+			exportStatus = '';
+			exportComplete = false;
+		}, 2200);
+	}
+	onDestroy(() => {
+		if (exportFeedbackTimer) clearTimeout(exportFeedbackTimer);
+	});
+
+	async function chartImageBlob(): Promise<Blob> {
+		if (!exportNode) throw new Error('Chart is not ready to export.');
+		const { toBlob } = await import('html-to-image');
+		const backgroundColor = getComputedStyle(exportNode).backgroundColor;
+		const blob = await toBlob(exportNode, {
+			backgroundColor,
+			pixelRatio: 2,
+			filter: (node) =>
+				!(node instanceof Element && node.hasAttribute('data-chart-export-ignore'))
+		});
+		if (!blob) throw new Error('Chart image could not be created.');
+		return blob;
+	}
+
+	function downloadBlob(blob: Blob, filename: string): void {
+		const url = URL.createObjectURL(blob);
+		const link = document.createElement('a');
+		link.href = url;
+		link.download = filename;
+		document.body.append(link);
+		link.click();
+		link.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	async function copyChartImage(): Promise<void> {
+		if (exportBusy) return;
+		exportBusy = true;
+		try {
+			if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+				throw new Error('Image clipboard access is unavailable.');
+			}
+			const image = chartImageBlob();
+			await navigator.clipboard.write([new ClipboardItem({ 'image/png': image })]);
+			reportExport('Chart image copied to clipboard.', true);
+		} catch {
+			reportExport('Could not copy the chart image. Try downloading it instead.', false);
+		} finally {
+			exportBusy = false;
+		}
+	}
+
+	async function downloadChartImage(): Promise<void> {
+		if (exportBusy) return;
+		exportBusy = true;
+		exportStatus = 'Preparing chart image.';
+		try {
+			downloadBlob(await chartImageBlob(), chartExportFilename(chartTitle, 'png'));
+			reportExport('Chart image downloaded.', true);
+		} catch {
+			reportExport('Could not download the chart image.', false);
+		} finally {
+			exportBusy = false;
+		}
+	}
+
+	async function copyChartData(): Promise<void> {
+		try {
+			if (!navigator.clipboard?.writeText) throw new Error('Clipboard access is unavailable.');
+			await navigator.clipboard.writeText(serializeDelimited(exactTableHeadingsWithUnits(), exactTable.rows, '\t'));
+			reportExport('Chart data copied to clipboard.', true);
+		} catch {
+			reportExport('Could not copy chart data.', false);
+		}
+	}
+
+	function downloadChartData(): void {
+		const csv = serializeDelimited(exactTableHeadingsWithUnits(), exactTable.rows, ',');
+		downloadBlob(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }), chartExportFilename(chartTitle, 'csv'));
+		reportExport('Chart data downloaded.', true);
+	}
+
+	function metadataEntries(metadata?: ChartMetadata) {
+		const fields = metadata?.fields ?? [];
+		const filters = metadata?.filters ?? [];
 		return [
-			metadata.source_label ? ['Source', metadata.source_label] : null,
-			metadata.source_evidence_id ? ['Result', metadata.source_evidence_id] : null,
+			metadata?.source_label ? ['Source', metadata.source_label] : null,
+			(metadata?.source_evidence_id || sourceEvidence?.id)
+				? ['Source evidence', metadata?.source_evidence_id ?? sourceEvidence?.id ?? '']
+				: null,
+			(metadata?.source_run_id || sourceRunId)
+				? ['Source run', metadata?.source_run_id ?? sourceRunId ?? '']
+				: null,
 			fields.length ? ['Fields', fields.join(', ')] : null,
-			metadata.aggregation ? ['Aggregation', metadata.aggregation] : null,
+			metadata?.aggregation ? ['Aggregation', metadata.aggregation] : null,
 			filters.length ? ['Filters', filters.join('; ')] : null,
-			metadata.time_range ? ['Period', metadata.time_range] : null,
-			metadata.denominator ? ['Whole', metadata.denominator] : null,
-			metadata.missing_treatment ? ['Missing values', metadata.missing_treatment] : null
+			metadata?.time_range ? ['Period', metadata.time_range] : null,
+			metadata?.denominator ? ['Whole', metadata.denominator] : null,
+			metadata?.missing_treatment ? ['Missing values', metadata.missing_treatment] : null
 		].filter((entry): entry is [string, string] => entry !== null);
 	}
-	let chartDetails = $derived(spec.metadata ? metadataEntries(spec.metadata) : []);
+	let chartDetails = $derived(metadataEntries(spec.metadata));
+	let savedFinding = $derived(
+		spec.metadata?.finding_snapshot?.trim() || findingSnapshot?.trim() || ''
+	);
+	let sourceQueries = $derived.by(() => {
+		if (!sourceEvidence) return [];
+		if (sourceEvidence.sql?.trim()) {
+			return [{ label: 'Executed SQL', sql: sourceEvidence.sql.trim() }];
+		}
+		return (sourceEvidence.python_input_trace?.queries ?? [])
+			.filter((query) => query.sql.trim())
+			.map((query, index) => ({ label: `Python input ${index + 1}`, sql: query.sql.trim() }));
+	});
+	let hasChartDetails = $derived(
+		chartDetails.length > 0 || Boolean(sourceEvidence)
+	);
 </script>
 
-<figure class="chart-card">
+<figure class="chart-card" bind:this={exportNode}>
 	<figcaption class="chart-header">
 		<div class="chart-header-copy">
+			{#if originLabel}<div class="chart-origin">{originLabel}</div>{/if}
 			<div class="chart-title">{chartTitle}</div>
 			{#if spec.unit}<div class="chart-unit">Values in {spec.unit}</div>{/if}
 			{#if showAxisSummary}
@@ -397,6 +543,46 @@
 					{#if spec.y_label && !hasSvgYAxisTitle}<span>{spec.y_label}</span>{/if}
 				</div>
 			{/if}
+			{#if savedFinding}
+				<div class="chart-interpretation" data-interpretation-source="model">
+					<span>Model interpretation</span>
+					<p>{savedFinding}</p>
+				</div>
+			{/if}
+		</div>
+		<div class="chart-actions" data-chart-export-ignore>
+			<DropdownMenu.Root>
+				<DropdownMenu.Trigger
+					class="chart-export-trigger"
+					type="button"
+					aria-label="Export chart and data"
+					title={exportStatus || 'Export chart and data'}
+					disabled={exportBusy}
+				>
+					<Icon name={exportComplete ? 'check' : 'more-horizontal'} size={14} />
+				</DropdownMenu.Trigger>
+				<DropdownMenu.Portal>
+					<DropdownMenu.Content class="fella-ui-menu-content chart-export-menu" side="bottom" align="end" sideOffset={4}>
+						<DropdownMenu.Item class="fella-ui-menu-item" disabled={exportBusy} onSelect={() => void copyChartImage()}>
+							Copy chart image
+						</DropdownMenu.Item>
+						<DropdownMenu.Item class="fella-ui-menu-item" disabled={exportBusy} onSelect={() => void downloadChartImage()}>
+							Download chart image (PNG)
+						</DropdownMenu.Item>
+						<div class="chart-export-separator" role="separator"></div>
+						<DropdownMenu.Item class="fella-ui-menu-item" disabled={exportBusy} onSelect={() => void copyChartData()}>
+							Copy data
+						</DropdownMenu.Item>
+						<DropdownMenu.Item class="fella-ui-menu-item" disabled={exportBusy} onSelect={downloadChartData}>
+							Download data (CSV)
+						</DropdownMenu.Item>
+					</DropdownMenu.Content>
+				</DropdownMenu.Portal>
+			</DropdownMenu.Root>
+			{#if onopen}
+				<Button variant="outline" size="sm" class="open-beside" onclick={onopen}>Open beside</Button>
+			{/if}
+			<span class="sr-only" role="status" aria-live="polite">{exportStatus}</span>
 		</div>
 	</figcaption>
 	{#if source}<div class="chart-context">{source}</div>{/if}
@@ -591,23 +777,53 @@
 		</div>
 	{/if}
 
-	{#if chartDetails.length > 0}
-		<details class="chart-details">
-			<summary>Chart details</summary>
-			<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
-		</details>
+	{#if hasChartDetails}
+		<Collapsible.Root class="chart-details" bind:open={chartDetailsOpen} data-chart-export-ignore>
+			<Collapsible.Trigger class="chart-disclosure">
+				<span>Chart details</span>
+				<span class="chart-disclosure-caret" class:open={chartDetailsOpen} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
+			</Collapsible.Trigger>
+			<Collapsible.Content>
+				{#if chartDetails.length > 0}
+					<dl>{#each chartDetails as [label, value] (label)}<div><dt>{label}</dt><dd>{value}</dd></div>{/each}</dl>
+				{/if}
+				{#if sourceEvidence}
+					<dl class="chart-source-result">
+						{#if sourceEvidence.result_summary}<div><dt>Result</dt><dd>{sourceEvidence.result_summary}</dd></div>{/if}
+						{#if sourceEvidence.sources?.length}<div><dt>Data files</dt><dd>{[...new Set(sourceEvidence.sources.map((item) => item.source).filter(Boolean))].join(', ')}</dd></div>{/if}
+						{#if sourceEvidence.columns?.length}<div><dt>Columns</dt><dd>{sourceEvidence.columns.join(', ')}</dd></div>{/if}
+						{#if sourceEvidence.row_count !== undefined}<div><dt>Rows</dt><dd>{sourceEvidence.row_count.toLocaleString()}</dd></div>{/if}
+					</dl>
+				{/if}
+				{#if sourceQueries.length > 0}
+					<div class="chart-query-list" aria-label="Underlying query">
+						{#each sourceQueries as query (query.label)}
+							<div class="chart-query">
+								<div class="chart-finding-label">{query.label}</div>
+								<pre><code>{query.sql}</code></pre>
+							</div>
+						{/each}
+					</div>
+				{/if}
+			</Collapsible.Content>
+		</Collapsible.Root>
 	{/if}
 
-	<details class="values">
-		<summary>Show exact values</summary>
-		<div class="value-table-wrap">
-			<table class="value-table">
-				<caption class="sr-only">{chartTitle} values</caption>
-				<thead><tr>{#each exactTable.headings as heading, index (`${heading}-${index}`)}<th scope="col">{heading}</th>{/each}</tr></thead>
-				<tbody>{#each exactTable.rows as row, rowIndex (rowIndex)}<tr>{#each row as cell, cellIndex (`${rowIndex}-${cellIndex}`)}{#if cellIndex === 0}<th scope="row">{formatCell(cell)}</th>{:else}<td>{formatCell(cell)}</td>{/if}{/each}</tr>{/each}</tbody>
-			</table>
-		</div>
-	</details>
+	<Collapsible.Root class="values" bind:open={exactValuesOpen} data-chart-export-ignore>
+		<Collapsible.Trigger class="chart-disclosure">
+			<span>Show exact values</span>
+			<span class="chart-disclosure-caret" class:open={exactValuesOpen} aria-hidden="true"><Icon name="chevron-right" size={12} /></span>
+		</Collapsible.Trigger>
+		<Collapsible.Content>
+			<div class="value-table-wrap">
+				<table class="value-table">
+					<caption class="sr-only">{chartTitle} values</caption>
+					<thead><tr>{#each exactTable.headings as heading, index (`${heading}-${index}`)}<th scope="col">{heading}</th>{/each}</tr></thead>
+					<tbody>{#each exactTable.rows as row, rowIndex (rowIndex)}<tr>{#each row as cell, cellIndex (`${rowIndex}-${cellIndex}`)}{#if cellIndex === 0}<th scope="row">{formatCell(cell)}</th>{:else}<td>{formatCell(cell)}</td>{/if}{/each}</tr>{/each}</tbody>
+				</table>
+			</div>
+		</Collapsible.Content>
+	</Collapsible.Root>
 </figure>
 
 <style>
@@ -624,7 +840,40 @@
 	}
 	.chart-header { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
 	.chart-header-copy { min-width: 0; }
+	.chart-actions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
+	:global(.chart-export-trigger) {
+		display: inline-flex;
+		width: 30px;
+		height: 30px;
+		align-items: center;
+		justify-content: center;
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		cursor: pointer;
+		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+	}
+	:global(.chart-export-trigger:hover),
+	:global(.chart-export-trigger[data-state='open']) { background: var(--bg-inset); color: var(--text); }
+	:global(.chart-export-trigger:focus-visible) { outline: 2px solid var(--link); outline-offset: 2px; }
+	:global(.chart-export-trigger:disabled) { cursor: default; opacity: 0.6; }
+	:global(.chart-export-menu) { min-width: 190px; }
+	.chart-export-separator { height: 1px; margin: 5px; background: var(--border); }
 	.chart-title { color: var(--text); font-weight: 600; }
+	.chart-origin { margin-bottom: 2px; color: var(--text-faint); font-size: var(--fs-xs); font-weight: 550; }
+	.chart-interpretation { display: grid; gap: 2px; margin-top: var(--space-2); padding-left: var(--space-2); border-left: 2px solid var(--border-strong, var(--border)); color: var(--text-dim); }
+	.chart-interpretation > span { color: var(--text-faint); font-size: var(--fs-xs); font-weight: 600; }
+	.chart-interpretation p { margin: 0; font-size: var(--fs-xs); line-height: 1.45; overflow-wrap: anywhere; }
+	:global(.open-beside) {
+		flex: none;
+		height: auto;
+		min-height: 0;
+		padding: 4px 8px;
+		border-radius: var(--radius-sm);
+		color: var(--text-dim);
+		font-size: var(--fs-xs);
+		font-weight: 600;
+	}
+	:global(.open-beside:hover) { color: var(--text); background: var(--bg-inset); }
 	.chart-unit, .chart-context { margin-top: 2px; color: var(--text-faint); font-size: var(--fs-xs); }
 	.chart-axis-summary { margin-top: 2px; color: var(--text-dim); font-size: var(--fs-xs); }
 	.chart-context { margin-bottom: var(--space-2); }
@@ -673,18 +922,23 @@
 	.heatmap td { width: 28px; min-width: 28px; padding: 0; }
 	.heat-cell { display: block; width: 26px; height: 22px; border-radius: 4px; background: var(--brand); opacity: var(--heat-opacity); }
 	.heat-cell.empty { border: 1px dashed var(--border-strong); background: transparent; opacity: 1; }
-	.values, .chart-details { margin-top: var(--space-2); font-size: var(--fs-xs); }
-	.values summary, .chart-details summary { width: fit-content; color: var(--text-faint); cursor: pointer; }
-	.values summary:hover, .chart-details summary:hover { color: var(--text-dim); }
+	:global(.values), :global(.chart-details) { margin-top: var(--space-2); font-size: var(--fs-xs); }
+	:global(button.chart-disclosure) { display: inline-flex; align-items: center; gap: var(--space-1); width: fit-content; color: var(--text-faint); cursor: pointer; text-align: left; }
+	:global(button.chart-disclosure:hover) { color: var(--text-dim); }
+	.chart-disclosure-caret { display: inline-flex; }
+	.chart-disclosure-caret.open { transform: rotate(90deg); }
 	.value-table-wrap { margin-top: var(--space-2); overflow-x: auto; }
 	.value-table { min-width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; white-space: nowrap; }
 	.value-table th, .value-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; }
 	.value-table th:first-child, .value-table td:first-child { text-align: left; }
 	.value-table thead th { color: var(--text-dim); font-weight: 500; }
-	.chart-details dl { display: grid; gap: 5px; margin: var(--space-2) 0 0; }
-	.chart-details dl div { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
-	.chart-details dt { color: var(--text-faint); }
-	.chart-details dd { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	:global(.chart-details dl) { display: grid; gap: 5px; margin: var(--space-2) 0 0; }
+	:global(.chart-details dl div) { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: var(--space-2); }
+	:global(.chart-details dt) { color: var(--text-faint); }
+	:global(.chart-details dd) { margin: 0; color: var(--text-dim); overflow-wrap: anywhere; }
+	.chart-query { margin-top: var(--space-2); }
+	.chart-finding-label { color: var(--text-faint); }
+	.chart-query pre { max-height: 240px; margin: 4px 0 0; padding: var(--space-2); overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg); color: var(--text-dim); white-space: pre-wrap; overflow-wrap: anywhere; }
 	@media (max-width: 560px) {
 		.chart-card { padding-inline: var(--space-3); }
 		.row { grid-template-columns: minmax(0, 38%) 1fr; gap: var(--space-2); }

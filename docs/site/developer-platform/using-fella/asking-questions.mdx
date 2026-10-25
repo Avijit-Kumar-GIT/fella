@@ -1,92 +1,50 @@
 ---
 title: "Ask questions"
-description: "How to phrase questions and how Fella chooses deterministic tools."
-icon: "message-circle-question"
+description: "Ask in plain language and get an answer and presentation suited to the evidence."
+icon: "message-circle-question-mark"
 ---
 
-Ask in plain language. The model coordinates a fixed set of read-only tools; the tools, not the model, perform data access and computation.
+Ask in Chat as you would ask an analyst who can inspect the mounted folder. Fella decides whether to inspect tables, search documents, use SQL, run sandboxed Python, or combine methods. You do not have to choose a tool.
 
-## Ask a question
+## Ask for the decision you need
 
-<Steps>
-  <Step title="State the result you need">
-    Ask about the data as you would ask a person who knows the folder.
+Include a measure, scope, and period when those details change the result:
 
-```text filename="question"
-Is my spending increase seasonal, or was it a few large purchases?
-```
+> Compare net merchandise revenue by quarter for 2024 and 2025. Explain the largest changes and call out any data gaps.
 
-    You do not need to name a file, write SQL, or choose a tool.
-  </Step>
-  <Step title="Add constraints">
-    Include the period, exclusions, grouping, or definition that matters. For example: `Exclude transfers and compare monthly spending in 2025 with 2024.`
-  </Step>
-  <Step title="Inspect and refine">
-    Open **Evidence** to confirm the source and computation. If the interpretation is wrong, state the correction in a follow-up.
-  </Step>
-</Steps>
+For a direct lookup, a short question is enough. For a complex question, say what comparison or explanation would make the answer useful. If a metric has a formal definition, include it or point Fella to the relevant workspace context.
 
-## Match the question to the data
+## What determines the answer layout
 
-| Question shape | Usual path |
-| --- | --- |
-The model chooses among table inspection, document search/reading, SQL,
-sandboxed Python, and charts based on the question and what it learns from the
-files. It may inspect first, revise its interpretation, and use more than one
-tool. The runtime enforces read-only scope and checks execution; it does not
-require a particular analysis language or fixed tool sequence.
+The canonical answer is grounded in the analysis. When the saved results support a useful structured view, Fella uses JSON-render to compose one from registered components: prose, metrics, cards, tables, charts, callouts, and limited presentation controls.
 
-Forecasts and scenarios are supported. Ask for a horizon or assumptions when
-they matter. Fella should distinguish observed history from an estimate and
-explain material uncertainty; a missing time field or insufficient history is
-a specific evidence limitation, not a blanket forecast prohibition.
+The model selects a composition based on the question and result shape. A time trend may use a line or area chart; a category ranking may use bars; exact records may work best as a table; a short explanation may need no chart at all. The catalog provides safe building blocks, not a single answer template.
 
-## Ask for the shape, not just the headline
+Analytical values must bind to the supplied saved results. The presentation cannot execute arbitrary code or independently fetch data. If a view is invalid or unavailable, the answer and its analysis remain available in text.
 
-For a simple lookup, ask directly:
+## Continue the conversation or start an Investigation
 
-```text filename="question"
-How much did I spend on rent in 2024?
-```
+Use a follow-up to clarify or narrow the current answer:
 
-For a change, comparison, or correlation, ask for the explanation too:
+> Exclude canceled orders and show the result by product category.
 
-```text filename="question"
-Did my spending increase because of a few outliers, or did most months move together?
-```
+Create an Investigation when you want a named objective, a Question plan, explicit source choices, run history, Findings, and coverage. Creating an Investigation opens its own linked conversation. A normal new conversation remains a chat and does not automatically create an Investigation.
 
-The harness prompt tells the model to inspect whether a trend is broad-based, whether a correlation has enough points, and whether a difference is meaningful rather than reporting only one number.
+## Review an answer
 
-## Follow-up questions
+Open **How this was analyzed** to inspect the recorded run. Review the source files, filters, joins, definitions, returned values, and checks. For persistent Question coverage and saved Findings, open Notebook and select the Investigation.
 
-Follow-ups can reuse a bounded digest of the last three useful turns in that conversation, including recent headlines and successful SQL. Narrow a question when the first answer used the wrong interpretation:
+General explanations can be answered without a data tool. Such a reply has no workspace evidence. File-specific claims and numbers should be supported by the recorded run.
 
-```text filename="conversation"
-You included transfers. Exclude them and group the remaining spending by month.
-```
+## Stop, retry, or correct
 
-If a correction represents a durable vocabulary rule, Fella can record it in folder memory. See [context and memory](/developer-platform/using-fella/context-and-memory).
-
-## Forecasts and evidence limits
-
-Past files do not prove a future outcome, but they can support an estimate or
-scenario. For example, Fella can project a value from a stated historical
-baseline and label it as an estimate. If a time-series request lacks dates,
-history, or another material input, Fella should identify the missing evidence,
-provide any useful partial result, and ask for the information needed to
-continue rather than inventing a forecast or stopping with a generic refusal.
-
-Definitions and general explanations can be answered without a tool. A leading `Background:` line marks general knowledge, not workspace evidence, and the prompt bars it from supplying specific figures.
-
-## Stop or retry
-
-Press `Esc` or click the stop button beside the composer to stop. The run keeps evidence already collected and returns `Stopped.` While an answer is running, submitting a plain-text correction cancels it and re-asks with that correction. Use `/retry` after a transient provider error or after changing models.
+Stop an active run with the stop control or Escape. The evidence gathered so far remains available. Use the retry action after a transient provider error. If the interpretation is wrong, state the correction in a follow-up or revise the Question and run it again.
 
 <CardGroup cols={2}>
-  <Card title="Inspect the evidence" icon="search-check" href="/developer-platform/using-fella/evidence">
-    See the exact computation behind a response.
+  <Card title="Evidence and analysis" icon="search-check" href="/developer-platform/using-fella/evidence">
+    Understand the trace behind an answer.
   </Card>
-  <Card title="Learn the harness" icon="workflow" href="/concepts/harness">
-    Read the loop and its limits in source-backed detail.
+  <Card title="Investigations" icon="notebook-pen" href="/developer-platform/using-fella/investigations">
+    Track multiple Questions and their completion.
   </Card>
 </CardGroup>

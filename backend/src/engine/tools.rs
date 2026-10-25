@@ -15,6 +15,7 @@ use crate::engine::analytics::verify::truncate as truncate_chars;
 use crate::engine::capabilities::AnalysisCapabilities;
 use crate::engine::catalog;
 use crate::engine::error::{EngineError, EngineResult};
+use crate::engine::investigation::InvestigationSourceSelection;
 use crate::engine::llm::ToolSchema;
 use crate::engine::runtime::{CLARIFICATION_TOOL_NAME, CONTRACT_TOOL_NAME};
 use crate::engine::state::{EngineState, GrepHit, QueryResult};
@@ -55,6 +56,8 @@ pub struct ToolContext<'a> {
     /// Tool access is scoped to the active conversation, never to arbitrary
     /// turn IDs supplied by another conversation.
     pub conversation_id: Option<&'a str>,
+    /// Immutable file boundary for the active Investigation turn.
+    pub source_selection: Option<&'a InvestigationSourceSelection>,
 }
 
 fn chart_source_ids(evidence: &[crate::engine::evidence::EvidenceItem]) -> Vec<String> {
@@ -143,6 +146,15 @@ pub trait Tool: Send + Sync {
         self.run(engine, args).await
     }
 
+    async fn run_with_source_selection(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        _source_selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<ToolOutput> {
+        self.run(engine, args).await
+    }
+
     async fn run_with_context_cancel(
         &self,
         engine: &EngineState,
@@ -218,9 +230,6 @@ impl Registry {
                 tools.push(Box::new(ForecastAnalysis));
             }
         }
-        if capabilities.charts_enabled() {
-            tools.push(Box::new(MakeChart));
-        }
         Self {
             tools,
             capabilities,
@@ -238,6 +247,11 @@ impl Registry {
     /// avoid compiling an automatic SQL plan when table analysis is disabled.
     pub fn has_tool(&self, name: &str) -> bool {
         self.get(name).is_some()
+    }
+
+    /// Whether this registry's settings allow charts in generated presentations.
+    pub fn charts_enabled(&self) -> bool {
+        self.capabilities.charts_enabled()
     }
 
     /// Run the tool named `name`. `None` = no such tool.
@@ -267,6 +281,7 @@ impl Registry {
             &ToolContext {
                 prior_evidence: &[],
                 conversation_id: None,
+                source_selection: None,
             },
             cancel,
         )
@@ -529,7 +544,7 @@ fn contract_schema() -> Json {
             "assumptions": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "Interpretive choices that affect the result, including semantic mappings and the exact observed labels combined. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. These are user inputs, not observed facts. Disclose material assumptions in the final answer."
+                "description": "Record interpretive choices used to proceed, including reasonable low-impact defaults, semantic mappings, and the exact observed labels combined. Do not record observed facts as assumptions. For a numeric what-if, preserve the user's original value, unit, and direction here (for example, '10% lower'), separately from any transformed multiplier used to calculate it. Disclose assumptions that could affect interpretation in the final answer."
             },
             "unresolved": { "type": "array", "items": { "type": "string" } }
         },
@@ -735,6 +750,17 @@ impl Tool for ReadPriorAnalysis {
             ));
         }
 
+        if context.source_selection.is_some_and(|selection| {
+            turn.investigation_context
+                .as_ref()
+                .map(|snapshot| &snapshot.source_selection)
+                != Some(selection)
+        }) {
+            return Err(EngineError::msg(
+                "prior analysis used a different Investigation source selection",
+            ));
+        }
+
         let catalog = engine.catalog();
         let current_workspace = catalog.workspace.clone();
         let same_snapshot = turn.workspace.as_deref() == current_workspace.as_deref()
@@ -842,6 +868,26 @@ impl Tool for ListFiles {
         })
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        self.run_with_source_selection(engine, args, None).await
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run_with_source_selection(engine, args, context.source_selection)
+            .await
+    }
+
+    async fn run_with_source_selection(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<ToolOutput> {
         let filter = match args.get("kind").and_then(Json::as_str).unwrap_or("all") {
             "all" => catalog::FileListFilter::All,
             "tables" => catalog::FileListFilter::Tables,
@@ -865,7 +911,8 @@ impl Tool for ListFiles {
             .map(|limit| limit.min(usize::MAX as u64) as usize)
             .unwrap_or(DEFAULT_FILE_PAGE_SIZE)
             .clamp(1, MAX_FILE_PAGE_SIZE);
-        let page = engine.list_files_page(filter, query, offset, limit)?;
+        let page =
+            engine.list_files_page_for_selection(filter, query, offset, limit, source_selection)?;
         let first = page.offset.min(page.matching);
         let last = first + page.lines.len();
         let shown = page.lines.len();
@@ -1039,6 +1086,22 @@ impl Tool for InspectTable {
             python_queries_complete: None,
         })
     }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let name = str_arg(args, "name")?;
+        if !engine.source_selection_allows_name(context.source_selection, name) {
+            return Err(EngineError::msg(format!(
+                "source `{name}` is outside this Investigation's selected files"
+            )));
+        }
+        self.run(engine, args).await
+    }
 }
 
 // --- run_sql -----------------------------------------------------------
@@ -1074,6 +1137,22 @@ impl Tool for RunSql {
     ) -> EngineResult<ToolOutput> {
         let sql = str_arg(args, "sql")?;
         let q = engine.run_sql_cancellable(sql, cancel)?;
+        Ok(sql_output(engine, sql, q))
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let sql = str_arg(args, "sql")?;
+        let q = engine.run_sql_cancellable_with_source_selection(
+            sql,
+            cancel,
+            context.source_selection,
+        )?;
         Ok(sql_output(engine, sql, q))
     }
 }
@@ -1270,6 +1349,94 @@ impl Tool for GrepFiles {
             python_queries_complete: None,
         })
     }
+
+    async fn run_with_source_selection(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<ToolOutput> {
+        let pattern = str_arg(args, "pattern")?;
+        let max_hits = args
+            .get("max_hits")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(15)
+            .clamp(1, 50) as usize;
+        let results = engine.search_files_for_selection(pattern, max_hits, source_selection)?;
+
+        if results.hits.is_empty() {
+            let no_matches = if results.incomplete {
+                "No matching passage was found in the selected sources. The scan is incomplete because it reached its scan limit or could not read a source; try a narrower query or inspect likely files."
+            } else {
+                "No document passage in the selected sources contains those terms or matches that pattern. Try alternate wording or likely labels; this search is lexical, so a no-match does not establish that the information is absent."
+            };
+            return Ok(ToolOutput::text("no matches", no_matches));
+        }
+
+        let mut llm_text = results
+            .hits
+            .iter()
+            .enumerate()
+            .map(|(rank, hit)| format!("{}. {}:{}:\n{}", rank + 1, hit.source, hit.line, hit.text))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if results.incomplete {
+            llm_text.push_str("\n\nSelected-source search was incomplete (scan limit reached or a source could not be read); these are the best matches in the scanned portion, not guaranteed selection-wide top results.");
+        }
+
+        Ok(ToolOutput {
+            summary: format!(
+                "{} ranked passage(s){}",
+                results.hits.len(),
+                if results.incomplete {
+                    " · partial scan"
+                } else {
+                    ""
+                }
+            ),
+            llm_text,
+            sources: Vec::new(),
+            sql: None,
+            columns: Some(vec![
+                "rank".into(),
+                "source".into(),
+                "line".into(),
+                "passage".into(),
+            ]),
+            rows: Some(
+                results
+                    .hits
+                    .iter()
+                    .enumerate()
+                    .map(|(rank, hit)| {
+                        vec![
+                            Json::from(rank + 1),
+                            Json::from(hit.source.clone()),
+                            Json::from(hit.line),
+                            Json::from(hit.text.clone()),
+                        ]
+                    })
+                    .collect(),
+            ),
+            row_count: Some(results.hits.len()),
+            output: None,
+            chart: None,
+            result_table: None,
+            python_queries: None,
+            python_queries_complete: None,
+        })
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run_with_source_selection(engine, args, context.source_selection)
+            .await
+    }
 }
 
 // --- read_file ---------------------------------------------------------
@@ -1299,6 +1466,15 @@ impl Tool for ReadFile {
         })
     }
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
+        self.run_with_source_selection(engine, args, None).await
+    }
+
+    async fn run_with_source_selection(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<ToolOutput> {
         let names: Vec<String> = match args.get("names").and_then(|v| v.as_array()) {
             Some(arr) if !arr.is_empty() => arr
                 .iter()
@@ -1316,7 +1492,7 @@ impl Tool for ReadFile {
         let mut used = 0usize;
         let mut any_truncated = false;
         for name in &names {
-            let (text, truncated) = engine.read_file(name)?;
+            let (text, truncated) = engine.read_file_for_selection(name, source_selection)?;
             any_truncated |= truncated;
             let remaining = COMBINED_CAP.saturating_sub(used);
             let clipped: String = if text.chars().count() > remaining {
@@ -1353,6 +1529,17 @@ impl Tool for ReadFile {
             python_queries: None,
             python_queries_complete: None,
         })
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        _cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        self.run_with_source_selection(engine, args, context.source_selection)
+            .await
     }
 }
 
@@ -1406,6 +1593,20 @@ Use Python for local analysis, not for fetching anything."
         let code = str_arg(args, "code")?;
         let r = engine.run_python_cancellable(code, cancel).await?;
         Ok(python_output(r))
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        let code = str_arg(args, "code")?;
+        let result = engine
+            .run_python_cancellable_with_source_selection(code, cancel, context.source_selection)
+            .await?;
+        Ok(python_output(result))
     }
 }
 
@@ -1565,7 +1766,7 @@ impl Tool for ForecastAnalysis {
     }
 
     async fn run(&self, engine: &EngineState, args: &Json) -> EngineResult<ToolOutput> {
-        run_forecast_analysis(engine, args, Arc::new(AtomicBool::new(false))).await
+        run_forecast_analysis(engine, args, Arc::new(AtomicBool::new(false)), None).await
     }
 
     async fn run_with_cancel(
@@ -1574,7 +1775,17 @@ impl Tool for ForecastAnalysis {
         args: &Json,
         cancel: Arc<AtomicBool>,
     ) -> EngineResult<ToolOutput> {
-        run_forecast_analysis(engine, args, cancel).await
+        run_forecast_analysis(engine, args, cancel, None).await
+    }
+
+    async fn run_with_context_cancel(
+        &self,
+        engine: &EngineState,
+        args: &Json,
+        context: &ToolContext<'_>,
+        cancel: Arc<AtomicBool>,
+    ) -> EngineResult<ToolOutput> {
+        run_forecast_analysis(engine, args, cancel, context.source_selection).await
     }
 }
 
@@ -1582,6 +1793,7 @@ async fn run_forecast_analysis(
     engine: &EngineState,
     args: &Json,
     cancel: Arc<AtomicBool>,
+    source_selection: Option<&InvestigationSourceSelection>,
 ) -> EngineResult<ToolOutput> {
     let args: ForecastArgs = serde_json::from_value(args.clone())
         .map_err(|error| EngineError::msg(format!("invalid forecast arguments: {error}")))?;
@@ -1625,7 +1837,11 @@ async fn run_forecast_analysis(
         ));
     }
 
-    let query = engine.run_sql_cancellable(&args.sql, cancel.clone())?;
+    let query = engine.run_sql_cancellable_with_source_selection(
+        &args.sql,
+        cancel.clone(),
+        source_selection,
+    )?;
     if query.truncated {
         return Err(EngineError::msg(
             "forecast input query was capped; aggregate to a coarser time grain or narrow the training window",
@@ -1906,6 +2122,7 @@ impl Tool for MakeChart {
             &ToolContext {
                 prior_evidence: &[],
                 conversation_id: None,
+                source_selection: None,
             },
             Arc::new(AtomicBool::new(false)),
         )
@@ -2010,7 +2227,12 @@ async fn create_chart(
         } else {
             DEFAULT_ROW_CAP
         };
-        let query = engine.run_chart_sql_cancellable(sql, cancel, source_row_limit)?;
+        let query = engine.run_chart_sql_cancellable_with_source_selection(
+            sql,
+            cancel,
+            source_row_limit,
+            context.source_selection,
+        )?;
         if query.truncated {
             return Err(EngineError::msg(format!("the chart query returned {} source rows, beyond the {}-row raw result limit; keep the requested date range and grain, and reduce rows by aggregating each x/group combination in SQL. Do not narrow the period unless the user asked for that", query.row_count, source_row_limit)));
         }
@@ -2097,6 +2319,7 @@ mod tests {
             python_queries_complete: None,
             ms: 0,
             error: None,
+            error_kind: None,
             verifier_disposition: None,
         }
     }
@@ -2160,13 +2383,14 @@ mod tests {
             }
         }))
         .unwrap();
-        crate::engine::analysis_store::save(&data, &turn).unwrap();
+        crate::engine::analysis_store::create(&data, &turn).unwrap();
 
         let registry = Registry::standard_with_history(AnalysisCapabilities::default(), true);
         assert!(registry.has_tool("read_prior_analysis"));
         let context = ToolContext {
             prior_evidence: &[],
             conversation_id: Some("conversation-one"),
+            source_selection: None,
         };
         let retrieved = registry
             .run_with_context_cancel(
@@ -2188,6 +2412,7 @@ mod tests {
         let wrong_conversation = ToolContext {
             prior_evidence: &[],
             conversation_id: Some("conversation-two"),
+            source_selection: None,
         };
         let rejected = registry
             .run_with_context_cancel(
@@ -2384,6 +2609,11 @@ mod tests {
 
         assert_eq!(names, vec!["list_files"]);
 
+        assert!(
+            !Registry::standard().has_tool("make_chart"),
+            "new workspace answers compose json-render presentations from saved results; legacy chart evidence is read-only"
+        );
+
         let python_disabled = AnalysisCapabilities {
             python_analysis: false,
             ..AnalysisCapabilities::default()
@@ -2457,6 +2687,12 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .contains("preserve the user's original value, unit, and direction")
+        );
+        assert!(
+            contract_schemas[0].parameters["properties"]["assumptions"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("reasonable low-impact defaults")
         );
         let time_properties = &contract_schemas[0].parameters["properties"]["time"]["properties"];
         assert!(time_properties["range"]["description"]

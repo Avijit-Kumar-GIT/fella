@@ -1,5 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, protocol, shell } from 'electron';
-import { mkdirSync } from 'node:fs';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, screen, shell } from 'electron';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -10,6 +10,7 @@ import { checkAndApply } from './update.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 let engine;
+app.setName('Fella');
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -78,9 +79,104 @@ function dataDirectory() {
 
 const DARK_WINDOW = '#0e0e10';
 const LIGHT_WINDOW = '#fcfcfb';
+const WINDOW_STATE_PATH = () => join(app.getPath('userData'), 'window-state.json');
+
+async function readWindowState() {
+	try {
+		const value = JSON.parse(await readFile(WINDOW_STATE_PATH(), 'utf8'));
+		const bounds = value?.bounds;
+		if (!bounds || !['x', 'y', 'width', 'height'].every((key) => Number.isFinite(bounds[key]))) return null;
+		if (bounds.width < 560 || bounds.height < 640) return null;
+		const visible = screen.getAllDisplays().some(({ workArea }) => {
+			const width = Math.max(0, Math.min(bounds.x + bounds.width, workArea.x + workArea.width) - Math.max(bounds.x, workArea.x));
+			const height = Math.max(0, Math.min(bounds.y + bounds.height, workArea.y + workArea.height) - Math.max(bounds.y, workArea.y));
+			return width >= 120 && height >= 120;
+		});
+		return visible ? { bounds, maximized: value.maximized === true } : null;
+	} catch {
+		return null;
+	}
+}
+
+function installApplicationMenu() {
+	const sendCommand = (command) => {
+		const owner = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+		if (owner && !owner.webContents.isDestroyed()) owner.webContents.send('fella:app-command', command);
+	};
+	const item = (label, command, accelerator) => ({
+		id: `fella-${command}`,
+		label,
+		...(accelerator ? { accelerator } : {}),
+		click: () => sendCommand(command)
+	});
+	const mac = process.platform === 'darwin';
+	const menus = [];
+	if (mac) {
+		menus.push({
+			label: app.name,
+			submenu: [
+				{ role: 'about' },
+				{ type: 'separator' },
+				item('Settings…', 'settings', 'CmdOrCtrl+,'),
+				{ type: 'separator' },
+				{ role: 'services' },
+				{ type: 'separator' },
+				{ role: 'hide' },
+				{ role: 'hideOthers' },
+				{ role: 'unhide' },
+				{ type: 'separator' },
+				{ role: 'quit' }
+			]
+		});
+	}
+	menus.push({
+		id: 'fella-menu-file',
+		label: 'File',
+		submenu: [
+			item('New conversation', 'new-conversation', 'CmdOrCtrl+N'),
+			item('Open folder…', 'open-folder', 'CmdOrCtrl+O'),
+			{ type: 'separator' },
+			...(mac ? [] : [item('Settings…', 'settings', 'CmdOrCtrl+,')]),
+			{ role: 'close' }
+		]
+	});
+	menus.push({
+		id: 'fella-menu-edit',
+		label: 'Edit',
+		submenu: [
+			{ role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+			{ role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }
+		]
+	});
+	menus.push({
+		id: 'fella-menu-view',
+		label: 'View',
+		submenu: [
+			item('Search', 'search', 'CmdOrCtrl+K'),
+			item('Toggle sidebar', 'toggle-sidebar', 'CmdOrCtrl+B'),
+			{ type: 'separator' },
+			item('Chat', 'show-chat'),
+			item('Notebook', 'open-notebook')
+		]
+	});
+	if (mac) menus.push({ label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { role: 'close' }] });
+	menus.push({
+		id: 'fella-menu-help',
+		role: 'help',
+		submenu: [{ label: 'Fella on GitHub', click: () => void openExternal('https://github.com/Avijit-Kumar-GIT/fella') }]
+	});
+	Menu.setApplicationMenu(Menu.buildFromTemplate(menus));
+}
 
 function setWindowAppearance(win, dark) {
 	win.setBackgroundColor(dark ? DARK_WINDOW : LIGHT_WINDOW);
+	if (process.platform !== 'darwin') {
+		win.setTitleBarOverlay({
+			color: dark ? DARK_WINDOW : LIGHT_WINDOW,
+			symbolColor: dark ? '#a1a1aa' : '#71717a',
+			height: 32
+		});
+	}
 }
 
 async function waitForDevServer(url, timeoutMs = 15000) {
@@ -100,21 +196,22 @@ async function waitForDevServer(url, timeoutMs = 15000) {
 }
 
 async function createWindow() {
-	const mac = process.platform === 'darwin';
-	const windows = process.platform === 'win32';
+	const savedState = await readWindowState();
 	const win = new BrowserWindow({
-		width: 1280,
-		height: 800,
-		minWidth: 960,
+		...(savedState?.bounds ?? { width: 1280, height: 800 }),
+		minWidth: 560,
 		minHeight: 640,
 		resizable: true,
 		show: false,
-		// Windows is frameless because Fella draws its own controls; Linux and
-		// macOS retain the native frame.
-		frame: !windows,
-		titleBarStyle: mac ? 'hiddenInset' : undefined,
+		// Keep the native resize frame and native system controls while allowing
+		// Fella's compact menu/workspace row to share the title bar area.
+		frame: true,
+		titleBarStyle: 'hidden',
+		titleBarOverlay: process.platform === 'darwin'
+			? true
+			: { color: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW, symbolColor: nativeTheme.shouldUseDarkColors ? '#a1a1aa' : '#71717a', height: 32 },
 		backgroundColor: nativeTheme.shouldUseDarkColors ? DARK_WINDOW : LIGHT_WINDOW,
-		autoHideMenuBar: true,
+		autoHideMenuBar: process.platform !== 'darwin',
 		title: 'Fella',
 		webPreferences: {
 			// Sandboxed preloads cannot use ESM imports. Keep this bridge CommonJS
@@ -125,8 +222,34 @@ async function createWindow() {
 			sandbox: true
 		}
 	});
+	if (process.platform !== 'darwin') win.setMenuBarVisibility(false);
+	if (savedState?.maximized) win.maximize();
+	let windowStateTimer;
+	const saveWindowState = () => {
+		clearTimeout(windowStateTimer);
+		windowStateTimer = setTimeout(() => {
+			try {
+				const path = WINDOW_STATE_PATH();
+				mkdirSync(dirname(path), { recursive: true });
+				writeFileSync(path, JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }), 'utf8');
+			} catch (error) {
+				console.warn('Could not save Fella window size:', error);
+			}
+		}, 250);
+	};
+	win.on('resize', saveWindowState);
+	win.on('move', saveWindowState);
+	win.on('close', () => {
+		clearTimeout(windowStateTimer);
+		try {
+			const path = WINDOW_STATE_PATH();
+			mkdirSync(dirname(path), { recursive: true });
+			writeFileSync(path, JSON.stringify({ bounds: win.getNormalBounds(), maximized: win.isMaximized() }), 'utf8');
+		} catch (error) {
+			console.warn('Could not save Fella window size:', error);
+		}
+	});
 	setWindowAppearance(win, nativeTheme.shouldUseDarkColors);
-
 	win.once('ready-to-show', () => win.show());
 	win.webContents.on('preload-error', (_event, preloadPath, error) => {
 		console.error(`Fella preload failed (${preloadPath}):`, error);
@@ -158,7 +281,20 @@ async function openExternal(url) {
 	}
 }
 
+function isTrustedAppFrame(event) {
+	if (!event.senderFrame || event.senderFrame !== event.sender.mainFrame) return false;
+	try {
+		const frameUrl = new URL(event.senderFrame.url);
+		if (frameUrl.protocol === 'fella:' && frameUrl.hostname === 'app') return true;
+		const devUrl = process.env.FELLA_ELECTRON_URL;
+		return Boolean(devUrl) && new URL(devUrl).origin === frameUrl.origin;
+	} catch {
+		return false;
+	}
+}
+
 app.whenReady().then(() => {
+	installApplicationMenu();
 	const buildRoot = app.isPackaged
 		? resolve(app.getAppPath(), 'build')
 		: resolve(root, 'build');
@@ -209,6 +345,15 @@ app.whenReady().then(() => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
 			if (owner) setWindowAppearance(owner, Boolean(dark));
 		});
+		ipcMain.handle('fella:popup-menu', (event, request) => {
+			if (!isTrustedAppFrame(event)) return false;
+			const owner = BrowserWindow.fromWebContents(event.sender);
+			const name = ['file', 'edit', 'view', 'help'].includes(request?.name) ? request.name : null;
+			const menu = name ? Menu.getApplicationMenu()?.getMenuItemById(`fella-menu-${name}`)?.submenu : null;
+			if (!owner || !menu) return false;
+			menu.popup({ window: owner, x: Math.round(request.x), y: Math.round(request.y) });
+			return true;
+		});
 		ipcMain.handle('fella:ask', (event, request) =>
 			engine.request('ask', request.params ?? {}, (item) => {
 				if (!event.sender.isDestroyed()) {
@@ -231,6 +376,11 @@ app.whenReady().then(() => {
 			});
 			return result.canceled ? null : result.filePaths[0] ?? null;
 		});
+		ipcMain.handle('fella:sample-workspace-path', () =>
+			app.isPackaged
+				? join(process.resourcesPath, 'fella-sample-data')
+				: join(here, 'fella-sample-data')
+		);
 		ipcMain.handle('fella:open-external', (_event, url) => openExternal(url));
 		ipcMain.handle('fella:window-action', (event, action) => {
 			const owner = BrowserWindow.fromWebContents(event.sender);
@@ -252,5 +402,5 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
-		engine?.dispose();
-	});
+	engine?.dispose();
+});

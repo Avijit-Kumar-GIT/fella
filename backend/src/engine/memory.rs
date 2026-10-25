@@ -1,6 +1,6 @@
-//! Per-folder learned notes: a plain-Markdown file Fella keeps for a workspace,
-//! written from what the user *corrects*, and that the user can read and edit.
-//! Not a memory system it's the learned sibling of `fella.md`.
+//! Per-folder learned notes: a plain-Markdown projection Fella keeps for a
+//! workspace, alongside a typed ledger of model-proposed and verified facts.
+//! Users can inspect and curate them. This is the learned sibling of `fella.md`.
 //!
 //! One `.md` per workspace under `<data_dir>/memory/`, plus an append-only
 //! `.episodes.jsonl` and the typed `.facts.jsonl` ledger maintained by
@@ -11,7 +11,8 @@
 //! into a generated `## Semantic facts` section with their provenance visible.
 //!
 //! Deliberately stores only durable *facts* (preferences, vocabulary, table
-//! notes), never a cached *query*. Earlier versions cached `question -> SQL`
+//! notes, and model-proposed analysis definitions), never a cached *query*.
+//! Earlier versions cached `question -> SQL`
 //! "recipes" for questions that looked similar. Those recipes were removed;
 //! see `docs/ARCHITECTURE.md` for the current context and memory contract.
 //! A recipe is executable code, not a durable fact: replaying it can freeze
@@ -166,7 +167,7 @@ impl FolderMemory {
         let mut s = String::new();
         s.push_str("# Fella  learned notes for this folder\n\n");
         s.push_str(
-            "<!-- Fella writes this from corrections you give it.\n     \
+            "<!-- Fella records confirmed corrections, verified bindings, and model-proposed analysis notes here.\n     \
 Edit or delete anything; delete the file to start over.\n     \
 The \"## Notes\" section and any sections you add are left untouched. -->\n",
         );

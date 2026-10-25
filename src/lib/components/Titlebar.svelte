@@ -1,218 +1,74 @@
 <script lang="ts">
-	import { firstActualQuestion, session } from '$lib/session.svelte';
-	import { isDesktop, win } from '$lib/ipc';
+	import { session } from '$lib/session.svelte';
+	import { openContext } from '$lib/commands';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
-	import TabBar from './TabBar.svelte';
-
-	let { onpalette }: { onpalette: () => void } = $props();
-
-	let multiTab = $derived(session.tabs.length > 1);
-	let folder = $derived(
-		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
-
-	// --- the active conversation's own title: a custom name if renamed,
-	// otherwise folder + its first message, not just the raw message -- the
-	// folder is what actually distinguishes two similarly-phrased
-	// conversations from each other.
-	let conversationTitle = $derived.by(() => {
-		if (session.activeChat?.title) return session.activeChat.title;
-		const msgs = session.activeChat?.messages ?? [];
-		const first = firstActualQuestion(msgs);
-		if (!first) return folder || 'New conversation';
-		const t = first.text.trim();
-		const clipped = t.length > 60 ? t.slice(0, 60) + '…' : t;
-		return folder ? `${folder} — ${clipped}` : clipped;
-	});
-	let displayTitle = $derived.by(() => {
-		const prefix = folder || 'Workspace';
-		if (session.workspaceView === 'workspace') return `${prefix} — Workspace`;
-		if (session.workspaceView === 'project') return `${session.activeProject?.name ?? 'Project'} — Project`;
-		if (session.workspaceView === 'settings') return `${prefix} — Settings`;
-		return conversationTitle;
-	});
-
-
-	// macOS keeps its native traffic lights (titleBarStyle: Overlay), so leave a
-	// gutter for them. Windows/Linux draw nothing on the left.
-	const isMac =
-		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent);
-	// Windows is frameless (decorations:false) and needs our own controls; Linux
-	// keeps its native frame, so it doesn't.
-	const isWindows =
-		typeof navigator !== 'undefined' && /Win/i.test(navigator.platform || navigator.userAgent);
-	const shortcutModifier = isMac ? '⌘' : 'Ctrl';
-
+	let { onpalette, onworkspaceselect, expanded = false, compact = false, nativeOverlay = false, ontoggleexpand }: {
+		onpalette: () => void; onworkspaceselect: (id:string) => void | Promise<void>;
+		expanded?: boolean; compact?: boolean; nativeOverlay?: boolean; ontoggleexpand?: () => void;
+	} = $props();
+	const nativePlatform = typeof window === 'undefined' ? null : window.fella?.platform ?? null;
+	const showIntegratedMenus = nativePlatform !== null && nativePlatform !== 'darwin';
+	function openNativeMenu(event: MouseEvent, name: 'file' | 'edit' | 'view' | 'help'): void {
+		const button = event.currentTarget as HTMLElement;
+		const rect = button.getBoundingClientRect();
+		void window.fella?.popupMenu(name, rect.left, rect.bottom);
+	}
 </script>
 
-<div class="titlebar" class:mac={isMac} class:focus={session.focus} class:collapsed={!session.focus && session.sidebarCollapsed}>
-	{#if isMac}<span class="lights" aria-hidden="true"></span>{/if}
-
-	{#if !session.focus && session.sidebarCollapsed}
-		<span class="logo"><Logo size={18} active={session.busy} /></span>
-		<button
-			class="navbtn"
-			aria-expanded={!session.sidebarCollapsed}
-			title={`Expand sidebar (${shortcutModifier}+B)`}
-			onclick={() => session.toggleSidebar()}
-		>
-			<Icon name="panel" size={16} />
-		</button>
-	{/if}
-
-	{#if session.focus}
-		<span class="spacer"></span>
-		{#if folder}<span class="folder faint" title={session.catalog.workspace}>{folder}</span>{/if}
-		<span class="spacer"></span>
-	{:else}
-		{#if multiTab}
-			<TabBar />
-		{:else}
-			<span class="id">
-				{#if folder}
-					<span class="folder" title={displayTitle}>{displayTitle}</span>
-				{:else}
-					<span class="wordmark">Fella</span>
-				{/if}
-			</span>
-		{/if}
-
-		<span class="spacer"></span>
-
-		<button
-			class="hint"
-			onclick={onpalette}
-			title={`Search Fella (${shortcutModifier}+K or ${shortcutModifier}+Shift+P)`}
-		>
-			<kbd>{shortcutModifier}</kbd><kbd>K</kbd>
-		</button>
-	{/if}
-
-	{#if isWindows && isDesktop()}
-		<div class="winctl">
-			<button aria-label="Minimize" onclick={() => void win.minimize()}>
-				<Icon name="minus" size={16} />
-			</button>
-			<button aria-label="Maximize" onclick={() => void win.toggleMaximize()}>
-				<Icon name="square" size={12} />
-			</button>
-			<button class="x" aria-label="Close" onclick={() => void win.close()}>
-				<Icon name="x" size={16} />
-			</button>
+<header class="titlebar" class:titlebar-overlay={nativeOverlay} class:integrated-menu={showIntegratedMenus} aria-label="Workspace navigation">
+	{#if showIntegratedMenus}
+		<div class="titlebar-leading">
+			<span class="titlebar-logo"><Logo size={14} /></span>
+			<nav class="titlebar-menus" aria-label="Application menu">
+				{#each [{ id:'file', label:'File' }, { id:'edit', label:'Edit' }, { id:'view', label:'View' }, { id:'help', label:'Help' }] as menu (menu.id)}
+					<button type="button" aria-haspopup="menu" onclick={(event) => openNativeMenu(event, menu.id as 'file' | 'edit' | 'view' | 'help')}>{menu.label}</button>
+				{/each}
+			</nav>
 		</div>
 	{/if}
-</div>
+	<div class="titlebar-workspace"><WorkspaceSwitcher compact onselect={onworkspaceselect} /></div>
+	<div class="titlebar-actions">
+		{#if session.activeChat.workspaceScope}
+			<button class="chrome-action" aria-label={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} title={session.workspacePaneOpen ? 'Close the panel' : 'Open the panel'} aria-expanded={session.workspacePaneOpen} onclick={() => session.toggleWorkspacePane()}><Icon name="panel-right" size={14} /></button>
+		{/if}
+		<DropdownMenu.Root>
+			<DropdownMenu.Trigger class="chrome-action" aria-label="Workspace actions" title="Workspace actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
+			<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end" sideOffset={6}>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={onpalette}><Icon name="search" size={14} />Search Fella</DropdownMenu.Item>
+				{#if session.catalog.workspace}
+					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void openContext()}><Icon name="notebook-pen" size={14} />Workspace context</DropdownMenu.Item>
+					<DropdownMenu.Separator class="workspace-context-separator" />
+				{/if}
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => { session.setContentLayout('chat'); if (expanded) ontoggleexpand?.(); }}>Chat view</DropdownMenu.Item>
+				<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => session.setContentLayout('notebook')}>Notebook view</DropdownMenu.Item>
+				{#if session.workspacePaneOpen && !compact}
+					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => ontoggleexpand?.()}><Icon name={expanded ? 'columns-2' : 'arrow-up-right'} size={14} />{expanded ? 'Restore split view' : 'Expand panel'}</DropdownMenu.Item>
+				{/if}
+			</DropdownMenu.Content></DropdownMenu.Portal>
+		</DropdownMenu.Root>
+	</div>
+</header>
 
 <style>
-	.titlebar {
-		flex: none;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		height: 38px;
-		padding: 0 var(--space-2) 0 var(--pad);
-		background: var(--bg);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-		user-select: none;
-		white-space: nowrap;
-		-webkit-app-region: drag;
-	}
-	.titlebar button {
-		-webkit-app-region: no-drag;
-	}
-	.titlebar.mac {
-		padding-left: 0;
-	}
-	.titlebar.collapsed {
-		padding-left: var(--space-2);
-	}
-	.lights {
-		flex: none;
-		width: 78px;
-	}
-	.logo {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-		flex: none;
-	}
-	.navbtn {
-		flex: none;
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 24px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.navbtn:hover:not(:disabled) {
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
-	.navbtn:disabled {
-		color: var(--border-strong);
-		cursor: default;
-	}
-	.id {
-		display: flex;
-		align-items: baseline;
-		gap: var(--space-2);
-		min-width: 0;
-	}
-	.wordmark {
-		color: var(--text-dim);
-		font-weight: 600;
-		letter-spacing: -0.02em;
-	}
-	.folder {
-		font-family: var(--mono);
-		font-size: var(--fs-xs);
-		color: var(--text-dim);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		min-width: 0;
-	}
-	.folder.faint {
-		color: var(--text-faint);
-	}
-	.spacer {
-		flex: 1;
-		align-self: stretch;
-	}
-	.hint {
-		display: inline-flex;
-		gap: 2px;
-		padding: 2px 6px;
-		color: var(--text-faint);
-		border-radius: var(--radius-chip);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.hint:hover {
-		background: var(--bg-inset);
-		color: var(--text-dim);
-	}
-	.winctl {
-		display: flex;
-		align-self: stretch;
-	}
-	.winctl button {
-		width: 42px;
-		display: grid;
-		place-items: center;
-		color: var(--text-faint);
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.winctl button:hover {
-		background: var(--bg-inset);
-		color: var(--text);
-	}
-	.winctl button.x:hover {
-		background: var(--err);
-		color: var(--bg-raised);
-	}
+	.titlebar { position:absolute; inset:0 0 auto; z-index:50; display:flex; height:56px; align-items:flex-start; justify-content:center; padding:12px 20px 0; pointer-events:none; user-select:none; -webkit-app-region:drag; }
+	.titlebar-workspace { min-width:0; max-width:calc(100% - 140px); pointer-events:auto; -webkit-app-region:no-drag; }
+	.titlebar-actions { position:absolute; top:14px; right:12px; display:flex; gap:2px; pointer-events:auto; -webkit-app-region:no-drag; }
+	.titlebar-overlay { inset:0 auto auto env(titlebar-area-x, 0px); width:env(titlebar-area-width, 100%); height:env(titlebar-area-height, 32px); display:grid; grid-template-columns:minmax(0,1fr) auto minmax(0,1fr); align-items:center; gap:8px; padding:0 8px; background:var(--app-chrome); }
+	.titlebar-overlay.integrated-menu { width:min(env(titlebar-area-width, calc(100vw - 140px)), calc(100vw - 140px)); }
+	.titlebar-overlay .titlebar-leading { grid-column:1; display:flex; min-width:0; align-items:center; justify-self:start; gap:8px; pointer-events:auto; }
+	.titlebar-overlay .titlebar-logo { display:flex; flex:none; align-items:center; justify-content:center; }
+	.titlebar-overlay .titlebar-menus { display:flex; min-width:0; align-items:center; justify-self:start; gap:2px; pointer-events:auto; -webkit-app-region:no-drag; }
+	.titlebar-overlay .titlebar-menus button { min-width:0; height:26px; padding:0 8px; border-radius:5px; color:var(--text); font-size:12px; font-weight:400; }
+	.titlebar-overlay .titlebar-menus button:hover, .titlebar-overlay .titlebar-menus button:focus-visible { background:var(--bg-raised-2); }
+	.titlebar-overlay .titlebar-workspace { grid-column:2; align-self:stretch; display:flex; align-items:center; box-sizing:border-box; margin-block:0; padding-block:6px; max-width:min(274px, calc(100vw - 420px)); }
+	.titlebar-overlay .titlebar-actions { position:static; grid-column:3; justify-self:end; }
+	.titlebar-overlay :global(.chrome-action) { width:26px; height:26px; }
+	@media (max-width:700px) { .titlebar-overlay { gap:2px; padding-inline:4px; } .titlebar-overlay .titlebar-leading { gap:4px; } .titlebar-overlay .titlebar-menus button { padding-inline:5px; } .titlebar-overlay .titlebar-workspace { max-width:calc(100vw - 500px); } }
+	@media (max-width:640px) { .titlebar-overlay.integrated-menu .titlebar-workspace { display:none; } }
+	:global(.chrome-action) { display:grid; width:28px; height:28px; place-items:center; padding:0; border:0; border-radius:50%; background:transparent; color:var(--text-faint); cursor:pointer; }
+	:global(.chrome-action:hover), :global(.chrome-action[data-state='open']) { background:var(--bg-raised); color:var(--text); }
+	:global(.workspace-context-separator) { height:1px; margin:6px 0; background:var(--border); }
 </style>

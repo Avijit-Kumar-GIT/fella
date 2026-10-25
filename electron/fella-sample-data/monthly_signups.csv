@@ -1,0 +1,37 @@
+month,channel,region,signups,marketing_spend_usd
+2025-01,Organic,North,220,7800
+2025-01,Paid search,North,300,11800
+2025-01,Referral,North,120,2200
+2025-02,Organic,North,235,7900
+2025-02,Paid search,North,315,12100
+2025-02,Referral,North,125,2250
+2025-03,Organic,North,250,8100
+2025-03,Paid search,North,335,12700
+2025-03,Referral,North,130,2300
+2025-04,Organic,North,265,8250
+2025-04,Paid search,North,350,13000
+2025-04,Referral,North,135,2350
+2025-05,Organic,North,290,8500
+2025-05,Paid search,North,370,13400
+2025-05,Referral,North,145,2450
+2025-06,Organic,North,310,8750
+2025-06,Paid search,North,385,13800
+2025-06,Referral,North,150,2500
+2025-07,Organic,North,330,8900
+2025-07,Paid search,North,410,14300
+2025-07,Referral,North,160,2600
+2025-08,Organic,North,350,9100
+2025-08,Paid search,North,430,14700
+2025-08,Referral,North,165,2650
+2025-09,Organic,North,375,9350
+2025-09,Paid search,North,450,15100
+2025-09,Referral,North,175,2750
+2025-10,Organic,North,395,9500
+2025-10,Paid search,North,475,15600
+2025-10,Referral,North,180,2800
+2025-11,Organic,North,420,9700
+2025-11,Paid search,North,500,16000
+2025-11,Referral,North,190,2900
+2025-12,Organic,North,450,9950
+2025-12,Paid search,North,540,16500
+2025-12,Referral,North,205,3050

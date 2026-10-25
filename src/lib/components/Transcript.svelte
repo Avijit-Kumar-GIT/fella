@@ -1,8 +1,11 @@
 <script lang="ts">
-	import { dispatch, openFolder, rerunAnalysisTurn, resumeLastFolder } from '$lib/commands';
+	import { tick } from 'svelte';
+	import { dispatch, openFolder, openSampleWorkspace, rerunAnalysisTurn } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
 	import { session } from '$lib/session.svelte';
-	import { isDesktop, openExternal } from '$lib/ipc';
+	import { openExternal } from '$lib/ipc';
 	import { fadeQuick } from '$lib/motion';
+	import { handleScrollRegionKeydown } from '$lib/scroll-region';
 	import Icon from './Icon.svelte';
 	import Logo from './Logo.svelte';
 	import Message from './Message.svelte';
@@ -34,8 +37,6 @@
 
 	// Show the connect panel whenever the user can't actually ask a question.
 	let showSetup = $derived(healthChecked && (rejected || !up || needModelPick));
-	let showExamples = $derived(up && !!currentModel && !needModelPick);
-
 	let services = $derived(session.providers.filter((p) => p.auth === 'key' && p.id !== 'custom'));
 
 	/** Start the in-app key entry flow without navigating away from Fella. */
@@ -44,21 +45,12 @@
 	}
 
 	let hasFolder = $derived(!!session.catalog.workspace);
+	let hasConversationTurn = $derived(session.messages.some((message) => message.role !== 'system'));
 	let folderName = $derived(
 		session.catalog.workspace?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
 	);
-	let lastFolderName = $derived(
-		session.lastFolder?.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') ?? ''
-	);
 	let fileCount = $derived(session.catalog.sources.length);
 	let skipped = $derived(session.catalog.skipped ?? []);
-
-	const EXAMPLES = [
-		'How did my spending change this year?',
-		'What stands out in my workout log?',
-		"Summarise what's in these files"
-	];
-
 	let scroller: HTMLDivElement;
 	let expanded = $state<Record<string, boolean>>({});
 
@@ -66,27 +58,20 @@
 		expanded = { ...expanded, [id]: !expanded[id] };
 	}
 
-	function questionFor(index: number): string {
-		for (let i = index - 1; i >= 0; i--) {
-			if (session.messages[i]?.role === 'user') return session.messages[i].text;
-		}
-		return '';
-	}
-
 	function rerun(message: import('$lib/types').Message): Promise<void> {
 		return rerunAnalysisTurn(message);
 	}
 
-	let stick = true;
+	let stick = $state(true);
 	function onScroll() {
 		if (!scroller) return;
 		stick = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 40;
 	}
-	// Switching tabs shows a different transcript jump it to the latest and
-	// drop any stale expanded-evidence state from the previous tab. Entering
+	// Switching conversations shows a different transcript jump it to the latest and
+	// drop any stale expanded-evidence state from the previous one. Entering
 	// focus mode collapses evidence too, so it's just the answers.
 	$effect(() => {
-		session.active;
+		session.activeConversationIndex;
 		session.focus;
 		stick = true;
 		expanded = {};
@@ -100,6 +85,19 @@
 		}
 	});
 
+	$effect(() => {
+		const target = session.conversationAnalysisFocus;
+		if (!target || target.conversationId !== session.activeChat.id) return;
+		void tick().then(() => {
+			if (session.conversationAnalysisFocus !== target || target.conversationId !== session.activeChat.id) return;
+			const message = [...(scroller?.querySelectorAll<HTMLElement>('[data-analysis-turn-id]') ?? [])]
+				.find((element) => element.dataset.analysisTurnId === target.turnId);
+			if (!message) return;
+			message.scrollIntoView({ behavior: 'smooth', block: 'center' });
+			session.clearConversationAnalysisFocus(target);
+		});
+	});
+
 	export function collapseAll() {
 		expanded = {};
 	}
@@ -108,80 +106,73 @@
 <!-- role="log" for structure, but not a live region the answer streams in
      token by token, which would make a screen reader read every fragment. The
      visually-hidden status line in +page.svelte does the announcing instead. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
 <div
 	class="transcript"
 	class:focus={session.focus}
 	bind:this={scroller}
+	tabindex="0"
+	onkeydown={handleScrollRegionKeydown}
 	onscroll={onScroll}
 	role="log"
 	aria-label="conversation"
 	aria-live="off"
 >
-	<RunTimeline />
-	{#if session.messages.length === 0}
-		<div class="onboard" class:center={!hasFolder && !showSetup}>
-			<div class="onboard-mark"><Logo size={40} active={session.busy} /></div>
-			<div class="wordmark" aria-label="Fella">Fella</div>
-			<h1 class="hero">{hasFolder ? 'Ask about your own files' : 'Ask Fella a question'}</h1>
+	{#if !hasConversationTurn}
+		<div class="onboard" class:center={!showSetup}>
+			<div class="onboard-brand"><Logo size={28} /><span>Fella</span></div>
+			<h1 class="hero">New conversation</h1>
+			<p class="lead">
+				Ask a question about your files. Fella checks what’s available and shows the answer with supporting evidence.
+			</p>
 
 			{#if !hasFolder}
-				<p class="lead">
-					General questions work without a folder. Mount one when you want Fella to analyze local files;
-					Fella reads them for analysis and never changes them.
-				</p>
-				<div class="cta">
-					{#if session.lastFolder}
-						<button
-							class="pill primary"
-							title="Reopen your last folder (Enter)"
-							onclick={() => void resumeLastFolder()}
-						>
-							<Icon name="folder" size={16} /> Reopen {lastFolderName}
-						</button>
-						<button class="pill" onclick={() => void openFolder()}>Mount another</button>
-					{:else}
-						<button class="pill primary" onclick={() => void openFolder()}>
-							<Icon name="folder" size={16} /> Mount a folder
-						</button>
+				<div class="cta first-run-actions">
+					<Button class="folder-action" onclick={() => void openFolder(undefined, { focusAfterOpen: true })}>
+						<Icon name="folder" size={16} /> Choose a folder
+					</Button>
+					<Button variant="outline" onclick={() => void openSampleWorkspace()}>
+						Try sample data
+					</Button>
+				</div>
+			{:else if fileCount === 0}
+				<p class="onboard-note">No readable files in <strong>{folderName}</strong>.</p>
+				<div class="cta first-run-actions">
+					<Button class="folder-action" onclick={() => void openFolder()}>
+						<Icon name="folder" size={16} /> Choose a different folder
+					</Button>
+					{#if skipped.length}
+						<Button variant="outline" onclick={() => void dispatch('/files')}>Review files</Button>
 					{/if}
 				</div>
-				{#if isDesktop()}<p class="drophint">or drag a folder here to mount it</p>{/if}
-			{:else if fileCount === 0}
-				<p class="lead"><strong>{folderName}</strong> is open, but nothing in it is readable yet.</p>
-				<p>
-					Fella works with spreadsheets, CSVs, Excel, PDFs and plain text.{#if skipped.length}
-						<code>/files</code> shows what was skipped and why.{/if}
-				</p>
-				<div class="cta">
-					<button class="pill primary" onclick={() => void openFolder()}>
-						<Icon name="folder" size={16} /> Choose a different folder
-					</button>
-				</div>
 			{:else}
-				<p class="lead">
-					<strong>{folderName}</strong> · {fileCount} file{fileCount === 1 ? '' : 's'} ready.
+				<!-- A new chat stays quiet and consistent; source details live in Data & context. -->
+			{/if}
+
+			{#if !hasFolder}
+				<p class="first-run-privacy">
+					Fella reads and computes locally. Only the folder you choose is in scope. Your chosen model provider receives prompts and relevant context or tool results.
 				</p>
-				{#if showExamples}
-					<p class="egs">Try one:</p>
-					<div class="examples">
-						{#each EXAMPLES as q (q)}
-							<button class="pill example" onclick={() => void dispatch(q)}>{q}</button>
-						{/each}
-					</div>
-				{/if}
+				<div class="first-run-privacy-link">
+					<Button variant="link" size="sm" class="privacy-link" onclick={() => void openExternal('https://docs.lilfella.app/developer-platform/using-fella/privacy')}>
+						Privacy and security <Icon name="arrow-up-right" size={12} />
+					</Button>
+				</div>
 			{/if}
 
 			{#if showSetup}
+				<details class="model-setup" open={hasFolder}>
+					<summary>Connect a model</summary>
 				<div class="setup">
 					{#if rejected}
 						<!-- Hosted key was refused (HTTP 401/403). -->
 						<p>Your <strong>{providerName}</strong> key was refused.</p>
 						<div class="svc">
-							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</button>
+							<Button variant="outline" size="sm" onclick={() => void dispatch(`/login ${providerId}`)}>Enter a new key</Button>
 							{#if getKeyUrl}
-								<button class="pill ghost" onclick={() => void openExternal(getKeyUrl)}>
+								<Button variant="ghost" size="sm" onclick={() => void openExternal(getKeyUrl)}>
 									Get a new key <Icon name="arrow-up-right" size={12} />
-								</button>
+								</Button>
 							{/if}
 						</div>
 					{:else if needModelPick}
@@ -190,7 +181,7 @@
 						{#if healthModels.length && healthModels.length <= 12}
 							<div class="svc">
 								{#each healthModels as m (m)}
-									<button class="pill" onclick={() => void dispatch(`/model ${m}`)}>{m}</button>
+									<Button variant="outline" size="sm" onclick={() => void dispatch(`/model ${m}`)}>{m}</Button>
 								{/each}
 							</div>
 						{:else}
@@ -201,7 +192,7 @@
 						{#if services.length}
 							<div class="svc">
 								{#each services as p (p.id)}
-									<button class="pill" onclick={() => connectService(p.id)}>{p.display}</button>
+									<Button variant="outline" size="sm" onclick={() => connectService(p.id)}>{p.display}</Button>
 								{/each}
 							</div>
 						{:else}
@@ -210,23 +201,20 @@
 					{:else}
 						<p>Can't reach <strong>{providerName}</strong>. Check your internet connection or enter a new key.</p>
 						<div class="svc">
-							<button class="pill" onclick={() => void dispatch(`/login ${providerId}`)}>Check key</button>
+							<Button variant="outline" size="sm" onclick={() => void dispatch(`/login ${providerId}`)}>Check key</Button>
 							{#each services.filter((p) => p.id !== providerId) as p (p.id)}
-								<button class="pill ghost" onclick={() => connectService(p.id)}>{p.display}</button>
+								<Button variant="ghost" size="sm" onclick={() => connectService(p.id)}>{p.display}</Button>
 							{/each}
 						</div>
 					{/if}
 				</div>
+				</details>
 			{/if}
 
-			{#if hasFolder && showExamples}
-				<p class="personalize">
-					Make it yours: <code>/context</code> to tell Fella how your files are organised.
-				</p>
-			{/if}
 		</div>
-	{:else}
-		{#if showSetup}
+	{/if}
+	{#if session.messages.length > 0}
+		{#if showSetup && hasConversationTurn}
 			<!-- The full onboarding panel only shows on the empty screen. If the
 			     model stops working mid-session, keep a compact version in view so
 			     the user isn't left with just a red dot and bare error lines. -->
@@ -234,30 +222,30 @@
 				{#if rejected}
 					<p>
 						Your <strong>{providerName}</strong> key was refused.
-						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch(`/login ${providerId}`)}>
 							Enter a new key
-						</button>
+						</Button>
 					</p>
 				{:else if needModelPick}
 					<p>
 						Connected to <strong>{providerName}</strong>, but no model is chosen.
-						<button class="link" onclick={() => void dispatch('/model')}>Pick a model</button>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch('/model')}>Pick a model</Button>
 					</p>
 				{:else if !hasCredential}
 					<p>
 						No model service is connected.
-						<button class="link" onclick={() => void dispatch('/login')}>Connect one with an API key</button>.
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch('/login')}>Connect one with an API key</Button>.
 					</p>
 				{:else}
 					<p>
 						Can't reach <strong>{providerName}</strong>.
-						<button class="link" onclick={() => void dispatch(`/login ${providerId}`)}>Check the key</button>
+						<Button variant="link" size="sm" class="setup-inline-link" onclick={() => void dispatch(`/login ${providerId}`)}>Check the key</Button>
 						or try another provider.
 					</p>
 				{/if}
 			</div>
 		{/if}
-		{#key session.active}
+		{#key session.activeConversationIndex}
 			<div class="stream" in:fadeQuick>
 				<svelte:boundary>
 					{#each session.messages as m, i (m.id)}
@@ -265,12 +253,24 @@
 							message={m}
 							expanded={!!expanded[m.id]}
 							ontoggle={() => toggle(m.id)}
-							question={questionFor(i)}
-							showFollowups={i === session.messages.length - 1 && !m.pending}
-							onfollowup={(next, clarificationTurnId) =>
-								void dispatch(next, clarificationTurnId)}
+							onopeninvestigationrun={session.activeChat.workspaceScope === session.catalog.workspace
+								? (turnId) => session.openInvestigationRun(turnId)
+								: undefined}
+							onopenchart={(evidenceIndex) => session.openChartPane(m.id, evidenceIndex)}
+							openChartIndex={session.activeChat.companionPane?.kind === 'chart' && session.activeChat.companionPane.messageId === m.id
+								? session.activeChat.companionPane.evidenceIndex
+								: null}
 							onrerun={() => rerun(m)}
 						/>
+						{#if m.role === 'assistant' && (m.pending || m.answer?.trace?.steps.length || m.run_steps?.length)}
+							<RunTimeline
+								message={m}
+								bodyId={`evidence-${m.id}`}
+								onopenevidence={() => {
+									if (!expanded[m.id]) toggle(m.id);
+								}}
+							/>
+						{/if}
 					{/each}
 					{#snippet failed(error)}
 						<pre class="boundary-err">The transcript hit a render error:
@@ -282,11 +282,19 @@
 	{/if}
 </div>
 
+{#if !stick && hasConversationTurn}
+	<button class="jump-latest" onclick={() => { stick = true; scroller?.scrollTo({ top:scroller.scrollHeight, behavior:'smooth' }); }}><Icon name="arrow-down" size={11} />Jump to latest</button>
+{/if}
+
 <style>
+	.jump-latest { position:absolute; z-index:10; bottom:80px; left:50%; display:flex; align-items:center; gap:6px; transform:translateX(-50%); padding:4px 12px; border:0; border-radius:999px; background:var(--brand); color:white; box-shadow:var(--shadow-sm); font-size:12px; cursor:pointer; }
+	.model-setup { margin-top: 20px; color: var(--text-dim); font-size: var(--fs-sm); }
+	.model-setup > summary { cursor: pointer; }
 	.transcript {
 		flex: 1;
 		overflow-y: auto;
-		padding: var(--space-6) var(--pad) var(--space-6);
+		overscroll-behavior: contain;
+		padding:56px 20px 24px;
 		min-height: 0;
 		transition: padding var(--dur) var(--ease);
 	}
@@ -294,18 +302,21 @@
 	.transcript.focus {
 		padding: var(--space-6) var(--pad) var(--space-6);
 	}
-	/* Cap the reading column so long lines don't sprawl the "app not terminal"
+	/* Cap the reading column so long lines don't sprawl across the app
 	   cue. Centred in the scroller. */
 	.stream {
-		max-width: 76ch;
-		margin-inline: auto;
+		width:100%;
+		max-width:520px;
+		margin-inline:auto;
+		font-size:13px;
+		line-height:21px;
 		transition: max-width var(--dur) var(--ease);
 	}
 	.transcript.focus .stream {
 		max-width: 68ch;
 	}
 	.onboard {
-		max-width: 52ch;
+		max-width: 56ch;
 		margin: var(--space-6) auto 0;
 		color: var(--text-dim);
 	}
@@ -320,24 +331,23 @@
 		align-items: center;
 		text-align: center;
 	}
-	.wordmark {
-		font-size: var(--fs-xl);
-		font-weight: 600;
-		letter-spacing: -0.02em;
-		color: var(--text);
-		margin: 0 0 var(--space-2);
-	}
-	.onboard-mark {
+	.onboard-brand {
 		display: flex;
+		align-items: center;
 		justify-content: center;
-		margin: 0 0 var(--space-3);
+		gap: var(--space-2);
+		margin-bottom: var(--space-3);
+		color: var(--text-dim);
+		font-size: var(--fs-sm);
+		font-weight: 650;
+		letter-spacing: -0.01em;
 	}
 	.hero {
-		font-size: var(--fs-lg);
-		font-weight: 600;
-		letter-spacing: -0.01em;
+		font-size: clamp(26px, 3vw, 34px);
+		font-weight: 650;
+		letter-spacing: -0.035em;
 		text-wrap: balance;
-		color: var(--text-dim);
+		color: var(--text);
 		margin: 0 0 var(--space-3);
 	}
 	.onboard p {
@@ -345,21 +355,31 @@
 	}
 	.onboard .lead {
 		color: var(--text);
-		font-size: var(--fs-lg);
+		font-size: 17px;
+		line-height: 1.55;
 	}
-	.onboard .lead strong {
-		font-weight: 600;
+	.onboard-note {
+		color: var(--text-faint);
+		font-size: var(--fs-sm);
 	}
-	.examples {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: var(--space-2);
-		margin: var(--space-1) 0 0;
+	.first-run-actions {
+		justify-content: center;
 	}
-	/* .pill provides the look; the example buttons only need left text. */
-	.example {
-		text-align: left;
+	.first-run-privacy {
+		max-width: 58ch;
+		margin: var(--space-4) 0 0 !important;
+		color: var(--text-faint);
+		font-size: var(--fs-xs);
+		line-height: 1.55;
+	}
+	.first-run-privacy-link { margin-top: var(--space-1); }
+	.first-run-privacy :global(.privacy-link) {
+		display: inline;
+		min-height: 0;
+		height: auto;
+		padding: 0;
+		font-size: inherit;
+		vertical-align: baseline;
 	}
 	.cta {
 		display: flex;
@@ -370,29 +390,6 @@
 	}
 	.onboard.center .cta {
 		justify-content: center;
-	}
-	.cta .pill {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-2);
-	}
-	.drophint {
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-	}
-	.egs {
-		color: var(--text-faint);
-	}
-	.personalize {
-		margin-top: 22px;
-		padding-top: 18px;
-		border-top: 1px solid var(--border);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-	}
-	.personalize code {
-		font-family: var(--mono);
-		color: var(--text-dim);
 	}
 	/* A hairline, not a boxed card echoes the divider language used
 	   elsewhere (titlebar/sidebar) rather than looking like a bolted-on form. */
@@ -435,17 +432,19 @@
 		gap: 8px;
 		margin-top: 4px;
 	}
-	/* An inline text button that reads as a link, for use mid-sentence. */
-	.setup button.link {
-		border: none;
+	/* Shared link buttons remain inline in compact, sentence-level guidance. */
+	.setup :global(.setup-inline-link) {
+		display: inline;
+		min-width: 0;
+		height: auto;
+		min-height: 0;
 		padding: 0;
 		border-radius: 0;
-		color: var(--link);
-		background: transparent;
-	}
-	.setup button.link:hover {
-		background: transparent;
-		text-decoration: underline;
+		font-size: inherit;
+		font-weight: 600;
+		line-height: inherit;
+		vertical-align: baseline;
+		white-space: normal;
 	}
 	.boundary-err {
 		font-family: var(--mono);

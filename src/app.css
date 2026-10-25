@@ -15,10 +15,271 @@
    - Hierarchy comes from type and spacing before borders or fills. Earn a
      border/surface only for selection, grouping, or a raised layer.
    - One focus ring: a soft --link glow (:focus-visible below).
-   - One primary action per screen (.pill.primary, filled with --brand);
+   - One primary action per screen (shared Button, filled with --brand);
      everything else is quieter.
    - Motion is gentle and short, and disappears entirely under
      prefers-reduced-motion. */
+
+/* Tailwind utilities power the shared shadcn-svelte components. Keep Fella's
+   established base styles and tokens in charge; in particular, do not import
+   Tailwind Preflight into the existing application. */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@custom-variant dark (&:where(:root[data-color-mode='dark'], :root[data-color-mode='dark'] *));
+
+@layer components {
+	.fella-ui-input,
+	.fella-ui-select,
+	.fella-ui-textarea {
+		width: 100%;
+		min-width: 0;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		color: var(--text);
+		font: inherit;
+	}
+
+	.fella-ui-input,
+	.fella-ui-select {
+		min-height: 36px;
+		padding: 7px 10px;
+	}
+
+	.fella-ui-textarea {
+		min-height: 9rem;
+		padding: 10px;
+		line-height: 1.5;
+		resize: vertical;
+	}
+
+	.fella-ui-input::placeholder,
+	.fella-ui-textarea::placeholder {
+		color: var(--text-faint);
+	}
+
+	.fella-ui-input:focus-visible,
+	.fella-ui-select:focus-visible,
+	.fella-ui-textarea:focus-visible {
+		border-color: var(--link);
+	}
+
+	.fella-ui-input:disabled,
+	.fella-ui-select:disabled,
+	.fella-ui-textarea:disabled {
+		cursor: not-allowed;
+		color: var(--text-faint);
+	}
+
+	.fella-ui-dialog-overlay {
+		position: fixed;
+		inset: 0;
+		z-index: 50;
+		background: color-mix(in srgb, var(--bg) 58%, transparent);
+	}
+
+	.fella-ui-dialog-content {
+		position: fixed;
+		top: 50%;
+		left: 50%;
+		z-index: 51;
+		max-height: calc(100vh - 40px);
+		transform: translate(-50%, -50%);
+		overflow: auto;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+		color: var(--text);
+		outline: none;
+	}
+
+	.fella-ui-tabs-list {
+		display: flex;
+		align-items: center;
+	}
+
+	.fella-ui-tabs-trigger {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		white-space: nowrap;
+		color: var(--text-faint);
+		transition: color var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-tabs-trigger:hover,
+	.fella-ui-tabs-trigger[data-state='active'] {
+		color: var(--text);
+	}
+
+	.fella-pill-nav {
+		display: flex;
+		align-items: center;
+		gap: 2px;
+		width: max-content;
+		max-width: 100%;
+		padding: 3px;
+		border: 0;
+		border-radius: 999px;
+		background: var(--bg-raised);
+	}
+
+	.fella-pill-nav-item {
+		flex: none;
+		min-height: 30px;
+		padding: 0 12px;
+		border: 0;
+		border-radius: 999px;
+		background: transparent;
+		color: var(--text-dim);
+		font: inherit;
+		font-size: var(--fs-xs);
+		font-weight: 550;
+		line-height: 1;
+		white-space: nowrap;
+		cursor: pointer;
+		transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+	}
+
+	.fella-pill-nav-item:hover {
+		background: color-mix(in srgb, var(--bg-raised) 72%, transparent);
+		color: var(--text);
+	}
+
+	.fella-pill-nav-item[aria-selected='true'],
+	.fella-pill-nav-item[aria-pressed='true'],
+	.fella-pill-nav-item[data-state='active'] {
+		background: var(--bg-raised-2);
+		color: var(--text);
+		box-shadow: none;
+	}
+
+	.fella-pill-nav-item:focus-visible {
+		outline: 2px solid var(--brand);
+		outline-offset: 2px;
+	}
+
+	.fella-ui-menu-content {
+		z-index: 80;
+		min-width: 168px;
+		padding: 4px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--shadow-pop);
+		color: var(--text);
+		outline: none;
+	}
+
+	.fella-ui-menu-item {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		min-height: 32px;
+		padding: 6px 9px;
+		border-radius: calc(var(--radius-sm) - 2px);
+		color: var(--text-dim);
+		text-align: left;
+		font-size: var(--fs-sm);
+		cursor: default;
+	}
+
+	.fella-ui-menu-item[data-highlighted],
+	.fella-ui-menu-item:hover {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+
+	.fella-ui-switch {
+		position: relative;
+		flex: none;
+		width: 38px;
+		height: 22px;
+		padding: 2px;
+		border: 1px solid var(--border-strong);
+		border-radius: 999px;
+		background: var(--bg-inset);
+		transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-switch[data-state='checked'] {
+		border-color: var(--brand);
+		background: var(--brand);
+	}
+
+	.fella-ui-switch:disabled {
+		cursor: not-allowed;
+		opacity: 0.55;
+	}
+
+	.fella-ui-switch-thumb {
+		display: block;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		background: var(--text-faint);
+		transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+	}
+
+	.fella-ui-switch[data-state='checked'] .fella-ui-switch-thumb {
+		transform: translateX(16px);
+		background: var(--on-brand);
+	}
+
+	.fella-ui-tooltip-content {
+		z-index: 100;
+		padding: 5px 8px;
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--bg-raised);
+		box-shadow: var(--window-shadow);
+		color: var(--text);
+		font-size: var(--fs-xs);
+		line-height: 1.3;
+	}
+}
+
+@theme inline {
+	--font-sans: var(--sans);
+	--font-mono: var(--mono);
+	--color-background: var(--bg);
+	--color-foreground: var(--text);
+	--color-card: var(--bg-raised);
+	--color-card-foreground: var(--text);
+	--color-popover: var(--bg-raised);
+	--color-popover-foreground: var(--text);
+	--color-primary: var(--brand);
+	--color-primary-foreground: var(--on-brand);
+	--color-secondary: var(--bg-inset);
+	--color-secondary-foreground: var(--text);
+	--color-muted: var(--bg-inset);
+	--color-muted-foreground: var(--text-dim);
+	--color-accent: var(--bg-inset);
+	--color-accent-foreground: var(--text);
+	--color-destructive: var(--err);
+	--color-border: var(--border);
+	--color-input: var(--border-strong);
+	--color-ring: var(--link);
+	--color-sidebar: var(--sidebar-surface);
+	--color-sidebar-foreground: var(--text);
+	--color-sidebar-accent: var(--bg-inset);
+	--color-sidebar-accent-foreground: var(--text);
+	--color-sidebar-border: var(--border);
+	--color-sidebar-ring: var(--link);
+}
+
+@font-face {
+ font-family: 'Inter'; font-style: normal; font-weight: 100 900; font-display: swap;
+ src: url('/fonts/Inter-Variable.ttf') format('truetype');
+}
+@font-face {
+ font-family: 'JetBrains Mono'; font-style: normal; font-weight: 100 800; font-display: swap;
+ src: url('/fonts/JetBrainsMono-Variable.ttf') format('truetype');
+}
 
 @font-face {
 	font-family: 'Geist';
@@ -43,7 +304,20 @@
 	   writing surface (they differ now), --bg-inset the recessed fill. */
 	--bg: #fcfcfb;
 	--bg-raised: #ffffff;
+	--bg-raised-2: #f0efec;
 	--bg-inset: #f2f2f0;
+	--app-chrome: #f0efec;
+	--sidebar-surface: #f5f4f1;
+	--sidebar-hover: #eeedea;
+	--sidebar-selected: #e9e8e4;
+	--surface: #ffffff;
+	--workspace-surface: #ffffff;
+	--workspace-canvas: #f3f2ef;
+	--pane-surface: #ffffff;
+	--pane-head: #fbfbfa;
+	--pane-edge: #e2e1dc;
+	--pane-edge-active: #c9c7c1;
+	--window-shadow: 0 1px 2px rgba(20, 20, 26, 0.045), 0 4px 14px rgba(20, 20, 26, 0.045);
 	--border: #e9e8e4;
 	--border-strong: #d7d5d0;
 	--text: #1a1a17;
@@ -64,6 +338,7 @@
 	   hairline -- one consistent "notice me" color, not a different one per
 	   component. */
 	--brand: #008080;
+	--brand-icon: #007b76;
 	--on-brand: #ffffff;
 	--user-bubble: var(--brand);
 	--user-bubble-text: var(--on-brand);
@@ -80,34 +355,36 @@
 	--chart-orange: #c87936;
 	--chart-green: #3f805b;
 	--chart-gold: #a27b24;
-	--radius: 8px;
-	--pad: 28px;
+	--radius: 10px;
+	--pad: 32px;
 
 	/* --- fixed --------------------------------------------------------- */
-	--sans: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+	--sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
 		'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
-	--mono: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
+	--mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo,
 		Consolas, 'DejaVu Sans Mono', monospace;
 	/* type scale: two small steps for chrome/dense data, two up for headings */
-	--fs: 14px;
-	--fs-sm: 12.5px;
-	--fs-xs: 11.5px;
-	--fs-lg: 15.5px;
+	--fs: 13px;
+	--fs-sm: 13px;
+	--fs-md: 14px;
+	--fs-xs: 12px;
+	--fs-lg: 16px;
 	--fs-xl: 22px;
-	--lh: 1.55;
+	--lh: 1.5;
 
 	/* spacing scale everything vertical/inset should land on one of these */
 	--space-1: 4px;
 	--space-2: 8px;
 	--space-3: 12px;
-	--space-4: 16px;
-	--space-5: 24px;
-	--space-6: 32px;
-	--content-max: 960px;
+	--space-4: 18px;
+	--space-5: 26px;
+	--space-6: 36px;
+	--content-max: 1120px;
 
-	--radius-sm: 6px;
-	--radius-chip: 4px;
+	--radius-sm: 8px;
+	--radius-chip: 999px;
 	--radius-conversation: 18px;
+	--radius-window: 16px;
 
 	/* soft, diffuse, layered the macOS elevation feel */
 	--shadow-sm: 0 1px 2px rgba(20, 20, 26, 0.05), 0 4px 12px rgba(20, 20, 26, 0.06);
@@ -120,36 +397,50 @@
 }
 
 :root[data-color-mode='dark'] {
-	--bg: #0e0e10;
-	--bg-raised: #17171a;
-	--bg-inset: #1e1e22;
-	--border: #26262a;
-	--border-strong: #37373d;
-	--text: #ededec;
-	--text-dim: #8f8d88;
-	--text-faint: #838079;
-	--chat-body: #c8c7c2;
-	--chat-strong: #f1f1ee;
-	--chat-meta: #9b9992;
-	--chat-question: #ededec;
-	--accent: #ededec;
-	--brand: #008080;
+	--bg: #0e0e0f;
+	--bg-raised: #19191b;
+	--bg-raised-2: #242427;
+	--bg-inset: #161617;
+	--app-chrome: #0e0e0f;
+	--sidebar-surface: #121213;
+	--sidebar-hover: #242427;
+	--sidebar-selected: #242427;
+	--surface: #19191b;
+	--workspace-surface: #0e0e0f;
+	--workspace-canvas: #0e0e0f;
+	--pane-surface: #121213;
+	--pane-head: #121213;
+	--pane-edge: rgb(255 255 255 / 0.07);
+	--pane-edge-active: rgb(255 255 255 / 0.12);
+	--window-shadow: 0 1px 2px rgba(0, 0, 0, 0.24), 0 5px 16px rgba(0, 0, 0, 0.16);
+	--border: rgb(255 255 255 / 0.07);
+	--border-strong: rgb(255 255 255 / 0.12);
+	--text: #f4f4f5;
+	--text-dim: #a1a1aa;
+	--text-faint: #71717a;
+	--chat-body: #d4d4d8;
+	--chat-strong: #f4f4f5;
+	--chat-meta: #a1a1aa;
+	--chat-question: #f4f4f5;
+	--accent: #f4f4f5;
+	--brand: #0f7f78;
+	--brand-icon: #4fd1c5;
 	--on-brand: #ffffff;
 	/* A touch more lightness keeps the outgoing bubble distinct from the dark
 	   canvas without introducing another hue. */
-	--user-bubble: color-mix(in srgb, var(--brand) 90%, white);
+	--user-bubble: var(--brand);
 	--user-bubble-text: #ffffff;
 	--link: #8fb0dd;
-	--ok: #7cc07c;
-	--warn: #d8a640;
-	--err: #e06c6c;
+	--ok: #34d399;
+	--warn: #c6a76c;
+	--err: #f87171;
 	--chart-violet: #aa99e2;
 	--chart-cyan: #56d1cf;
 	--chart-slate: #b0b7bd;
 	--chart-plum: #df9aae;
 	--chart-orange: #efa763;
 	--chart-green: #70b58a;
-	--chart-gold: #e0ba5e;
+	--chart-gold: #b7a779;
 	--shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 12px rgba(0, 0, 0, 0.35);
 	--shadow-pop: 0 4px 12px rgba(0, 0, 0, 0.4), 0 20px 56px rgba(0, 0, 0, 0.55);
 }
@@ -170,9 +461,9 @@ body {
 	color: var(--text);
 	font-family: var(--sans);
 	font-size: var(--fs);
-	font-weight: 450;
+	font-weight: 400;
 	line-height: var(--lh);
-	letter-spacing: -0.006em;
+	letter-spacing: 0;
 	-webkit-font-smoothing: antialiased;
 	text-rendering: optimizeLegibility;
 	overflow: hidden;
@@ -190,14 +481,16 @@ a:hover {
 	text-decoration: underline;
 }
 
-button {
-	font: inherit;
-	font-weight: 500;
-	color: inherit;
-	background: transparent;
-	border: none;
-	padding: 0;
-	cursor: pointer;
+@layer base {
+	button {
+		font: inherit;
+		font-weight: 500;
+		color: inherit;
+		background: transparent;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+	}
 }
 
 /* Keyboard focus must always be visible one soft --link glow. Components that
@@ -247,73 +540,6 @@ kbd {
 /* --- shared primitives -----------------------------------------------------
    Defined once here so a look isn't re-typed (and quietly drifting) in every
    component. Components add only what's genuinely local. */
-
-/* A bordered, low-emphasis action button (onboarding CTAs, provider chips). */
-.pill {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	gap: var(--space-2);
-	white-space: nowrap;
-	color: var(--text);
-	background: var(--bg-raised);
-	border: 1px solid var(--border-strong);
-	border-radius: var(--radius-sm);
-	padding: 7px 14px;
-	font: inherit;
-	font-weight: 500;
-	transition:
-		background var(--dur-fast) var(--ease),
-		border-color var(--dur-fast) var(--ease),
-		box-shadow var(--dur-fast) var(--ease),
-		filter var(--dur-fast) var(--ease);
-}
-.pill:hover {
-	background: var(--bg-inset);
-}
-.pill:active {
-	transform: translateY(0.5px);
-}
-.pill.ghost {
-	background: transparent;
-	border-color: var(--border);
-	color: var(--text-dim);
-}
-/* The one primary action on a screen filled with the brand accent, the
-   same hue as the empty-state glyph and the top hairline so "this is the
-   one thing to do here" reads as one consistent color language. */
-.pill.primary {
-	background: var(--brand);
-	color: var(--on-brand);
-	border-color: var(--brand);
-}
-.pill.primary:hover {
-	background: var(--brand);
-	filter: brightness(0.92);
-}
-
-/* A full-width row inside a drop-up / palette list. Selection is marked by the
-   caller with .sel or aria-selected. */
-.rowbtn {
-	width: 100%;
-	display: flex;
-	gap: var(--space-3);
-	align-items: baseline;
-	border: none;
-	background: transparent;
-	padding: var(--space-2) var(--space-3);
-	border-radius: var(--radius-chip);
-	text-align: left;
-	font: inherit;
-	font-weight: 500;
-	color: var(--text);
-	transition: background var(--dur-fast) var(--ease);
-}
-.rowbtn:hover,
-.rowbtn.sel,
-.rowbtn[aria-selected='true'] {
-	background: var(--bg-inset);
-}
 
 /* "Working" indicator three dots that pulse together. Inherits color. */
 .thinking {
@@ -366,20 +592,31 @@ kbd {
 	font-size: inherit;
 }
 .rich table {
+	width: 100%;
 	border-collapse: collapse;
-	font-family: var(--mono);
-	font-size: var(--fs-xs);
+	font-family: var(--sans);
+	font-size: var(--fs-sm);
 	font-variant-numeric: tabular-nums;
+	line-height: 1.45;
+	color: var(--text);
 }
 .rich th,
 .rich td {
-	border: 1px solid var(--border);
-	padding: 1px 7px;
+	border-bottom: 1px solid var(--border);
+	padding: 8px 12px;
 	text-align: left;
+	vertical-align: top;
+	white-space: normal;
+	word-break: normal;
+	overflow-wrap: break-word;
 }
 .rich th {
+	font-weight: 550;
 	background: var(--bg-inset);
 	color: var(--text-dim);
+}
+.rich tbody tr:last-child td {
+	border-bottom: 0;
 }
 
 /* Auto-hiding scrollbars invisible until you interact with the scroll area. */

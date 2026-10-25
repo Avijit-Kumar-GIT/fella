@@ -13,10 +13,10 @@ Brief description, and the reason for it.
 
 ## Checklist
 
-- [ ] `cargo test` passes from `backend/` (SQLite default features, not `--features duckdb`)
-- [ ] `npm run check` is 0 errors / 0 warnings
-- [ ] `npm run build` succeeds
-- [ ] New behaviour has a test
+- [ ] `cargo test --manifest-path backend/Cargo.toml --locked` passes (default SQLite features)
+- [ ] `pnpm check` succeeds
+- [ ] `pnpm build` succeeds
+- [ ] New behavior has a focused test when it can be tested deterministically
 - [ ] Commit messages follow Conventional Commits (`feat(...)`, `fix(...)`, `docs:`, ...)
 - [ ] If this changes a design decision: added a dated entry to `docs/DECISIONS.md`
 - [ ] If this changes something in `docs/ARCHITECTURE.md`: updated it in this PR
@@ -24,4 +24,4 @@ Brief description, and the reason for it.
 
 ## How I verified it
 
-The manual steps you ran, if any, beyond the automated checks.
+The automated checks and manual steps you ran to verify the change.

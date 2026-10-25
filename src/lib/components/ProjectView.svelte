@@ -1,9 +1,13 @@
 <script lang="ts">
-	import { baseName, openFolder } from '$lib/commands';
+	import { baseName, openRepository } from '$lib/commands';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { session } from '$lib/session.svelte';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
+	import ProjectCuration from './ProjectCuration.svelte';
 
 	let project = $derived(session.activeProject);
 	let name = $state('');
@@ -64,20 +68,20 @@
 	}
 
 	async function mountRepository(): Promise<void> {
-		if (project) await openFolder(project.workspace);
+		if (project) await openRepository(project.workspace);
 	}
 
 	async function askRepository(): Promise<void> {
 		if (!mounted) await mountRepository();
 		if (!session.catalog.workspace || session.catalog.workspace !== project?.workspace) return;
 		session.setWorkspaceView('ask');
-		session.newTab();
+		session.newConversation(project?.workspace);
 	}
 
-	async function openSources(): Promise<void> {
+	async function openInvestigations(): Promise<void> {
 		if (!mounted) await mountRepository();
 		if (!session.catalog.workspace || session.catalog.workspace !== project?.workspace) return;
-		session.setWorkspacePane('sources');
+		session.setWorkspacePane('investigation');
 	}
 
 	function deleteProject(): void {
@@ -94,28 +98,37 @@
 	<section class="project-page" aria-labelledby="project-title">
 		<header class="project-header">
 			<div class="project-heading">
-				<span class="project-mark"><Icon name="project" size={20} /></span>
 				<div class="project-title-wrap">
-					<input id="project-title" class="project-title" bind:value={name} onblur={commitName} aria-label="Project name" />
-					</div>
+					<Input
+						id="project-title"
+						class="project-title-input"
+						bind:value={name}
+						onblur={commitName}
+						aria-label="Project name"
+					/>
+				</div>
 			</div>
 			<div class="project-actions">
-				<button class="pill ghost" type="button" onclick={() => void askRepository()}>
+				<Button class="project-button primary" onclick={() => void askRepository()}>
 					<Icon name="ask" size={16} /> Ask repository
-				</button>
-				<button class="pill ghost" type="button" onclick={() => void openSources()}>
-					<Icon name="table" size={16} /> Sources
-				</button>
-				<button class="icon-action" type="button" aria-label="Delete project" title="Delete project" onclick={deleteProject}>
+				</Button>
+				<Button variant="outline" class="project-button" onclick={() => void openInvestigations()}>
+					Investigations
+				</Button>
+				<Button
+					variant="ghost"
+					size="icon"
+					class="project-delete-action"
+					aria-label="Delete project"
+					title="Delete project"
+					onclick={deleteProject}
+				>
 					<Icon name="x" size={16} />
-				</button>
+				</Button>
 			</div>
 		</header>
 
 		<div class="project-location" title={project.workspace}>
-			<Icon name="folder" size={12} />
-			<span>{baseName(project.workspace)}</span>
-			<span class="location-separator">·</span>
 			<span>{project.workspace}</span>
 		</div>
 
@@ -123,7 +136,9 @@
 			<div class="mount-note">
 				<Icon name="info" size={16} />
 				<span>This project is saved locally. Mount <strong>{baseName(project.workspace)}</strong> to see its live files and ask questions.</span>
-				<button class="pill ghost" type="button" onclick={() => void mountRepository()}>Mount repository</button>
+				<Button variant="outline" class="project-button" onclick={() => void mountRepository()}>
+					Mount repository
+				</Button>
 			</div>
 		{/if}
 
@@ -131,17 +146,18 @@
 			<section class="wiki-card" aria-labelledby="wiki-title">
 				<div class="card-heading">
 					<div>
-						<h1 id="wiki-title">Wiki</h1>
-						<p>A private set of notes for this repository.</p>
+						<h1 id="wiki-title">Project notes</h1>
+						<p>Private notes for this project.</p>
 					</div>
 					<span class="saved-label">Saved locally</span>
 				</div>
-				<textarea
+				<Textarea
+					class="wiki-textarea"
 					value={body}
 					oninput={updateBody}
-					placeholder="Capture decisions, definitions, recurring questions, and anything you want Fella to remember about this workspace."
+					placeholder="Add decisions, definitions, or recurring context for this project."
 					aria-label="Project wiki"
-				></textarea>
+				/>
 			</section>
 
 			<aside class="snapshot-card" aria-labelledby="snapshot-title">
@@ -154,13 +170,10 @@
 					<div><dt>Conversations</dt><dd>{history.length || '—'}</dd></div>
 					<div><dt>Updated</dt><dd>{updatedLabel(project.updated_at_ms)}</dd></div>
 				</dl>
-				{#if !mounted}
-					<button class="pill ghost snapshot-action" type="button" onclick={() => void mountRepository()}>
-						<Icon name="folder" size={16} /> Mount repository
-					</button>
-				{/if}
 			</aside>
 		</div>
+
+		<ProjectCuration {project} />
 	</section>
 {/if}
 
@@ -170,7 +183,7 @@
 		min-width: 0;
 		min-height: 0;
 		overflow-y: auto;
-		padding: 42px var(--pad) 56px;
+		padding: var(--space-6) var(--pad) 48px;
 	}
 	.project-page > * {
 		width: min(100%, var(--content-max));
@@ -185,36 +198,28 @@
 	.project-heading {
 		display: flex;
 		align-items: center;
-		gap: var(--space-3);
+		gap: 0;
 		min-width: 0;
-	}
-	.project-mark {
-		display: grid;
-		place-items: center;
-		width: 42px;
-		height: 42px;
-		flex: none;
-		border-radius: var(--radius);
-		background: var(--bg-inset);
-		border: 1px solid var(--border);
-		color: var(--text-dim);
 	}
 	.project-title-wrap {
 		min-width: 0;
 	}
-	.project-title {
+	.project-title-wrap :global(.project-title-input) {
 		width: min(440px, 100%);
+		height: auto;
+		min-height: 0;
+		border-radius: 0;
 		padding: 0;
 		border: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
-		font-size: 24px;
+		font-size: var(--fs-xl);
 		font-weight: 650;
 		letter-spacing: -0.03em;
 		outline: none;
 	}
-	.project-title:focus {
+	.project-title-wrap :global(.project-title-input:focus) {
 		box-shadow: inset 0 -1px var(--link);
 	}
 	.project-actions {
@@ -223,18 +228,33 @@
 		gap: var(--space-2);
 		flex: none;
 	}
-	.project-actions .pill {
-		padding: 7px 10px;
+	.project-actions :global(.project-button),
+	.mount-note :global(.project-button) {
+		height: 34px;
+		padding: 6px 10px;
+		border-radius: var(--radius-sm);
 	}
-	.icon-action {
+	.project-actions :global(.project-button:not(.primary)),
+	.mount-note :global(.project-button) {
+		border-color: var(--border);
+		background: transparent;
+		color: var(--text-dim);
+	}
+	.project-actions :global(.project-button:not(.primary):hover),
+	.mount-note :global(.project-button:hover) {
+		background: var(--bg-inset);
+		color: var(--text);
+	}
+	.project-actions :global(.project-delete-action) {
 		display: grid;
 		place-items: center;
 		width: 30px;
 		height: 30px;
+		min-width: 30px;
 		border-radius: var(--radius-sm);
 		color: var(--text-faint);
 	}
-	.icon-action:hover {
+	.project-actions :global(.project-delete-action:hover) {
 		background: color-mix(in srgb, var(--err) 10%, var(--bg-inset));
 		color: var(--err);
 	}
@@ -255,9 +275,6 @@
 	.project-location :global(svg) {
 		flex: none;
 		color: var(--text-faint);
-	}
-	.location-separator {
-		color: var(--border-strong);
 	}
 	.mount-note {
 		display: flex;
@@ -284,14 +301,13 @@
 		color: var(--text);
 		font-weight: 600;
 	}
-	.mount-note .pill {
+	.mount-note :global(.project-button) {
 		flex: none;
-		padding: 6px 10px;
 	}
 	.project-grid {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
-		gap: var(--space-6);
+		gap: var(--space-5);
 		margin-top: var(--space-5);
 	}
 	.wiki-card,
@@ -332,7 +348,7 @@
 		color: var(--text-faint);
 		font-size: var(--fs-xs);
 	}
-	textarea {
+	.wiki-card :global(.wiki-textarea) {
 		flex: 1;
 		width: 100%;
 		min-height: 300px;
@@ -344,8 +360,14 @@
 		font: inherit;
 		line-height: 1.65;
 		outline: none;
+		border-radius: 0;
 	}
-	textarea::placeholder {
+	.wiki-card :global(.wiki-textarea:focus-visible) {
+		border-color: transparent;
+		outline: 0;
+		box-shadow: none;
+	}
+	.wiki-card :global(.wiki-textarea::placeholder) {
 		color: var(--text-faint);
 	}
 	.snapshot-card {
@@ -374,10 +396,6 @@
 		font-size: var(--fs-sm);
 		font-variant-numeric: tabular-nums;
 	}
-	.snapshot-action {
-		width: 100%;
-		margin-top: var(--space-3);
-	}
 	@media (max-width: 760px) {
 		.project-page {
 			padding: var(--space-5) var(--space-4) 40px;
@@ -389,7 +407,7 @@
 		.project-actions {
 			width: 100%;
 		}
-		.project-actions .pill {
+		.project-actions :global(.project-button) {
 			flex: 1;
 		}
 		.project-grid {

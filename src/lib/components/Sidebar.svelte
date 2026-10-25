@@ -1,26 +1,65 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { errMsg, openConversation, openFolder } from '$lib/commands';
-	import { session } from '$lib/session.svelte';
+	import { errMsg, openConversation, openRepository } from '$lib/commands';
+	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import type { StudioDocument } from '$lib/analytics-artifacts';
+	import { Button } from '$lib/components/ui/button';
+	import { Dialog } from '$lib/components/ui/dialog';
+	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
+	import { Input } from '$lib/components/ui/input';
 	import type { ConversationSummary } from '$lib/types';
 	import Icon from './Icon.svelte';
-	import Logo from './Logo.svelte';
+	import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
 
-	let { onsearch, onnewproject }: { onsearch?: () => void; onnewproject?: () => void } = $props();
+	let {
+		onsearch,
+		onworkspaceselect,
+		onsectionselect,
+		mode = $bindable<'chat' | 'files' | 'reports'>('chat'),
+		selectedFolder = 'all',
+		onselectfolder
+	}: {
+		onsearch?: () => void;
+		onworkspaceselect: (id:string) => void | Promise<void>;
+		onsectionselect?: (section: 'chat' | 'files' | 'reports') => void;
+		mode?: 'chat' | 'files' | 'reports';
+		selectedFolder?: string;
+		onselectfolder?: (folder: string) => void;
+	} = $props();
+
+	let workspaceReports = $state<StudioDocument[]>([]);
+	let reportsError = $state('');
+	let reportsRequest = 0;
+	$effect(() => {
+		const path = session.catalog.workspace;
+		const reportsVersion = session.reportsVersion;
+		void reportsVersion;
+		const request = ++reportsRequest;
+		if (mode !== 'reports' || !path) { workspaceReports = []; reportsError = ''; return; }
+		workspaceReports = [];
+		reportsError = '';
+		void ipc.studioList(path).then((reports) => {
+			if (request === reportsRequest) workspaceReports = reports;
+		}).catch(() => { if (request === reportsRequest) reportsError = 'Could not load reports.'; });
+	});
 
 	type Repository = {
 		key: string;
 		path: string | null;
 		name: string;
-		items: ConversationSummary[];
-		current: boolean;
-		expanded: boolean;
+		historyOnly: boolean;
 	};
 
-	const LOCAL_REPOSITORY = '__no-repository__';
 	let list = $state<ConversationSummary[]>([]);
-	let expandedRepos = $state<Record<string, boolean>>({});
-	let menuRepository = $state<string | null>(null);
+	let investigationConversationIds = $state<Set<string>>(new Set());
+	let conversationDeleteTarget = $state<ConversationSummary | null>(null);
+	let conversationDeleteDialogOpen = $state(false);
+	let deletingConversation = $state(false);
+	let conversationDeleteError = $state('');
+	let workspaceDeleteTarget = $state<Repository | null>(null);
+	let workspaceDeleteDialogOpen = $state(false);
+	let deletingWorkspace = $state(false);
+	let workspaceDeleteError = $state('');
 	const shortcutModifier =
 		typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || navigator.userAgent)
 			? '⌘'
@@ -32,6 +71,13 @@
 			const next = await ipc.conversationsList();
 			session.rememberRepositories(next.map((item) => item.workspace));
 			list = next;
+			try {
+				const investigations = await ipc.investigationsList(next.map((item) => item.id));
+				investigationConversationIds = new Set(investigations.flatMap((item) => item.conversation_id ? [item.conversation_id] : []));
+				session.rememberInvestigationNames(investigations);
+			} catch {
+				// The conversation list remains usable if Investigation history is unavailable.
+			}
 		} catch {
 			/* leave the last-known list rather than blanking it on a hiccup */
 		}
@@ -40,93 +86,148 @@
 	// Runs once on mount, then again whenever a conversation gets archived.
 	$effect(() => {
 		session.historyVersion;
+		session.investigationsVersion;
 		void refresh();
 	});
 
-	/** Keep the question as the primary history label. Workspace identity lives
-	 *  in the workspace card and only appears in a row when it disambiguates a
-	 *  conversation from the currently open folder. */
 	function title(c: ConversationSummary): string {
-		return c.title ?? c.preview;
+		return c.title?.trim() || session.investigationNames[c.id]?.trim() || c.preview || 'New conversation';
 	}
 
-	function repositoryKey(path: string | null | undefined): string {
-		return path || LOCAL_REPOSITORY;
+	function relativeUpdated(timestamp: number): string {
+		const elapsed = Math.max(0, Date.now() - timestamp);
+		if (elapsed < 60_000) return 'Just now';
+		if (elapsed < 3_600_000) return `${Math.floor(elapsed / 60_000)}m ago`;
+		if (elapsed < 86_400_000) return `${Math.floor(elapsed / 3_600_000)}h ago`;
+		if (elapsed < 172_800_000) return 'Yesterday';
+		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(new Date(timestamp));
 	}
+
+	function subtitle(c: ConversationSummary): string {
+		const live = session.conversations.find(conversation => conversation.id === c.id);
+		const latest = live ? [...live.messages].reverse().find(message => message.role === 'assistant' && message.text.trim()) : undefined;
+		if (latest) return latest.text.replace(/[#*_`]/g, '').replace(/\s+/g, ' ').trim().slice(0,160);
+		const preview = c.preview.trim();
+		const currentTitle = title(c).trim();
+		return preview && preview.toLocaleLowerCase() !== currentTitle.toLocaleLowerCase()
+			? preview
+			: `Updated ${relativeUpdated(c.saved_at_ms)}`;
+	}
+
+	function relativePath(path: string): string {
+		const root = session.catalog.workspace?.replace(/[/\\]+$/, '') ?? '';
+		const normalizedPath = path.replace(/\\/g, '/');
+		const normalizedRoot = root.replace(/\\/g, '/').replace(/\/$/, '');
+		return normalizedRoot && normalizedPath.toLocaleLowerCase().startsWith(`${normalizedRoot.toLocaleLowerCase()}/`)
+			? normalizedPath.slice(normalizedRoot.length + 1)
+			: normalizedPath;
+	}
+
+	let folders = $derived.by(() => {
+		const counts = new Map<string, Set<string>>();
+		for (const source of session.catalog.sources) {
+			const relative = relativePath(source.path);
+			const segments = relative.split('/').filter(Boolean);
+			const id = segments.length > 1 ? segments[0] : '__root';
+			const paths = counts.get(id) ?? new Set<string>();
+			paths.add(source.path);
+			counts.set(id, paths);
+		}
+		return [...counts].map(([id, paths]) => ({ id, label: id === '__root' ? 'Workspace root' : id, count: paths.size }))
+			.sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+	});
+	let catalogFileCount = $derived(new Set(session.catalog.sources.map((source) => source.path)).size);
+
+	let scopedConversations = $derived(list.filter((item) => (item.workspace ?? null) === (session.activeWorkspaceId ?? null)));
+	let investigationConversations = $derived(scopedConversations.filter((item) => investigationConversationIds.has(item.id) || Boolean(session.investigationNames[item.id])));
+	let questionConversations = $derived(scopedConversations.filter((item) => !investigationConversationIds.has(item.id) && !session.investigationNames[item.id]));
+
 
 	function repositoryName(path: string | null): string {
-		if (!path) return 'No repository';
+		if (!path) return 'General';
 		return path.replace(/[/\\]+$/, '').replace(/^.*[/\\]/, '') || path;
 	}
 
-	let repositories = $derived.by((): Repository[] => {
-		const grouped = new Map<string, { path: string | null; items: ConversationSummary[] }>();
-		const add = (path: string | null, item?: ConversationSummary) => {
-			const key = repositoryKey(path);
-			const group = grouped.get(key) ?? { path, items: [] };
-			if (item) group.items.push(item);
-			grouped.set(key, group);
-		};
-
-		for (const path of session.repositoryPaths) add(path);
-		if (session.catalog.workspace) add(session.catalog.workspace);
-		for (const item of list) {
-			if (!item.workspace || !session.hiddenRepositoryPaths.includes(item.workspace)) {
-				add(item.workspace, item);
-			}
-		}
-		const current = session.catalog.workspace;
-		const order = new Map(session.repositoryPaths.map((path, index) => [path, index]));
-		return [...grouped.values()]
-			.sort((a, b) => {
-				if (a.path === null) return 1;
-				if (b.path === null) return -1;
-				return (order.get(a.path) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.path) ?? Number.MAX_SAFE_INTEGER);
-			})
-			.map((group) => {
-				const key = repositoryKey(group.path);
-				const active = group.path !== null && group.path === current;
-				return {
-					key,
-					path: group.path,
-					name: repositoryName(group.path),
-					items: group.items,
-					current: active,
-					expanded: expandedRepos[key] ?? active
-				};
-			});
-	});
+	let repositories = $derived<Repository[]>([{
+		key: session.activeWorkspaceId ?? GENERAL_WORKSPACE_ID,
+		path: session.activeWorkspaceId ?? null,
+		name: repositoryName(session.activeWorkspaceId ?? null),
+		historyOnly: Boolean(session.activeWorkspaceId && session.historyOnlyRepositoryPaths.includes(session.activeWorkspaceId))
+	}]);
 
 	function newChat(): void {
-		menuRepository = null;
-		session.setWorkspaceView('ask');
-		session.newTab();
+		mode = 'chat';
+		session.newConversation();
 	}
 
-	function toggleRepository(repo: Repository): void {
-		menuRepository = null;
-		expandedRepos = { ...expandedRepos, [repo.key]: !repo.expanded };
-		if (repo.expanded || !repo.path) return;
-		session.setWorkspaceView('ask');
-		if (repo.path !== session.catalog.workspace) void openFolder(repo.path);
+	function selectMode(next: 'chat' | 'files' | 'reports'): void {
+		mode = next;
+		onsectionselect?.(next);
+		if (next !== 'reports' || !session.catalog.workspace) return;
+		if (session.activeWorkspaceTool?.kind !== 'studio') session.openStudioTool();
 	}
 
-	async function openRepositoryWorkspace(repo: Repository): Promise<void> {
-		menuRepository = null;
-		expandedRepos = { ...expandedRepos, [repo.key]: true };
-		if (repo.path && repo.path !== session.catalog.workspace) await openFolder(repo.path);
-		session.setWorkspacePane('sources');
+	function openReport(id: string): void {
+		mode = 'reports';
+		onsectionselect?.('reports');
+		session.openStudioTool(id);
 	}
 
-	async function addRepository(): Promise<void> {
-		session.setWorkspaceView('ask');
-		await openFolder();
+	function newReport(): void {
+		mode = 'reports';
+		onsectionselect?.('reports');
+		session.openNewReport();
 	}
 
-	function hideRepository(repo: Repository, event: MouseEvent): void {
-		event.stopPropagation();
-		menuRepository = null;
-		if (repo.path && repo.path !== session.catalog.workspace) session.forgetRepository(repo.path);
+	async function selectRepository(repo: Repository): Promise<boolean> {
+		if (!repo.path) {
+			return session.focusWorkspace(GENERAL_WORKSPACE_ID);
+		}
+		const workspace = session.workspaceAt(repo.path);
+		if (workspace && !workspace.historyOnly) return session.focusWorkspace(workspace.id);
+		return openRepository(repo.path, { reportFailure: true });
+	}
+
+	function requestWorkspaceDelete(repo: Repository): void {
+		if (!repo.path) return;
+		workspaceDeleteTarget = repo;
+		workspaceDeleteError = '';
+		workspaceDeleteDialogOpen = true;
+	}
+
+	async function deleteWorkspaceAndConversations(): Promise<void> {
+		const target = workspaceDeleteTarget;
+		const path = target?.path;
+		if (!target || !path || deletingWorkspace) return;
+		deletingWorkspace = true;
+		workspaceDeleteError = '';
+		const deletedIds: string[] = [];
+		let prepared = false;
+		try {
+			prepared = await session.beginWorkspaceDeletion(path);
+			if (!prepared) throw new Error('Deletion could not continue: a conversation is active or a save is in progress.');
+
+			const archived = await ipc.conversationsList();
+			const ids = [...new Set(archived.filter((conversation) => conversation.workspace === path).map((conversation) => conversation.id))];
+			for (const id of ids) {
+				await ipc.deleteConversation(id);
+				deletedIds.push(id);
+			}
+
+			await session.deleteWorkspaceAndConversations(path);
+			list = list.filter((conversation) => conversation.workspace !== path);
+			workspaceDeleteDialogOpen = false;
+			workspaceDeleteTarget = null;
+		} catch (error) {
+			if (prepared) session.cancelWorkspaceDeletion(path);
+			for (const id of deletedIds) session.removeConversationWithoutArchiving(id);
+			try { list = await ipc.conversationsList(); } catch { /* retain the last-known sidebar history */ }
+			workspaceDeleteError = deletedIds.length
+				? `Deletion stopped after removing ${deletedIds.length} conversation${deletedIds.length === 1 ? '' : 's'}. Try again to remove the rest. ${errMsg(error)}`
+				: errMsg(error);
+		} finally {
+			deletingWorkspace = false;
+		}
 	}
 
 	let renamingId = $state<string | null>(null);
@@ -155,652 +256,225 @@
 		}
 	}
 
-	async function open(c: ConversationSummary) {
+	async function open(c: ConversationSummary, investigation: boolean) {
 		try {
-			expandedRepos = { ...expandedRepos, [repositoryKey(c.workspace)]: true };
 			await openConversation(c);
+			if (investigation && session.catalog.workspace) session.setWorkspacePane('investigation');
+			else session.setWorkspacePaneOpen(false);
 		} catch (e) {
 			session.addSystem(`error: ${errMsg(e)}`);
 		}
 	}
 
-	async function remove(c: ConversationSummary, e: MouseEvent) {
+	function remove(c: ConversationSummary, e: MouseEvent) {
 		e.stopPropagation();
+		conversationDeleteTarget = c;
+		conversationDeleteError = '';
+		conversationDeleteDialogOpen = true;
+	}
+
+	async function confirmConversationDelete() {
+		const target = conversationDeleteTarget;
+		if (!target || deletingConversation) return;
+		deletingConversation = true;
+		conversationDeleteError = '';
 		try {
-			await ipc.deleteConversation(c.id);
-			list = list.filter((x) => x.id !== c.id);
-			// If this conversation is still open as a live tab, close it too --
+			await ipc.deleteConversation(target.id);
+			list = list.filter((x) => x.id !== target.id);
+			// If this conversation is still live, remove it too --
 			// otherwise its very next settle re-archives it, undoing the delete.
-			session.removeTabWithoutArchiving(c.id);
-		} catch (err) {
-			session.addSystem(`error: ${errMsg(err)}`);
-		}
+			session.removeConversationWithoutArchiving(target.id);
+			conversationDeleteDialogOpen = false;
+			conversationDeleteTarget = null;
+		} catch (err) { conversationDeleteError = errMsg(err); }
+		finally { deletingConversation = false; }
 	}
 </script>
 
-<aside class="sidebar">
-	<div class="header">
-		<span class="logo"><Logo size={18} active={session.busy} /></span>
-		<div class="header-actions">
-			<button
-				class="icon-btn"
-				type="button"
-				aria-label="Collapse sidebar"
-				title={`Collapse sidebar (${shortcutModifier}+B)`}
-				onclick={() => session.toggleSidebar()}
-			>
-				<Icon name="panel" size={16} />
-			</button>
-		</div>
-	</div>
-	<nav class="nav-section" aria-label="General">
-		<div class="nav-heading">General</div>
-		<button
-			class="nav-row"
-			title={`New conversation (${shortcutModifier}+Shift+A)`}
-			aria-label="New conversation"
-			aria-keyshortcuts="Control+Shift+A Meta+Shift+A"
-			type="button"
-			onclick={newChat}
-		>
-			<Icon name="ask" size={16} />
-			<span>Ask</span>
-		</button>
-		<button
-			class="nav-row"
-			type="button"
-			title={`Search (${shortcutModifier}+K)`}
-			aria-keyshortcuts="Control+K Meta+K"
-			aria-haspopup="dialog"
-			onclick={() => onsearch?.()}
-		>
-			<Icon name="search" size={16} />
-			<span>Search</span>
-		</button>
-	</nav>
-	<section class="projects-section" aria-labelledby="projects-heading">
-		<div class="section-head">
-			<div class="nav-heading" id="projects-heading">Projects</div>
-			<button
-				class="section-action"
-				type="button"
-				aria-label="New project"
-				title="New project"
-				onclick={() => onnewproject?.()}
-			>
-				<Icon name="plus" size={16} />
-			</button>
-		</div>
-		<div class="project-list">
-			{#each session.projects as project (project.id)}
-				<button
-					class="project-row"
-					class:active={session.workspaceView === 'project' && session.activeProjectId === project.id}
-					type="button"
-					title={project.workspace}
-					aria-current={session.workspaceView === 'project' && session.activeProjectId === project.id ? 'page' : undefined}
-					onclick={() => session.openProject(project.id)}
-				>
-					<span class="row-slot row-icon"><Icon name="project" size={16} /></span>
-					<span>{project.name}</span>
-				</button>
-			{/each}
-		</div>
-	</section>
-	<section class="repository-section" aria-labelledby="repositories-heading">
-		<div class="section-head">
-			<div class="nav-heading" id="repositories-heading">Repositories</div>
-			<button
-				class="section-action"
-				type="button"
-				aria-label="Add repository"
-				title={`Add repository (${shortcutModifier}+O)`}
-				onclick={() => void addRepository()}
-			>
-				<Icon name="plus" size={16} />
-			</button>
-		</div>
-		<div class="repositories">
-			{#each repositories as repo (repo.key)}
-				<div
-					class="repository"
-					class:current={repo.current}
-					class:expanded={repo.expanded}
-				>
-					<div class="repository-row-wrap">
-						<button
-							class="repository-row"
-							type="button"
-							title={repo.path ?? 'No repository'}
-							aria-expanded={repo.expanded}
-							onclick={() => toggleRepository(repo)}
-						>
-							<span class="row-slot row-chevron"><Icon name="chevron-right" size={12} /></span>
-							<span class="row-slot row-icon"><Icon name="repository" size={16} /></span>
-							<span class="repository-copy">{repo.name}</span>
-						</button>
-						{#if repo.path}
-							<div class="repository-actions">
-								{#if !repo.current}
-									<button
-										class="repository-action"
-										type="button"
-										aria-label="Repository actions"
-										aria-haspopup="menu"
-										aria-expanded={menuRepository === repo.key}
-										title="Repository actions"
-										onclick={(event) => {
-											event.stopPropagation();
-											menuRepository = menuRepository === repo.key ? null : repo.key;
-										}}
-									>
-										<Icon name="more-horizontal" size={14} />
-									</button>
+	<aside class="sidebar">
+			<div class="header">
+				<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={14} /></Button>
+				<div class="header-actions">
+					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="Search" title={`Search (${shortcutModifier}+K)`} aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog" onclick={() => onsearch?.()}><Icon name="search" size={14} /></Button>
+					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={15} /></Button>
+				</div>
+			</div>
+			<div class="workspace-identity">
+				<WorkspaceSwitcher identity onselect={onworkspaceselect} />
+				{#each repositories.filter((repo) => repo.path === (session.activeWorkspaceId ?? null)) as repo (repo.key)}
+					{#if repo.path}
+						<DropdownMenu.Root>
+							<DropdownMenu.Trigger class="identity-menu-trigger" aria-label="Workspace settings" title="Workspace settings"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger>
+							<DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" side="bottom" align="end" sideOffset={4}>
+								{#if repo.historyOnly}<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void selectRepository(repo)}>Reconnect folder</DropdownMenu.Item>{/if}
+								<DropdownMenu.Item class="fella-ui-menu-item workspace-delete-menu-item" onSelect={() => requestWorkspaceDelete(repo)}>Delete workspace and conversations</DropdownMenu.Item>
+							</DropdownMenu.Content></DropdownMenu.Portal>
+						</DropdownMenu.Root>
+					{/if}
+				{/each}
+			</div>
+			<nav class="sidebar-mode-switch fella-pill-nav" aria-label="Workspace sections">
+				<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'chat'} onclick={() => selectMode('chat')}>Chat</Button>
+				<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'files'} onclick={() => selectMode('files')}>Files</Button>
+				<Button variant="ghost" class="sidebar-mode-option fella-pill-nav-item" type="button" aria-pressed={mode === 'reports'} onclick={() => selectMode('reports')}>Reports</Button>
+			</nav>
+			{#if mode === 'chat'}
+				<section class="repository-section chat-history" aria-label="Workspace conversations">
+					{#each [{ label: 'Investigations', rows: investigationConversations }, { label: 'Questions', rows: questionConversations }] as group (group.label)}
+						<div class="conversation-group">
+							<div class="section-head"><h2>{group.label}</h2>{#if group.label === 'Investigations'}<DropdownMenu.Root><DropdownMenu.Trigger class="section-action investigation-actions" aria-label="Investigation actions" title="Investigation actions"><Icon name="more-horizontal" size={14} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end"><DropdownMenu.Item class="fella-ui-menu-item" disabled={!session.catalog.workspace} onSelect={() => session.requestNewInvestigation()}><Icon name="plus" size={14} />New Investigation…</DropdownMenu.Item></DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>{/if}</div>
+					{#if group.rows.length}
+						{#each group.rows as c (c.id)}
+							<div class="item-wrap">
+								{#if renamingId === c.id}
+									<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
+								{:else}
+									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c, group.label === 'Investigations')} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
+										<span class="conversation-copy"><strong>{title(c)}</strong><small>{subtitle(c)}</small></span>
+									</Button>
+									<div class="row-actions">
+										<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" onclick={(e) => startRename(c, e)}><Icon name="pencil" size={14} /></Button>
+										<Button variant="ghost" size="icon" class="del" type="button" aria-label="Delete conversation" title="Delete conversation" onclick={(e) => remove(c, e)}><Icon name="x" size={14} /></Button>
+									</div>
 								{/if}
 							</div>
-						{/if}
-						{#if menuRepository === repo.key && repo.path && !repo.current}
-							<div class="repository-menu" role="menu">
-								<button
-									type="button"
-									role="menuitem"
-									onclick={(event) => hideRepository(repo, event)}
-								>
-									Hide repository
-								</button>
-							</div>
-						{/if}
+						{/each}
+					{:else}
+								<p class="sidebar-empty">{group.label === 'Investigations' ? 'No Investigations yet.' : 'No conversations yet.'}</p>
+					{/if}
+						</div>
+					{/each}
+				</section>
+			{:else if mode === 'files'}
+				<section class="repository-section file-folders" aria-label="Workspace folders">
+					<div class="section-head"><h2>Folders</h2><span class="group-count">{catalogFileCount}</span></div>
+					<div class="folder-list">
+						<button class="folder-row" class:active={selectedFolder === 'all'} type="button" aria-pressed={selectedFolder === 'all'} onclick={() => onselectfolder?.('all')}><strong>All files</strong><small>{catalogFileCount}</small></button>
+						{#each folders as folder (folder.id)}
+							<button class="folder-row" class:active={selectedFolder === folder.id} type="button" aria-pressed={selectedFolder === folder.id} onclick={() => onselectfolder?.(folder.id)}><strong title={folder.label}>{folder.label}</strong><small>{folder.count}</small></button>
+						{/each}
 					</div>
-					{#if repo.expanded}
-						<div class="repository-contents">
-							{#if repo.path}
-								<div class="repository-tools" aria-label={`${repo.name} tools`}>
-									<button
-										class="repository-tool"
-										class:active={repo.current && session.workspaceView === 'workspace'}
-										type="button"
-										aria-label={`Open ${repo.name} workspace`}
-										aria-current={repo.current && session.workspaceView === 'workspace' ? 'page' : undefined}
-										title={`Open workspace (${shortcutModifier}+Shift+S)`}
-										onclick={() => void openRepositoryWorkspace(repo)}
-									>
-										<span class="row-slot row-icon"><Icon name="folder" size={16} /></span>
-										<span>Workspace</span>
-									</button>
-								</div>
-							{/if}
-							{#each repo.items as c (c.id)}
-								<div class="item-wrap">
-									{#if renamingId === c.id}
-										<input
-											class="rename-input"
-											bind:this={renameInput}
-											bind:value={renameValue}
-											onkeydown={(e) => {
-												if (e.key === 'Enter') commitRename(c);
-												else if (e.key === 'Escape') renamingId = null;
-											}}
-											onblur={() => commitRename(c)}
-											aria-label="Rename conversation"
-										/>
-									{:else}
-										<button
-											class="rowbtn item"
-											class:active={session.conversationId === c.id}
-											type="button"
-											onclick={() => void open(c)}
-											title={title(c)}
-											aria-label={`Open conversation: ${title(c)}`}
-											aria-current={session.conversationId === c.id ? 'page' : undefined}
-										>
-											<span class="row-slot row-icon row-placeholder" aria-hidden="true"></span>
-											<span class="preview">{title(c)}</span>
-										</button>
-										<div class="row-actions">
-											<button class="ren" type="button" aria-label="Rename conversation" title="Rename" onclick={(e) => startRename(c, e)}>
-												<Icon name="pencil" size={14} />
-											</button>
-											<button class="del" type="button" aria-label="Delete conversation" title="Delete" onclick={(e) => remove(c, e)}>
-												<Icon name="x" size={14} />
-											</button>
-										</div>
-									{/if}
-								</div>
-							{/each}
+					{#if session.catalog.skipped?.length}
+						<div class="catalog-warning"><span class="warning-dot"></span><span><strong>{session.catalog.skipped.length} unavailable {session.catalog.skipped.length === 1 ? 'file' : 'files'}</strong><small>Some items couldn’t be cataloged.</small></span></div>
+					{/if}
+				</section>
+			{:else}
+				<section class="repository-section report-history" aria-label="Workspace reports">
+					<div class="section-head"><h2>Reports</h2><span class="group-count">{workspaceReports.length}</span><Button variant="ghost" size="icon" class="section-action report-add" aria-label="New report" title="New report" disabled={!session.catalog.workspace} onclick={newReport}><Icon name="plus" size={16} /></Button></div>
+					{#if !session.catalog.workspace}
+						<p class="sidebar-empty">Open a folder to view reports.</p>
+					{:else if reportsError}
+						<p class="sidebar-empty" role="status">{reportsError}</p>
+					{:else}
+						<div class="report-list">
+							{#each workspaceReports as report (report.id)}
+								<Button variant="ghost" class={`report-row${session.activeWorkspaceTool?.kind === 'studio' && session.activeWorkspaceTool.documentId === report.id ? ' active' : ''}`} title={report.title} onclick={() => openReport(report.id)}>
+									<span class="report-copy"><strong>{report.title}</strong><small>Updated {relativeUpdated(report.updated_at_ms)}</small></span>
+								</Button>
+							{:else}<p class="sidebar-empty">No reports yet.</p>{/each}
 						</div>
 					{/if}
-				</div>
-			{/each}
-			{#if repositories.length === 0}
-				<button class="add-repository" type="button" onclick={() => void addRepository()}>
-					<span class="row-slot row-icon"><Icon name="folder" size={16} /></span> Add a repository
-				</button>
+				</section>
 			{/if}
-		</div>
-	</section>
-	<div class="sidebar-footer">
-		<button
-			class="nav-row settings-row"
-			title={`Settings (${shortcutModifier}+,)`}
-			aria-label="Settings"
-			aria-keyshortcuts="Control+Comma Meta+Comma"
-			class:active={session.workspaceView === 'settings'}
-			type="button"
-			aria-current={session.workspaceView === 'settings' ? 'page' : undefined}
-			onclick={() => session.setWorkspaceView('settings')}
-		>
-			<Icon name="settings" size={16} />
-			<span>Settings</span>
-		</button>
-	</div>
-</aside>
+			<div class="sidebar-footer">
+				<Button variant="ghost" size="icon" class={`settings-button${session.workspaceView === 'settings' ? ' active' : ''}`} title={`Settings (${shortcutModifier}+,)`} aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" aria-current={session.workspaceView === 'settings' ? 'page' : undefined} onclick={() => session.setWorkspaceView('settings')}><Icon name="settings" size={15} /></Button>
+			</div>
+	</aside>
+
+<Dialog.Root bind:open={workspaceDeleteDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fella-ui-dialog-overlay" />
+		<Dialog.Content class="fella-ui-dialog-content workspace-delete-dialog">
+			<div>
+				<Dialog.Title class="workspace-delete-title" level={2}>
+					Delete {workspaceDeleteTarget?.name ?? 'workspace'}?
+				</Dialog.Title>
+				<Dialog.Description class="workspace-delete-description">
+					This removes the workspace from the sidebar and deletes its conversations. Saved results, reports and their supporting records are kept; reconnect the folder to open them. The folder, files, and project notes are not deleted.
+				</Dialog.Description>
+			</div>
+			{#if workspaceDeleteError}
+				<p class="workspace-delete-error" role="alert">{workspaceDeleteError}</p>
+			{/if}
+			<div class="workspace-delete-actions">
+				<Button variant="ghost" disabled={deletingWorkspace} onclick={() => { workspaceDeleteDialogOpen = false; }}>Cancel</Button>
+				<Button variant="destructive" disabled={deletingWorkspace} onclick={() => void deleteWorkspaceAndConversations()}>
+					{deletingWorkspace ? 'Deleting…' : 'Delete workspace and conversations'}
+				</Button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
+
+<Dialog.Root bind:open={conversationDeleteDialogOpen}>
+	<Dialog.Portal>
+		<Dialog.Overlay class="fella-ui-dialog-overlay" />
+		<Dialog.Content class="fella-ui-dialog-content conversation-delete-dialog">
+			<Dialog.Title class="workspace-delete-title" level={2}>Delete conversation?</Dialog.Title>
+			<Dialog.Description class="workspace-delete-description">
+				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}”, its transcript, and any linked Investigation will be deleted. Saved results, reports, their supporting analysis records, and revisions will remain available in this workspace.
+			</Dialog.Description>
+			{#if conversationDeleteError}<p class="workspace-delete-error" role="alert">{conversationDeleteError}</p>{/if}
+			<div class="workspace-delete-actions">
+				<Button variant="ghost" disabled={deletingConversation} onclick={() => { conversationDeleteDialogOpen = false; }}>Cancel</Button>
+				<Button variant="destructive" disabled={deletingConversation} onclick={() => void confirmConversationDelete()}>{deletingConversation ? 'Deleting…' : 'Delete conversation'}</Button>
+			</div>
+		</Dialog.Content>
+	</Dialog.Portal>
+</Dialog.Root>
 
 <style>
-	.sidebar {
-		flex: none;
-		width: 240px;
-		display: flex;
-		flex-direction: column;
-		gap: var(--space-1);
-		padding: 0 var(--space-2) var(--space-2);
-		--sidebar-hover: color-mix(in srgb, var(--bg-inset) 58%, var(--bg));
-		--sidebar-selected: var(--bg-inset);
-		/* No top padding: .header is 38px flush against the top edge, to
-		   match the titlebar's height exactly across the sidebar seam. */
-		background: var(--bg);
-		border-right: 1px solid var(--border);
-		overflow: hidden;
-	}
-	.header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		flex: none;
-		height: 38px;
-		padding: 0 var(--space-2);
-	}
-	.logo {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		width: 26px;
-		height: 26px;
-	}
-	.header-actions {
-		display: flex;
-		align-items: center;
-		gap: var(--space-1);
-	}
-	.icon-btn {
-		display: grid;
-		place-items: center;
-		width: 26px;
-		height: 26px;
-		border-radius: var(--radius-sm);
-		color: var(--text-faint);
-	}
-	.icon-btn:hover {
-		color: var(--text);
-		background: var(--sidebar-hover);
-	}
-	.nav-section {
-		display: grid;
-		gap: 1px;
-		padding: var(--space-3) var(--space-1) var(--space-2);
-	}
-	.projects-section {
-		flex: none;
-		display: grid;
-		gap: 1px;
-		padding: var(--space-1) var(--space-1) var(--space-2);
-	}
-	.project-list {
-		display: grid;
-		gap: 1px;
-		max-height: 144px;
-		overflow-y: auto;
-	}
-	.repository-section {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 1px;
-		padding: var(--space-2) var(--space-1);
-	}
-	.section-head {
-		display: flex;
-		align-items: center;
-		min-height: 24px;
-	}
-	.section-head .nav-heading {
-		flex: 1;
-		padding: 0 var(--space-2);
-		line-height: 24px;
-	}
-	.section-action {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		height: 22px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.section-action:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.repositories {
-		flex: 1;
-		min-height: 0;
-		display: grid;
-		align-content: start;
-		grid-auto-rows: max-content;
-		gap: 1px;
-		overflow-y: auto;
-	}
-	.repository {
-		min-width: 0;
-	}
-	.repository-row-wrap {
-		position: relative;
-	}
-	.repository-row {
-		position: relative;
-		width: 100%;
-		display: grid;
-		grid-template-columns: 16px 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		min-height: 28px;
-		padding: 4px 32px 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		text-align: left;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.repository-row:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.row-slot {
-		display: grid;
-		place-items: center;
-		width: 16px;
-		height: 20px;
-		flex: none;
-		color: var(--text-faint);
-	}
-	.row-slot :global(svg) {
-		display: block;
-	}
-	.row-chevron {
-		transition: color var(--dur-fast) var(--ease);
-	}
-	.repository-row:hover .row-slot,
-	.repository-row:focus-visible .row-slot {
-		color: var(--text-dim);
-	}
-	.repository.expanded .row-chevron :global(svg) {
-		transform: rotate(90deg);
-		transition: transform var(--dur-fast) var(--ease);
-	}
-	.repository.current .row-chevron,
-	.repository.current .row-icon {
-		color: var(--text-dim);
-	}
-	.repository-copy {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		font-weight: 550;
-	}
-	.repository-row:hover .repository-copy,
-	.repository-row:focus-visible .repository-copy {
-		color: var(--text);
-	}
-	.repository-actions {
-		position: absolute;
-		top: 3px;
-		right: 4px;
-		display: none;
-		align-items: center;
-		gap: 2px;
-		padding-left: 4px;
-		background: transparent;
-		color: var(--text-faint);
-	}
-	.repository:hover .repository-actions,
-	.repository:focus-within .repository-actions {
-		display: flex;
-		color: var(--text);
-	}
-	.repository-action {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		height: 22px;
-		border-radius: var(--radius-chip);
-		color: inherit;
-	}
-	.repository-action:hover {
-		background: var(--sidebar-hover);
-		color: inherit;
-	}
-	.repository-action :global(svg) {
-		flex: none;
-		color: inherit;
-	}
-	.repository-menu {
-		position: absolute;
-		top: calc(100% - 2px);
-		right: 4px;
-		z-index: 4;
-		min-width: 136px;
-		padding: 4px;
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--bg-raised);
-		box-shadow: var(--shadow-pop);
-	}
-	.repository-menu button {
-		width: 100%;
-		padding: 7px 8px;
-		border-radius: var(--radius-chip);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.repository-menu button:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.repository-contents {
-		padding: 0 0 2px 30px;
-	}
-	.repository-tools {
-		display: grid;
-		padding: 1px 0 2px;
-	}
-	.repository-tool {
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		min-height: 27px;
-		padding: 4px 4px 4px 0;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.repository-tool:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.repository-tool.active {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.add-repository {
-		display: inline-flex;
-		align-items: center;
-		gap: 6px;
-		padding: 7px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-	}
-	.add-repository:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.nav-heading {
-		padding: 0 var(--space-2) var(--space-1);
-		color: var(--text-faint);
-		font-size: var(--fs-xs);
-		font-weight: 650;
-		letter-spacing: 0.01em;
-	}
-	.nav-row {
-		position: relative;
-		width: 100%;
-		display: flex;
-		align-items: center;
-		gap: var(--space-2);
-		min-height: 28px;
-		padding: 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-		white-space: nowrap;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.nav-row:hover:not(:disabled) {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.nav-row.active {
-		background: var(--sidebar-selected);
-		color: var(--text);
-		font-weight: 500;
-	}
-	.nav-row:disabled {
-		color: var(--border-strong);
-		cursor: default;
-	}
-	.item-wrap {
-		position: relative;
-	}
-	.item {
-		position: relative;
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		width: 100%;
-		min-height: 27px;
-		padding-left: 0;
-		padding-right: 48px;
-		padding-top: 4px;
-		padding-bottom: 4px;
-		border-radius: var(--radius-sm);
-	}
-	.item:hover,
-	.item:focus-visible {
-		background: var(--sidebar-hover);
-	}
-	.item.active {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.item-wrap:focus-within .row-actions,
-	.item-wrap:hover .row-actions {
-		display: flex;
-	}
-	.preview {
-		min-width: 0;
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-	.item.active .preview {
-		color: var(--text);
-	}
-	.project-row {
-		position: relative;
-		width: 100%;
-		display: grid;
-		grid-template-columns: 16px minmax(0, 1fr);
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		min-height: 27px;
-		padding: 4px var(--space-2);
-		border-radius: var(--radius-sm);
-		color: var(--text-dim);
-		font-size: var(--fs-sm);
-		text-align: left;
-		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-	}
-	.project-row:hover {
-		background: var(--sidebar-hover);
-		color: var(--text);
-	}
-	.project-row.active {
-		background: var(--sidebar-selected);
-		color: var(--text);
-	}
-	.rename-input {
-		width: 100%;
-		padding: var(--space-2) var(--space-3);
-		border: 1px solid var(--border-strong);
-		border-radius: var(--radius-chip);
-		background: var(--bg-raised);
-		color: var(--text);
-		font: inherit;
-		font-size: var(--fs-sm);
-		outline: none;
-	}
-	.row-actions {
-		position: absolute;
-		top: 5px;
-		right: 6px;
-		display: none;
-		align-items: center;
-		gap: 2px;
-	}
-	.ren,
-	.del {
-		display: grid;
-		place-items: center;
-		width: 18px;
-		height: 18px;
-		border-radius: var(--radius-chip);
-		color: var(--text-faint);
-	}
-	.del {
-		color: var(--err);
-	}
-	.ren:hover,
-	.del:hover {
-		color: var(--text);
-		background: var(--sidebar-hover);
-	}
-	.sidebar-footer {
-		flex: none;
-		display: flex;
-		justify-content: flex-end;
-		padding: var(--space-2) var(--space-1) 0;
-		border-top: 1px solid var(--border);
-	}
+	.sidebar { display:flex; flex-direction:column; flex:none; width:268px; min-width:268px; max-width:268px; height:100%; padding:0; background:var(--sidebar-surface); border-right:1px solid var(--border); }
+	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:48px; padding:16px 16px 0; -webkit-app-region:drag; }
+	.header-actions { display:flex; align-items:center; gap:8px; -webkit-app-region:no-drag; }
+	.header :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:32px; height:32px; min-height:32px; padding:0; border:0; border-radius:999px; background:var(--bg-raised-2); color:var(--text-dim); cursor:pointer; -webkit-app-region:no-drag; }
+	.header :global(.icon-btn:hover), :global(.section-action:hover), :global(.identity-menu-trigger:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
+	.workspace-identity { position:relative; display:flex; min-width:0; align-items:center; gap:8px; margin-top:24px; padding:0 16px; }
+	:global(.identity-menu-trigger) { position:absolute; right:12px; opacity:0; display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
+	.workspace-identity:hover :global(.identity-menu-trigger), :global(.identity-menu-trigger:focus-visible), :global(.identity-menu-trigger[data-state='open']) { opacity:1; }
+	.sidebar-mode-switch { flex:none; display:flex; width:calc(100% - 24px); gap:0; margin:16px 12px 0; padding:4px; }
+	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:30px; height:30px; padding:0 6px; border-radius:999px; font-size:12.5px; font-weight:400; }
+	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; scrollbar-width:thin; padding:0 12px; margin-top:20px; }
+	.conversation-group + .conversation-group { margin-top:20px; }
+	.section-head { display:flex; align-items:center; gap:8px; min-height:23px; padding:0 8px 6px; }
+	.section-head h2 { margin:0; color:var(--text-dim); font-size:11.5px; font-weight:400; }
+	.group-count { margin-left:auto; color:var(--text-faint); font-size:11px; }
+	:global(.report-add), :global(.investigation-actions) { margin-left:auto; }
+	:global(.investigation-actions) { background:transparent; width:20px; height:20px; min-height:20px; }
+	.folder-list, .report-list { display:grid; gap:2px; }
+	.item-wrap { position:relative; min-width:0; margin-bottom:2px; }
+	.sidebar :global(.conversation-row), :global(.report-row) { display:flex; justify-content:flex-start; width:100%; min-width:0; min-height:54px; gap:0; padding:8px; border-radius:12px; color:var(--text-dim); text-align:left; }
+	.sidebar :global(.conversation-row:hover), :global(.report-row:hover), .folder-row:hover { background:var(--bg-raised); color:var(--text); }
+	.sidebar :global(.conversation-row.active), :global(.report-row.active) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
+	.conversation-copy, .report-copy { display:grid; min-width:0; flex:1; gap:0; text-align:left; }
+	.conversation-copy strong, .report-copy strong { overflow:hidden; color:var(--text); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+	.conversation-copy small, .report-copy small { display:block; overflow:hidden; color:var(--text-dim); font-size:var(--fs-xs); font-weight:400; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
+	.row-actions { position:absolute; top:11px; right:5px; display:none; gap:1px; padding-left:3px; background:var(--bg-raised-2, var(--bg-inset)); border-radius:var(--radius-sm); }
+	.item-wrap:hover .row-actions, .item-wrap:focus-within .row-actions { display:flex; }
+	.item-wrap:hover .conversation-copy, .item-wrap:focus-within .conversation-copy { padding-right:56px; }
+	.row-actions :global(button) { width:26px; min-height:26px; height:26px; padding:0; color:var(--text-faint); }
+	.sidebar :global(.rename-input) { min-height:36px; height:36px; font-size:var(--fs-sm); }
+	.sidebar-empty { margin:10px 8px; color:var(--text-faint); font-size:var(--fs-xs); line-height:1.5; }
+	.folder-row { display:flex; width:100%; min-width:0; align-items:center; gap:0; min-height:39px; padding:5px 9px; border:0; border-radius:10px; background:transparent; color:var(--text-dim); text-align:left; cursor:pointer; }
+	.folder-row.active { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
+	.folder-row strong { flex:1; min-width:0; overflow:hidden; font-size:var(--fs-sm); font-weight:450; text-overflow:ellipsis; white-space:nowrap; }
+	.folder-row small { color:var(--text-faint); font-size:11px; }
+	.catalog-warning { display:flex; gap:9px; padding:14px 8px 0; margin:14px 7px 0; border-top:1px solid var(--border); }
+	.catalog-warning .warning-dot { width:7px; height:7px; flex:none; margin-top:5px; border-radius:50%; background:var(--warn); }
+	.catalog-warning span:last-child { display:grid; gap:3px; }
+	.catalog-warning strong { color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
+	.catalog-warning small { color:var(--text-faint); font-size:11px; line-height:1.45; }
+	:global(.report-row) { min-height:50px; }
+	.sidebar-footer { display:flex; align-items:center; justify-content:flex-end; gap:12px; padding:12px; margin-top:auto; }
+	:global(.settings-button) { display:grid; width:15px; min-width:15px; height:32px; flex:none; place-items:center; border-radius:999px; color:var(--text-faint); }
+	:global(.settings-button:hover), :global(.settings-button.active) { background:var(--bg-raised); color:var(--text); }
+	:global(.collapse-btn) { background:transparent !important; width:14px !important; min-width:14px !important; padding:0 !important; }
+
+	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
+	:global(.conversation-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
+	:global(.workspace-delete-title) { margin:0; font-size:18px; font-weight:650; }
+	:global(.workspace-delete-description) { display:block; margin-top:8px; color:var(--text-dim); font-size:var(--fs-sm); line-height:1.5; }
+	.workspace-delete-actions { display:flex; justify-content:flex-end; gap:8px; }
+	.workspace-delete-error { color:var(--err); font-size:var(--fs-sm); }
+	@media (max-width: 760px) { .sidebar { width:min(268px, calc(100vw - 48px)); min-width:0; } }
 </style>

@@ -5,7 +5,7 @@
 //   - link/image URLs are restricted to safe schemes, so a `[x](javascript:…)`
 //     from prompt-injected file content can't run even if the page CSP allows
 //     inline script.
-import { marked } from 'marked';
+import { marked, type Tokens } from 'marked';
 
 /** http(s), mailto, anchors, and relative paths. Anything else (javascript:,
  *  data:, vbscript:, file:, …) is dropped. */
@@ -30,6 +30,16 @@ marked.use({
 			if (!SAFE_IMG_SRC.test((href ?? '').trim())) return escapeAttr(text ?? '');
 			const t = title ? ` title="${escapeAttr(title)}"` : '';
 			return `<img src="${escapeAttr(href)}" alt="${escapeAttr(text ?? '')}"${t} />`;
+		},
+		table({ header, rows }) {
+			const renderCell = (cell: Tokens.TableCell, headerCell: boolean): string => {
+				const align = cell.align ? ` align="${cell.align}"` : '';
+				const tag = headerCell ? 'th scope="col"' : 'td';
+				return `<${tag}${align} data-slot="${headerCell ? 'table-head' : 'table-cell'}">${this.parser.parseInline(cell.tokens)}</${headerCell ? 'th' : 'td'}>`;
+			};
+			const head = header.map((cell) => renderCell(cell, true)).join('');
+			const body = rows.map((row) => `<tr data-slot="table-row">${row.map((cell) => renderCell(cell, false)).join('')}</tr>`).join('');
+			return `<div class="markdown-table-scroll" data-slot="table-container" role="region" aria-label="Answer table" tabindex="0"><table data-slot="table"><thead data-slot="table-header"><tr data-slot="table-row">${head}</tr></thead><tbody data-slot="table-body">${body}</tbody></table></div>`;
 		}
 	}
 });

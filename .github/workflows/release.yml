@@ -71,7 +71,7 @@ jobs:
           python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/uci-bike-sharing --check
           python3 bench/fqa-bench/build_runner_cases.py --suite-dir bench/fqa-bench/suites/clarification-housing --check
           python3 bench/fqa-bench/suites/clarification-housing/validate_suite.py
-          python3 bench/fqa-bench/test_report_slices.py
+          python3 -m unittest discover -s tests/unit/python
 
       - name: FQA-Bench runner tests
         run: cargo test --manifest-path backend/Cargo.toml --features eval --example agent_eval --locked

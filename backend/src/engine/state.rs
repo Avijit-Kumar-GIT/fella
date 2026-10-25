@@ -15,16 +15,24 @@ use crate::engine::analytics::pyexec;
 use crate::engine::catalog::{self, Catalog, ColumnInfo, SourceInfo, SourceKind};
 use crate::engine::context::{ContextAssembler, ContextAssemblyAudit, ContextPacket};
 use crate::engine::error::{EngineError, EngineResult};
-use crate::engine::evidence::{Answer, AskEvent, EvidenceItem};
+use crate::engine::evidence::{
+    Answer, AskEvent, EvidenceItem, VerificationCheck, VerificationStatus,
+};
 use crate::engine::ingest::docs;
+use crate::engine::investigation::{
+    self, Investigation, InvestigationBrief, InvestigationContextSnapshot, InvestigationDefinition,
+    InvestigationDefinitionInput, InvestigationFinding, InvestigationFindingInput,
+    InvestigationFindingUpdate, InvestigationQuestion, InvestigationQuestionAnswerStatus,
+    InvestigationQuestionInput, InvestigationSourceSelection, QuestionBreakdownProposal,
+};
 use crate::engine::llm::{LlmClient, ProviderHealth};
 use crate::engine::memory::{self, FolderMemory};
 use crate::engine::provider::{self, AuthKind, PROVIDERS};
 use crate::engine::runtime::{
-    AnalysisContract, AnalysisResult, AnalysisTurn, AnalysisTurnReplayStatus, ClarificationReply,
-    ContextReference, InterpretationStatus, LogicalPlan, PlanStrategy, ResolvedClarification,
-    RunLogEntry, RunLogKind, TurnState, VerificationReport, WorkspaceColumnSnapshot,
-    WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
+    AnalysisContract, AnalysisResult, AnalysisSourceScope, AnalysisTurn, AnalysisTurnReplayStatus,
+    ClarificationReply, ClarificationRequest, ContextReference, InterpretationStatus, LogicalPlan,
+    PlanStrategy, ResolvedClarification, RunLogEntry, RunLogKind, TurnState, VerificationReport,
+    WorkspaceColumnSnapshot, WorkspaceRevisionSnapshot, WorkspaceSourceSnapshot,
 };
 use crate::engine::secrets::Secrets;
 use crate::engine::semantic_memory::{
@@ -33,6 +41,11 @@ use crate::engine::semantic_memory::{
 use crate::engine::sqlite::{self, Settings};
 use crate::engine::tools::Registry;
 use crate::engine::workspace_model::WorkspaceModel;
+
+const MAX_ANALYSIS_TURN_LINKS_PER_UPDATE: usize = 500;
+/// Shared by the app-level Investigation readers and workspace-scoped ask
+/// runtimes so a live Question run is not mistaken for a process interruption.
+pub(crate) type CancelRegistry = Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>;
 
 // Full-table common-value/null/min/max statistics are useful on tiny mounts,
 // but not worth rescanning many or large tables before the first question.
@@ -48,16 +61,135 @@ pub struct AskOptions<'a> {
     pub inspect: bool,
     pub context_refs: &'a [ContextReference],
     pub clarification_reply: Option<ClarificationReply>,
+    /// Resolve the current saved context from this canonical Investigation.
+    /// Used for ordinary desktop asks; the engine snapshots active revisions.
+    pub investigation_id: Option<&'a str>,
+    /// Optional durable Question identity for a Question-specific run.
+    pub question_id: Option<&'a str>,
+    /// Immutable context loaded from an existing turn for a faithful rerun or
+    /// clarification continuation. It is not refreshed from current records.
+    pub investigation_context: Option<InvestigationContextSnapshot>,
+    /// Explicit parent for replayed attempts. Question runs otherwise capture
+    /// the latest saved attempt as their parent.
+    pub rerun_of: Option<&'a str>,
 }
 
 struct PersistAnalysisTurn<'a> {
     conversation_id: &'a str,
     question: &'a str,
     context_refs: &'a [ContextReference],
+    investigation_context: Option<&'a InvestigationContextSnapshot>,
     clarification: Option<&'a ResolvedClarification>,
     context_audit: &'a ContextAssemblyAudit,
     catalog: &'a Catalog,
     answer: &'a Answer,
+    rerun_of: Option<&'a str>,
+}
+
+fn question_answer_status(
+    answer: &Answer,
+    cancelled: bool,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    question_answer_status_parts(
+        answer.status,
+        answer.contract.as_ref(),
+        &answer.verification,
+        answer.clarification.as_ref(),
+        cancelled,
+    )
+}
+
+fn question_answer_status_from_turn(
+    turn: &AnalysisTurn,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    question_answer_status_parts(
+        turn.result.status,
+        turn.contract.as_ref(),
+        &turn.result.verification,
+        turn.contract
+            .as_ref()
+            .and_then(|contract| contract.clarification.as_ref()),
+        turn.state == TurnState::Cancelled,
+    )
+}
+
+fn question_answer_status_parts(
+    status: VerificationStatus,
+    contract: Option<&AnalysisContract>,
+    verification: &[VerificationCheck],
+    clarification: Option<&ClarificationRequest>,
+    cancelled: bool,
+) -> (InvestigationQuestionAnswerStatus, Option<String>) {
+    if cancelled {
+        return (
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some("The run was stopped before a complete answer was verified.".to_owned()),
+        );
+    }
+    if contract.is_some_and(|contract| contract.interpretation == InterpretationStatus::Unsupported)
+    {
+        let reason = contract
+            .and_then(|contract| contract.unresolved.first())
+            .map(String::as_str)
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or("The available data or analysis tools do not support this Question.");
+        return (
+            InvestigationQuestionAnswerStatus::Unsupported,
+            Some(compact_status_reason(reason)),
+        );
+    }
+    if let Some(clarification) = clarification {
+        let reason = clarification
+            .reason
+            .as_deref()
+            .filter(|reason| !reason.trim().is_empty())
+            .unwrap_or(&clarification.question);
+        return (
+            InvestigationQuestionAnswerStatus::WaitingForInput,
+            Some(compact_status_reason(reason)),
+        );
+    }
+
+    let check_reason = verification
+        .iter()
+        .find(|check| !check.ok)
+        .and_then(|check| check.detail.as_deref())
+        .filter(|reason| !reason.trim().is_empty());
+    let unresolved_reason = contract
+        .and_then(|contract| contract.unresolved.first())
+        .map(String::as_str)
+        .filter(|reason| !reason.trim().is_empty());
+    match status {
+        VerificationStatus::Verified => (InvestigationQuestionAnswerStatus::Answered, None),
+        VerificationStatus::NeedsReview => (
+            InvestigationQuestionAnswerStatus::NeedsReview,
+            Some(compact_status_reason(
+                check_reason.or(unresolved_reason).unwrap_or(
+                    "The run produced an answer, but its verification is not conclusive.",
+                ),
+            )),
+        ),
+        VerificationStatus::InsufficientData => (
+            InvestigationQuestionAnswerStatus::InsufficientData,
+            Some(compact_status_reason(
+                check_reason.or(unresolved_reason).unwrap_or(
+                    "The run did not produce enough accepted evidence to answer this Question.",
+                ),
+            )),
+        ),
+        VerificationStatus::Failed => (
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some(compact_status_reason(
+                check_reason
+                    .or(unresolved_reason)
+                    .unwrap_or("The analysis could not be verified."),
+            )),
+        ),
+    }
+}
+
+fn compact_status_reason(reason: &str) -> String {
+    reason.trim().chars().take(240).collect()
 }
 
 #[derive(Default)]
@@ -163,6 +295,12 @@ pub struct EngineState {
     workspace: Mutex<WorkspaceState>,
     workspace_gate: Arc<WorkspaceGate>,
     mount_serial: Mutex<()>,
+    /// Serialize resolve-or-create so two first-turn requests cannot race
+    /// into duplicate durable Investigations for one source message.
+    investigation_ensure_lock: Mutex<()>,
+    /// Serialize Question status, plan, definition, and scope updates so a
+    /// finishing run cannot overwrite a concurrent analyst edit.
+    question_state_lock: Mutex<()>,
     sqlite: Mutex<rusqlite::Connection>,
     inner: Mutex<Inner>,
     http: reqwest::Client,
@@ -174,7 +312,7 @@ pub struct EngineState {
     /// One stop-flag per in-flight conversation, so `/stop` in one tab doesn't
     /// cancel another tab's run. Keyed by `conversation_id`; an entry is created
     /// when `ask` starts and removed when it finishes.
-    cancel: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    cancel: CancelRegistry,
     /// Conversation IDs deleted during this process lifetime. Prevents a late
     /// frontend archive or in-flight analysis save from recreating deleted data.
     deleted_conversations: Mutex<HashSet<String>>,
@@ -261,6 +399,9 @@ pub struct ConversationSummary {
     pub id: String,
     pub saved_at_ms: i64,
     pub workspace: Option<String>,
+    /// ID of the first real user message, used to upgrade older Investigation links.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_question_message_id: Option<String>,
     pub preview: String,
     pub message_count: usize,
     /// A user-given name, if this conversation was renamed. Absent for the
@@ -580,6 +721,320 @@ mod run_log_tests {
 }
 
 #[cfg(test)]
+mod investigation_ensure_tests {
+    use super::*;
+    use crate::engine::evidence::VerificationStatus;
+    use crate::engine::runtime::ExecutionTrace;
+    use std::sync::{Arc, Barrier};
+
+    fn saved_turn(id: &str, conversation_id: &str, workspace: &str) -> AnalysisTurn {
+        AnalysisTurn {
+            id: id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+            question: "What were the quarterly sales?".into(),
+            context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
+            clarification_of: None,
+            clarification_response: None,
+            workspace: Some(workspace.to_owned()),
+            workspace_revision: Some("legacy-r1".into()),
+            workspace_snapshot: None,
+            source_scope: None,
+            investigation_context: None,
+            context_audit: None,
+            provenance: None,
+            rerun_of: None,
+            state: TurnState::Accepted,
+            contract: None,
+            plan: LogicalPlan::default(),
+            trace: ExecutionTrace {
+                id: format!("trace-{id}"),
+                turn_id: id.to_owned(),
+                workspace_revision: Some("legacy-r1".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            verification: None,
+            result: AnalysisResult {
+                text: "Quarterly sales totaled 1,240.".into(),
+                presentation_spec: None,
+                status: VerificationStatus::Verified,
+                usage: None,
+                verification: Vec::new(),
+                evidence: vec![serde_json::json!({
+                    "id": "legacy-chart-evidence",
+                    "tool": "make_chart",
+                    "output": {"type": "bar", "values": [310, 290, 330, 310]}
+                })],
+            },
+        }
+    }
+
+    #[test]
+    fn deleting_a_chat_cascades_its_investigation_but_keeps_blank_work() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-delete-chat-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "conversation-delete-cascade";
+        let transcript = serde_json::json!({
+            "id": conversation_id,
+            "workspace": "/work/sales",
+            "messages": [{
+                "id": "source-message",
+                "role": "user",
+                "text": "What were quarterly sales?"
+            }]
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+        let linked = engine
+            .investigation_create(
+                "/work/sales",
+                "Quarterly sales",
+                Some("What were quarterly sales?"),
+                Some("source-message"),
+                Some(conversation_id),
+            )
+            .unwrap();
+        let blank = engine
+            .investigation_create(
+                "/work/sales",
+                "Blank investigation",
+                None,
+                None,
+                Some("conversation-blank"),
+            )
+            .unwrap();
+
+        engine.delete_conversation(conversation_id).unwrap();
+        let remaining = engine.investigations_list(Some(&[])).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, blank.id);
+        assert!(remaining.iter().all(|item| item.id != linked.id));
+        assert!(engine.conversation_load(conversation_id).is_err());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn concurrent_first_turns_resolve_to_one_investigation() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-investigation-ensure-{nonce}"));
+        let engine = Arc::new(EngineState::new(&data_dir).unwrap());
+        let barrier = Arc::new(Barrier::new(8));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let engine = Arc::clone(&engine);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    engine
+                        .investigation_ensure(
+                            "/work/sales",
+                            "conversation-first",
+                            "Summarize sales trends",
+                            "message-first",
+                        )
+                        .unwrap()
+                        .id
+                })
+            })
+            .collect();
+
+        let ids: Vec<_> = workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect();
+        assert!(ids.iter().all(|id| id == &ids[0]));
+        let investigations = engine
+            .investigations_list(Some(&["conversation-first".to_owned()]))
+            .unwrap();
+        assert_eq!(investigations.len(), 1);
+        assert!(investigations[0].analysis_turn_ids.is_empty());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_migrates_only_matching_archived_runs_without_mutating_history_or_question_coverage() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-investigation-history-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "legacy-conversation";
+        let workspace_id = "/work/sales";
+
+        let matching = saved_turn("legacy-run", conversation_id, workspace_id);
+        let matching_before = serde_json::to_value(&matching).unwrap();
+        let foreign_conversation = saved_turn(
+            "foreign-conversation-run",
+            "other-conversation",
+            workspace_id,
+        );
+        let foreign_workspace = saved_turn("foreign-workspace-run", conversation_id, "/work/other");
+        let unreferenced = saved_turn("unreferenced-run", conversation_id, workspace_id);
+        for turn in [
+            &matching,
+            &foreign_conversation,
+            &foreign_workspace,
+            &unreferenced,
+        ] {
+            analysis_store::create(&data_dir, turn).unwrap();
+        }
+
+        let transcript = serde_json::json!({
+            "id": conversation_id,
+            "workspace": workspace_id,
+            "messages": [
+                {"id":"first-message", "role":"user", "text":"What were quarterly sales?"},
+                {"id":"legacy-answer", "role":"assistant", "text":"Quarterly sales totaled 1,240.", "answer": {
+                    "turn_id":"legacy-run",
+                    "evidence":[{"id":"legacy-chart-evidence", "tool":"make_chart", "output":{"type":"bar", "values":[310,290,330,310]}}]
+                }},
+                {"role":"assistant", "text":"A repeated archive reference.", "answer":{"turn_id":"legacy-run"}},
+                {"id":"second-message", "role":"user", "text":"What about costs?"},
+                {"role":"assistant", "text":"A different folder's result.", "answer":{"turn_id":"foreign-workspace-run"}},
+                {"role":"assistant", "text":"A different conversation's result.", "answer":{"turn_id":"foreign-conversation-run"}},
+                {"role":"assistant", "text":"An older result without its canonical record.", "answer":{"turn_id":"missing-canonical-run"}}
+            ]
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+
+        let migrated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "What were quarterly sales?",
+                "first-message",
+            )
+            .unwrap();
+        assert_eq!(migrated.analysis_turn_ids, vec!["legacy-run"]);
+        assert_eq!(migrated.brief.goal, "What were quarterly sales?");
+        let root_question = migrated.questions.as_ref().unwrap().first().unwrap();
+        assert_eq!(
+            root_question.answer_status,
+            InvestigationQuestionAnswerStatus::NotStarted
+        );
+        assert!(root_question.analysis_turn_ids.is_empty());
+        assert_eq!(root_question.latest_analysis_turn_id, None);
+
+        let archived_after: serde_json::Value =
+            serde_json::from_str(&engine.conversation_load(conversation_id).unwrap()).unwrap();
+        assert_eq!(
+            archived_after, transcript,
+            "migration must not rewrite transcript messages or chart evidence"
+        );
+        let canonical_after =
+            serde_json::to_value(engine.analysis_turn_load("legacy-run").unwrap()).unwrap();
+        assert_eq!(
+            canonical_after, matching_before,
+            "canonical AnalysisTurn must remain immutable"
+        );
+
+        let repeated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "A later request must not replace the original goal",
+                "second-message",
+            )
+            .unwrap();
+        assert_eq!(repeated.id, migrated.id);
+        assert_eq!(repeated.analysis_turn_ids, vec!["legacy-run"]);
+        assert_eq!(repeated.brief.goal, "What were quarterly sales?");
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn ensure_resumes_archived_run_migration_in_bounded_batches() {
+        const RUN_COUNT: usize = MAX_ANALYSIS_TURN_LINKS_PER_UPDATE + 1;
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir =
+            std::env::temp_dir().join(format!("fella-investigation-history-batches-{nonce}"));
+        let engine = EngineState::new(&data_dir).unwrap();
+        let conversation_id = "large-legacy-conversation";
+        let workspace_id = "/work/sales";
+
+        let mut messages = vec![serde_json::json!({
+            "id":"first-message",
+            "role":"user",
+            "text":"Summarize all saved runs"
+        })];
+        for index in 0..RUN_COUNT {
+            let turn_id = format!("legacy-run-{index:03}");
+            let turn = saved_turn(&turn_id, conversation_id, workspace_id);
+            analysis_store::create(&data_dir, &turn).unwrap();
+            messages.push(serde_json::json!({
+                "role":"assistant",
+                "text":"Saved analysis result.",
+                "answer":{"turn_id":turn_id}
+            }));
+        }
+        let transcript = serde_json::json!({
+            "id":conversation_id,
+            "workspace":workspace_id,
+            "messages":messages
+        });
+        engine
+            .archive_conversation(conversation_id, &transcript.to_string())
+            .unwrap();
+
+        let migrated = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "Summarize all saved runs",
+                "first-message",
+            )
+            .unwrap();
+        assert_eq!(migrated.analysis_turn_ids.len(), RUN_COUNT);
+        assert_eq!(
+            migrated.analysis_turn_ids.first().unwrap(),
+            "legacy-run-000"
+        );
+        assert_eq!(
+            migrated.analysis_turn_ids.last().unwrap(),
+            &format!("legacy-run-{:03}", RUN_COUNT - 1)
+        );
+
+        let retried = engine
+            .investigation_ensure(
+                workspace_id,
+                conversation_id,
+                "A later message",
+                "later-message",
+            )
+            .unwrap();
+        assert_eq!(retried.id, migrated.id);
+        assert_eq!(retried.analysis_turn_ids, migrated.analysis_turn_ids);
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
+#[cfg(test)]
 static TEST_OPEN_WORKSPACE_TARGET: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static TEST_OPEN_WORKSPACE_PAUSE: AtomicBool = AtomicBool::new(false);
@@ -648,6 +1103,7 @@ struct TurnDigest {
     question: String,
     headline: String,
     workspace: TurnWorkspace,
+    source_selection: Option<InvestigationSourceSelection>,
     frame: Option<String>,
     queries: Vec<String>,
 }
@@ -857,6 +1313,12 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             .and_then(|answer| answer.get("contract"))
             .and_then(|contract| serde_json::from_value::<AnalysisContract>(contract.clone()).ok())
             .and_then(|contract| contract_frame(&contract));
+        let source_selection = answer
+            .and_then(|answer| answer.get("investigation_context"))
+            .and_then(|context| context.get("source_selection"))
+            .and_then(|selection| {
+                serde_json::from_value::<InvestigationSourceSelection>(selection.clone()).ok()
+            });
         turns.push(TurnDigest {
             turn_id,
             question: message
@@ -866,6 +1328,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
                 .unwrap_or_default(),
             headline,
             workspace: archived_turn_workspace(answer, transcript_workspace),
+            source_selection,
             frame,
             queries,
         });
@@ -879,6 +1342,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
 #[cfg(test)]
 mod conversation_context_tests {
     use super::*;
+    use crate::engine::investigation::InvestigationSourceSelectionMode;
 
     fn scratch(tag: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -907,6 +1371,7 @@ mod conversation_context_tests {
                     question: "What does variance mean?".into(),
                     headline: "Variance measures spread around a mean.".into(),
                     workspace: TurnWorkspace::NoWorkspace,
+                    source_selection: None,
                     frame: None,
                     queries: Vec::new(),
                 }],
@@ -932,6 +1397,7 @@ mod conversation_context_tests {
                     path: first_workspace.display().to_string(),
                     revision: first_revision,
                 },
+                source_selection: None,
                 frame: Some("measure=value; population=all rows".into()),
                 queries: vec!["SELECT SUM(value) FROM values".into()],
             });
@@ -1095,6 +1561,188 @@ mod conversation_context_tests {
     }
 
     #[test]
+    fn investigation_context_hides_prior_turns_from_other_source_scopes() {
+        let data_dir = scratch("investigation-source-scope-memory");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let sales_scope = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let costs_scope = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["costs.csv".into()],
+        };
+        engine.inner.lock().unwrap().sessions.insert(
+            "investigation-source-scope".into(),
+            SessionMemory {
+                turns: vec![
+                    TurnDigest {
+                        turn_id: Some("turn-sales".into()),
+                        question: "What are the sales?".into(),
+                        headline: "Sales total 30.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: Some(sales_scope.clone()),
+                        frame: None,
+                        queries: vec!["SELECT SUM(amount) FROM sales".into()],
+                    },
+                    TurnDigest {
+                        turn_id: Some("turn-costs".into()),
+                        question: "What are the costs?".into(),
+                        headline: "Costs total 7.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: Some(costs_scope),
+                        frame: None,
+                        queries: vec!["SELECT SUM(amount) FROM costs".into()],
+                    },
+                    TurnDigest {
+                        turn_id: Some("turn-general".into()),
+                        question: "What is a median?".into(),
+                        headline: "The median is the middle value.".into(),
+                        workspace: TurnWorkspace::NoWorkspace,
+                        source_selection: None,
+                        frame: None,
+                        queries: Vec::new(),
+                    },
+                ],
+                last_used: 1,
+            },
+        );
+
+        let context = engine
+            .session_block_for_source_selection("investigation-source-scope", Some(&sales_scope))
+            .expect("session has earlier turns");
+        assert!(context.contains("What are the sales?"));
+        assert!(context.contains("SELECT SUM(amount) FROM sales"));
+        assert!(!context.contains("What are the costs?"));
+        assert!(!context.contains("SELECT SUM(amount) FROM costs"));
+        assert!(!context.contains("What is a median?"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn selected_source_context_omits_workspace_wide_learned_notes() {
+        let data_dir = scratch("investigation-selected-source-notes");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let memory_path = data_dir.join("workspace-memory.md");
+        std::fs::write(
+            &memory_path,
+            "# Learned notes\n\n## Preferences\n- Excluded source fact: confidential cost center is 42\n",
+        )
+        .unwrap();
+        engine.workspace.lock().unwrap().memory_path = Some(memory_path);
+
+        let selection = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let context = engine.context_packet_for_source_selection(
+            "Summarize sales",
+            "investigation-selected-source-notes",
+            Some(&selection),
+            None,
+        );
+
+        assert!(context.learned.is_none());
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn archive_hydration_recovers_investigation_scope_from_saved_run() {
+        let data_dir = scratch("investigation-source-archive");
+        let engine = EngineState::new(&data_dir).unwrap();
+        let selection = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        let turn_id = "turn-investigation-scope";
+        analysis_store::create(
+            &data_dir,
+            &crate::engine::runtime::AnalysisTurn {
+                id: turn_id.into(),
+                conversation_id: "investigation-archive".into(),
+                question: "What are the sales?".into(),
+                context_refs: Vec::new(),
+                prior_turn_refs: Vec::new(),
+                clarification_of: None,
+                clarification_response: None,
+                workspace: Some("/workspace".into()),
+                workspace_revision: Some("revision-1".into()),
+                workspace_snapshot: None,
+                source_scope: None,
+                investigation_context: Some(InvestigationContextSnapshot {
+                    investigation_id: "investigation-1".into(),
+                    question_id: None,
+                    question_text: None,
+                    definitions: Vec::new(),
+                    question_plan: Vec::new(),
+                    source_selection: selection.clone(),
+                }),
+                context_audit: None,
+                provenance: None,
+                rerun_of: None,
+                state: TurnState::Accepted,
+                contract: None,
+                plan: crate::engine::runtime::LogicalPlan::default(),
+                trace: crate::engine::runtime::ExecutionTrace {
+                    id: "trace-1".into(),
+                    turn_id: turn_id.into(),
+                    workspace_revision: Some("revision-1".into()),
+                    mode: None,
+                    model: None,
+                    model_calls: Vec::new(),
+                    elapsed_ms: None,
+                    steps: Vec::new(),
+                },
+                verification: None,
+                result: crate::engine::runtime::AnalysisResult {
+                    text: "Sales total 30.".into(),
+                    presentation_spec: None,
+                    status: crate::engine::evidence::VerificationStatus::Verified,
+                    usage: None,
+                    verification: Vec::new(),
+                    evidence: Vec::new(),
+                },
+            },
+        )
+        .unwrap();
+
+        let transcript = serde_json::json!({
+            "id": "investigation-archive",
+            "workspace": "/workspace",
+            "messages": [
+                {"role":"user", "text":"What are the sales?"},
+                {"role":"assistant", "text":"Sales total 30.", "answer": {
+                    "turn_id": turn_id,
+                    "workspace":{"path":"/workspace", "revision":"revision-1"},
+                    "evidence":[]
+                }}
+            ]
+        });
+        engine
+            .archive_conversation("investigation-archive", &transcript.to_string())
+            .unwrap();
+        engine.hydrate_session_from_archive("investigation-archive");
+
+        {
+            let inner = engine.inner.lock().unwrap();
+            let turns = &inner.sessions.get("investigation-archive").unwrap().turns;
+            assert_eq!(turns.len(), 1);
+            assert_eq!(turns[0].source_selection.as_ref(), Some(&selection));
+        }
+        let selected_context = engine
+            .session_block_for_source_selection("investigation-archive", Some(&selection))
+            .expect("saved conversation should hydrate");
+        assert!(selected_context.contains("What are the sales?"));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
     fn conversation_history_recovers_origin_scope_from_first_answer() {
         let data_dir = scratch("conversation-origin");
         let engine = EngineState::new(&data_dir).unwrap();
@@ -1116,7 +1764,7 @@ mod conversation_context_tests {
             "saved_at_ms": 2,
             "workspace": "/later/repository",
             "messages": [
-                {"role":"user", "text":"What is the total?"},
+                {"id":"message-repo-origin", "role":"user", "text":"What is the total?"},
                 {"role":"assistant", "text":"The total is 12.", "answer": {
                     "text":"The total is 12.",
                     "workspace":{"path":"/original/repository", "revision":"revision-1"},
@@ -1151,6 +1799,15 @@ mod conversation_context_tests {
                 .as_deref(),
             Some("/original/repository"),
             "the first answer's repository is more reliable than a later archive snapshot"
+        );
+        assert_eq!(
+            conversations
+                .iter()
+                .find(|item| item.id == "repo-origin")
+                .unwrap()
+                .first_question_message_id
+                .as_deref(),
+            Some("message-repo-origin")
         );
 
         drop(engine);
@@ -1414,7 +2071,79 @@ fn scan_document_lines(
 }
 
 impl EngineState {
+    /// Internal storage boundary for workspace-scoped analytical outputs.
+    pub(crate) fn analytical_data_dir(&self) -> &Path {
+        &self.data_dir
+    }
+
+    pub fn presentation_results(
+        &self,
+        workspace: &str,
+        turn_id: &str,
+    ) -> EngineResult<serde_json::Value> {
+        let run = self.analysis_turn_load(turn_id)?;
+        if run.workspace.as_deref() != Some(workspace) {
+            return Err(EngineError::msg(
+                "analysis belongs to a different workspace",
+            ));
+        }
+        let results = crate::engine::artifacts::eligible_results(&run)?;
+        Ok(serde_json::json!({ "run": run, "results": results }))
+    }
+
+    fn resolve_artifact_context_refs(
+        &self,
+        references: &[ContextReference],
+        catalog: &Catalog,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<Vec<ContextReference>> {
+        if references.len() > 64 {
+            return Err(EngineError::msg("too many selected context references"));
+        }
+        references.iter().map(|reference| {
+            if reference.kind != "artifact" { return Ok(reference.clone()); }
+            let workspace = catalog.workspace.as_deref().ok_or(EngineError::NoWorkspace)?;
+            let (id, revision) = reference.key.rsplit_once('#').ok_or_else(|| EngineError::msg("select an artifact with an exact revision"))?;
+            let revision = revision.parse::<u64>().map_err(|_| EngineError::msg("invalid artifact revision"))?;
+            let resolved = crate::engine::artifacts::resolve(&self.data_dir, workspace, id, Some(revision))?;
+            if let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) {
+                let scope = resolved.run.source_scope.as_ref().ok_or_else(|| EngineError::msg("this saved output has no recorded source scope; it cannot be attached to a narrowed Investigation"))?;
+                if scope.used_sources.iter().any(|source| !selection.includes_path(&source.source)) {
+                    return Err(EngineError::msg("saved output uses sources outside this Investigation's selection"));
+                }
+            }
+            let detail = serde_json::json!({
+                "original_question": resolved.run.question,
+                "source_revision": resolved.run.workspace_revision,
+                "same_source_revision": resolved.run.workspace_revision == catalog.revision,
+                "interpretation": resolved.run.contract,
+                "definitions": resolved.run.investigation_context.as_ref().map(|context| &context.definitions),
+                "instruction": "User explicitly selected this saved analysis as the target of the current request. Preserve its question and stated meaning except for the requested change. These references explain prior work; inspect current sources and execute a new analysis when changing the calculation. Historical answer prose is not new evidence."
+            }).to_string();
+            if detail.len() > 24 * 1024 { return Err(EngineError::msg("selected artifact context exceeds its budget")); }
+            Ok(ContextReference { kind: "artifact".into(), key: reference.key.clone(), label: resolved.artifact.title, detail: Some(detail) })
+        }).collect()
+    }
+
     pub fn new(data_dir: &Path) -> EngineResult<Self> {
+        Self::build(data_dir, true, Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    /// Construct a workspace-scoped runtime sharing app settings, auth, and
+    /// conversation persistence at `data_dir`. Only the app runtime performs
+    /// one-time DB migrations and provider reconciliation.
+    pub(crate) fn new_workspace_runtime(
+        data_dir: &Path,
+        cancel: CancelRegistry,
+    ) -> EngineResult<Self> {
+        Self::build(data_dir, false, cancel)
+    }
+
+    fn build(
+        data_dir: &Path,
+        initialize_app_state: bool,
+        cancel: CancelRegistry,
+    ) -> EngineResult<Self> {
         // reqwest is built with `rustls-no-provider`; install `ring` once
         // (process-global). Doing it here covers both the app and the tests.
         static CRYPTO: std::sync::Once = std::sync::Once::new();
@@ -1427,8 +2156,10 @@ impl EngineState {
         let data = data::open_engine(data_dir)?;
         let sqlite = open_or_recover(&data_dir.join("fella.db"));
         let secrets = Secrets::new(data_dir);
-        migrate_legacy_key(&sqlite, &secrets);
-        reconcile_provider(&sqlite, &secrets);
+        if initialize_app_state {
+            migrate_legacy_key(&sqlite, &secrets);
+            reconcile_provider(&sqlite, &secrets);
+        }
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(180))
             .connect_timeout(std::time::Duration::from_secs(10))
@@ -1447,15 +2178,28 @@ impl EngineState {
             workspace: Mutex::new(WorkspaceState::new(data, None)),
             workspace_gate: Arc::new(WorkspaceGate::default()),
             mount_serial: Mutex::new(()),
+            investigation_ensure_lock: Mutex::new(()),
+            question_state_lock: Mutex::new(()),
             sqlite: Mutex::new(sqlite),
             inner: Mutex::new(Inner::default()),
             http,
             secrets,
             data_dir: data_dir.to_path_buf(),
-            cancel: Mutex::new(HashMap::new()),
+            cancel,
             deleted_conversations: Mutex::new(HashSet::new()),
             doc_cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    pub(crate) fn cancel_registry(&self) -> CancelRegistry {
+        Arc::clone(&self.cancel)
+    }
+
+    pub(crate) fn invalidate_capability_schema_cache(&self) {
+        self.workspace
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .schema_cache = None;
     }
 
     /// Stop the in-progress `ask()` for one conversation (if any).
@@ -1509,7 +2253,20 @@ impl EngineState {
         let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
             return;
         };
-        let turns = archived_turns(&value);
+        let mut turns = archived_turns(&value);
+        // The transcript is a UI projection and does not necessarily embed the
+        // canonical Investigation snapshot. Recover the exact selection from
+        // the saved run record so a restarted thread retains its source scope.
+        for turn in &mut turns {
+            if turn.source_selection.is_none() {
+                turn.source_selection = turn
+                    .turn_id
+                    .as_deref()
+                    .and_then(|turn_id| analysis_store::load(&self.data_dir, turn_id).ok())
+                    .and_then(|record| record.investigation_context)
+                    .map(|context| context.source_selection);
+            }
+        }
         if turns.is_empty() {
             return;
         }
@@ -1701,19 +2458,27 @@ impl EngineState {
             let Some(messages) = v.get("messages").and_then(|value| value.as_array()) else {
                 continue;
             };
-            let Some(preview) = messages
+            let Some(first_question) = messages
                 .iter()
                 .find(|message| is_actual_question_message(message))
-                .and_then(|message| message.get("text").and_then(|text| text.as_str()))
-                .map(|s| cap_chars(s, 80))
             else {
                 continue;
             };
+            let preview = first_question
+                .get("text")
+                .and_then(|text| text.as_str())
+                .map(|text| cap_chars(text, 80))
+                .unwrap_or_default();
+            let first_question_message_id = first_question
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::to_owned);
             let title = v.get("title").and_then(|x| x.as_str()).map(str::to_string);
             out.push(ConversationSummary {
                 id,
                 saved_at_ms,
                 workspace,
+                first_question_message_id,
                 preview,
                 message_count: conversational_message_count(messages),
                 title,
@@ -1749,9 +2514,68 @@ impl EngineState {
         ))
     }
 
+    /// Find canonical runs already present in an archived transcript that are
+    /// safe to associate with this workspace's Investigation. The transcript
+    /// supplies order and candidate IDs; the immutable run record supplies
+    /// conversation and workspace identity. Missing or older non-canonical
+    /// runs remain available through the conversation history fallback.
+    fn archived_analysis_turn_ids(&self, conversation_id: &str, workspace_id: &str) -> Vec<String> {
+        let Ok(body) = self.conversation_load(conversation_id) else {
+            return Vec::new();
+        };
+        let Ok(archive) = serde_json::from_str::<serde_json::Value>(&body) else {
+            log::debug!(
+                "could not parse archived conversation {conversation_id} for run migration"
+            );
+            return Vec::new();
+        };
+        if archive.get("id").and_then(serde_json::Value::as_str) != Some(conversation_id) {
+            return Vec::new();
+        }
+
+        let Some(messages) = archive
+            .get("messages")
+            .and_then(serde_json::Value::as_array)
+        else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut linked = Vec::new();
+        for message in messages {
+            if message.get("role").and_then(serde_json::Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let Some(turn_id) = message
+                .pointer("/answer/turn_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|turn_id| !turn_id.is_empty())
+            else {
+                continue;
+            };
+            if !seen.insert(turn_id.to_owned()) {
+                continue;
+            }
+            let Ok(turn) = analysis_store::load(&self.data_dir, turn_id) else {
+                continue;
+            };
+            if turn.id == turn_id
+                && turn.conversation_id == conversation_id
+                && turn.workspace.as_deref() == Some(workspace_id)
+            {
+                linked.push(turn_id.to_owned());
+            }
+        }
+        linked
+    }
+
     /// Remove one archived conversation's file, by the same slug-suffix
     /// lookup `conversation_load` uses. Used by the sidebar's per-row delete.
     pub fn delete_conversation(&self, id: &str) -> EngineResult<()> {
+        let _investigation_guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         let dir = self.data_dir.join("conversations");
         let slug: String = id
             .chars()
@@ -1787,6 +2611,10 @@ impl EngineState {
             self.allow_conversation_persistence(id);
             return Err(error);
         }
+        if let Err(error) = investigation::delete_for_conversation(&self.data_dir, id) {
+            self.allow_conversation_persistence(id);
+            return Err(error);
+        }
         if let Err(error) = std::fs::remove_file(&archive) {
             self.allow_conversation_persistence(id);
             return Err(EngineError::io(
@@ -1802,6 +2630,460 @@ impl EngineState {
     /// contract/plan/trace/result used by future replay and rerun features.
     pub fn analysis_turn_load(&self, turn_id: &str) -> EngineResult<AnalysisTurn> {
         analysis_store::load(&self.data_dir, turn_id)
+    }
+
+    /// Create one durable Investigation record without coupling it to a
+    /// transcript or execution record. Automatic conversation association is
+    /// handled by the product layer, not by the analytics loop.
+    pub fn investigation_create(
+        &self,
+        workspace_id: &str,
+        title: &str,
+        initial_request: Option<&str>,
+        source_message_id: Option<&str>,
+        conversation_id: Option<&str>,
+    ) -> EngineResult<Investigation> {
+        investigation::create(
+            &self.data_dir,
+            workspace_id,
+            title,
+            initial_request,
+            source_message_id,
+            conversation_id,
+        )
+    }
+
+    /// Mark an Investigation complete only when every active Question is fully
+    /// answered; serialized with Question run-state updates.
+    pub fn investigation_mark_complete(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::mark_complete(&self.data_dir, id)
+    }
+
+    /// Return a completed Investigation to active analyst work.
+    pub fn investigation_reopen(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::reopen(&self.data_dir, id)
+    }
+
+    /// Legacy resolver for conversation-seeded records and archived-run
+    /// migration. New chats do not create Investigations through this path.
+    pub fn investigation_ensure(
+        &self,
+        workspace_id: &str,
+        conversation_id: &str,
+        initial_request: &str,
+        source_message_id: &str,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let investigation = investigation::ensure_for_conversation(
+            &self.data_dir,
+            workspace_id,
+            conversation_id,
+            initial_request,
+            source_message_id,
+        )?;
+
+        let archived_turn_ids = self.archived_analysis_turn_ids(conversation_id, workspace_id);
+        let mut linked_investigation = investigation;
+        for batch in archived_turn_ids.chunks(MAX_ANALYSIS_TURN_LINKS_PER_UPDATE) {
+            match self.investigation_link_analysis_turns(&linked_investigation.id, batch) {
+                Ok(updated) => linked_investigation = updated,
+                Err(error) => {
+                    // Migration is opportunistic: keep the Investigation and
+                    // its transcript usable if run-link persistence fails. A
+                    // later ensure call can safely resume from any saved batch.
+                    log::warn!(
+                        "could not associate archived analysis runs with Investigation {}: {error}",
+                        linked_investigation.id
+                    );
+                    break;
+                }
+            }
+        }
+        Ok(linked_investigation)
+    }
+
+    /// Update the current brief without changing the source Conversation
+    /// message or its archived transcript.
+    pub fn investigation_update_brief(
+        &self,
+        id: &str,
+        brief: InvestigationBrief,
+        reviewed_message_id: Option<&str>,
+    ) -> EngineResult<Investigation> {
+        investigation::update_brief(&self.data_dir, id, brief, reviewed_message_id)
+    }
+
+    /// Naming changes presentation, not the Investigation's analytical state.
+    pub fn investigation_rename(&self, id: &str, title: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::rename(&self.data_dir, id, title)
+    }
+
+    /// Replace the ordered, analyst-editable Question plan. Existing run
+    /// records are independent and remain unchanged.
+    pub fn investigation_update_questions(
+        &self,
+        id: &str,
+        questions: Vec<InvestigationQuestionInput>,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_questions(&self.data_dir, id, questions)
+    }
+
+    /// Replace an Investigation's active Definitions/Assumptions while keeping
+    /// independent records and their revision history.
+    pub fn investigation_update_definitions(
+        &self,
+        id: &str,
+        definitions: Vec<InvestigationDefinitionInput>,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_definitions(&self.data_dir, id, definitions)
+    }
+
+    /// Update the current source selection for one Investigation. Completed
+    /// turns retain their own immutable context snapshot.
+    pub fn investigation_update_source_selection(
+        &self,
+        id: &str,
+        selection: InvestigationSourceSelection,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_source_selection(&self.data_dir, id, selection)
+    }
+
+    /// Load one Definition record, including its prior analyst-edited values.
+    pub fn investigation_definition_load(&self, id: &str) -> EngineResult<InvestigationDefinition> {
+        investigation::definition_load(&self.data_dir, id)
+    }
+
+    /// Save a concise conclusion with immutable links to an Investigation
+    /// Question, canonical AnalysisTurn, and exact evidence IDs from that run.
+    pub fn investigation_create_finding(
+        &self,
+        id: &str,
+        input: InvestigationFindingInput,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::create_finding(&self.data_dir, id, input)
+    }
+
+    /// Change only a Finding's claim text. Its source links remain immutable.
+    pub fn investigation_update_finding_claim(
+        &self,
+        id: &str,
+        finding_id: &str,
+        claim: &str,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_finding_claim(&self.data_dir, id, finding_id, claim)
+    }
+
+    /// Edit a Finding's interpretation while preserving its provenance links.
+    pub fn investigation_update_finding(
+        &self,
+        id: &str,
+        finding_id: &str,
+        update: InvestigationFindingUpdate,
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        investigation::update_finding(&self.data_dir, id, finding_id, update)
+    }
+
+    /// Load one Finding independently from its parent Investigation.
+    pub fn investigation_finding_load(&self, id: &str) -> EngineResult<InvestigationFinding> {
+        investigation::finding_load(&self.data_dir, id)
+    }
+
+    /// Load an independently persisted Question record by stable identity.
+    pub fn investigation_question_load(&self, id: &str) -> EngineResult<InvestigationQuestion> {
+        let question = investigation::question_load(&self.data_dir, id)?;
+        if question.answer_status == InvestigationQuestionAnswerStatus::Running {
+            let _ = self.recover_interrupted_question_runs(&question.investigation_id)?;
+        }
+        investigation::question_load(&self.data_dir, id)
+    }
+
+    /// Ask the configured model for a draft decomposition without adding a
+    /// Conversation message or persisting the proposal.
+    pub async fn investigation_propose_questions(
+        &self,
+        id: &str,
+        main_question: &str,
+    ) -> EngineResult<QuestionBreakdownProposal> {
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let main_question = main_question.trim();
+        if main_question.is_empty() {
+            return Err(EngineError::msg(
+                "enter a main Question before requesting a breakdown",
+            ));
+        }
+        if main_question.chars().count() > 12_000 {
+            return Err(EngineError::msg("main Question is too long"));
+        }
+        let input = serde_json::json!({
+            "main_question": main_question,
+            "audience": investigation.brief.audience,
+            "desired_output": investigation.brief.desired_output,
+            "constraints": investigation.brief.constraints,
+        });
+        let system = "You are helping a data analyst decompose one main Investigation Question into a small, useful sequence of independently answerable subquestions. Do not answer the question, invent data or findings, or include the main question again. Keep the breakdown grounded in the provided brief, avoid redundant steps, and return only valid JSON with this exact shape: {\"subquestions\":[\"...\"]}. Return between 2 and 6 concise subquestions.";
+        let raw = self.ask_once(None, system, &input.to_string()).await?;
+        investigation::parse_question_breakdown(&raw, main_question)
+    }
+
+    /// Associate canonical, persisted AnalysisTurns without copying their
+    /// questions, results, or evidence into the Investigation.
+    pub fn investigation_link_analysis_turns(
+        &self,
+        id: &str,
+        analysis_turn_ids: &[String],
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if analysis_turn_ids.len() > MAX_ANALYSIS_TURN_LINKS_PER_UPDATE {
+            return Err(EngineError::msg("too many analysis runs to link at once"));
+        }
+
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let mut seen = HashSet::new();
+        let mut new_ids = Vec::new();
+        for turn_id in analysis_turn_ids {
+            let turn_id = turn_id.trim();
+            if investigation
+                .analysis_turn_ids
+                .iter()
+                .any(|linked| linked == turn_id)
+                || !seen.insert(turn_id.to_owned())
+            {
+                continue;
+            }
+            let turn = analysis_store::load(&self.data_dir, turn_id)?;
+            if turn.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+                return Err(EngineError::msg(format!(
+                    "analysis turn {turn_id} belongs to a different workspace"
+                )));
+            }
+            new_ids.push(turn_id.to_owned());
+        }
+        investigation::link_analysis_turns(&self.data_dir, id, &new_ids)
+    }
+
+    /// Attach one saved run to the Questions it addresses. The AnalysisTurn
+    /// remains canonical and immutable; only Investigation-side references
+    /// change.
+    pub fn investigation_set_analysis_turn_questions(
+        &self,
+        id: &str,
+        turn_id: &str,
+        question_ids: &[String],
+    ) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        const MAX_QUESTIONS_PER_RUN: usize = 100;
+        if question_ids.len() > MAX_QUESTIONS_PER_RUN {
+            return Err(EngineError::msg(
+                "too many Questions linked to one analysis run",
+            ));
+        }
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let turn = analysis_store::load(&self.data_dir, turn_id)?;
+        if turn.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+            return Err(EngineError::msg(format!(
+                "analysis turn {turn_id} belongs to a different workspace"
+            )));
+        }
+        investigation::set_analysis_turn_questions(&self.data_dir, id, turn_id, question_ids)
+    }
+
+    /// Load an Investigation independently of the conversation UI.
+    pub fn investigation_load(&self, id: &str) -> EngineResult<Investigation> {
+        self.recover_interrupted_question_runs(id)
+    }
+
+    /// List durable Investigation records, newest activity first.
+    pub fn investigations_list(
+        &self,
+        active_conversation_ids: Option<&[String]>,
+    ) -> EngineResult<Vec<Investigation>> {
+        let _guard = self
+            .investigation_ensure_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active_conversation_ids) = active_conversation_ids {
+            if let Some(mut preserved_ids) = self.archived_conversation_ids() {
+                preserved_ids.extend(active_conversation_ids.iter().cloned());
+                investigation::delete_orphaned_source_investigations(
+                    &self.data_dir,
+                    &preserved_ids,
+                )?;
+            }
+        }
+        investigation::list(&self.data_dir)?
+            .into_iter()
+            .map(|item| self.recover_interrupted_question_runs(&item.id))
+            .collect()
+    }
+
+    /// Return `None` if the archive directory cannot be inspected completely;
+    /// callers then skip orphan cleanup so a transient I/O or parse failure
+    /// cannot be mistaken for user deletion.
+    fn archived_conversation_ids(&self) -> Option<HashSet<String>> {
+        let directory = self.data_dir.join("conversations");
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Some(HashSet::new());
+            }
+            Err(_) => return None,
+        };
+
+        let mut ids = HashSet::new();
+        for entry in entries {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.extension().and_then(|extension| extension.to_str()) != Some("json") {
+                continue;
+            }
+            let body = std::fs::read_to_string(&path).ok()?;
+            let value = serde_json::from_str::<serde_json::Value>(&body).ok()?;
+            if !has_actual_question(&value) {
+                continue;
+            }
+            let id = value.get("id")?.as_str()?;
+            ids.insert(id.to_owned());
+        }
+        Some(ids)
+    }
+
+    fn recover_interrupted_question_runs(&self, id: &str) -> EngineResult<Investigation> {
+        let _guard = self
+            .question_state_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let investigation = investigation::load(&self.data_dir, id)?;
+        let conversation_is_running =
+            investigation
+                .conversation_id
+                .as_deref()
+                .is_some_and(|conversation_id| {
+                    self.cancel
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .contains_key(conversation_id)
+                });
+
+        for question in investigation.questions.as_deref().unwrap_or_default() {
+            let is_interrupted =
+                question.answer_status == InvestigationQuestionAnswerStatus::Running;
+            let is_false_blocked = question.answer_status
+                == InvestigationQuestionAnswerStatus::Blocked
+                && question.answer_status_reason.as_deref()
+                    == Some(investigation::INTERRUPTED_QUESTION_RUN_REASON);
+            // Older releases collapsed clarification, verification review,
+            // and insufficient evidence into `incomplete`. Re-project those
+            // terminal records from the canonical AnalysisTurn so stale local
+            // Questions stop claiming every such result is a partial answer.
+            let is_legacy_incomplete =
+                question.answer_status == InvestigationQuestionAnswerStatus::Incomplete;
+            if (!is_interrupted && !is_false_blocked && !is_legacy_incomplete)
+                || conversation_is_running
+            {
+                continue;
+            }
+            if let Some(turn_id) = question.latest_analysis_turn_id.as_deref() {
+                if let Some((answer_status, reason)) =
+                    self.recover_saved_question_outcome(&investigation, question, turn_id)
+                {
+                    investigation::question_run_recovered(
+                        &self.data_dir,
+                        &investigation.id,
+                        &question.id,
+                        turn_id,
+                        answer_status,
+                        reason.as_deref(),
+                    )?;
+                } else if is_interrupted {
+                    investigation::question_run_finished(
+                        &self.data_dir,
+                        &investigation.id,
+                        &question.id,
+                        turn_id,
+                        InvestigationQuestionAnswerStatus::Blocked,
+                        Some(investigation::INTERRUPTED_QUESTION_RUN_REASON),
+                    )?;
+                }
+            }
+        }
+        investigation::load(&self.data_dir, id)
+    }
+
+    fn recover_saved_question_outcome(
+        &self,
+        investigation: &Investigation,
+        question: &crate::engine::investigation::InvestigationQuestion,
+        turn_id: &str,
+    ) -> Option<(InvestigationQuestionAnswerStatus, Option<String>)> {
+        let turn = analysis_store::load(&self.data_dir, turn_id).ok()?;
+        let context = turn.investigation_context.as_ref()?;
+        if turn.id != turn_id
+            || investigation.conversation_id.as_deref() != Some(turn.conversation_id.as_str())
+            || turn.workspace.as_deref() != Some(investigation.workspace_id.as_str())
+            || context.investigation_id != investigation.id
+            || context.question_id.as_deref() != Some(question.id.as_str())
+        {
+            return None;
+        }
+
+        let current_context = investigation::context_snapshot_for_question(
+            &self.data_dir,
+            &investigation.id,
+            Some(&question.id),
+        )
+        .ok()?;
+        if &current_context != context {
+            return Some((
+                InvestigationQuestionAnswerStatus::Outdated,
+                Some("The Question, source scope, or definitions changed during this run. Run the current Question again.".to_owned()),
+            ));
+        }
+        Some(question_answer_status_from_turn(&turn))
     }
 
     /// Recent local run metadata for Settings. This is a projection of saved
@@ -1877,6 +3159,7 @@ impl EngineState {
                 && current_snapshot.is_some(),
             can_rerun: same_workspace && current.workspace.is_some(),
             source_changes,
+            source_scope: original.source_scope,
         })
     }
 
@@ -1921,25 +3204,14 @@ impl EngineState {
                     inspect,
                     context_refs: &original.context_refs,
                     clarification_reply,
+                    investigation_id: None,
+                    question_id: None,
+                    investigation_context: original.investigation_context.clone(),
+                    rerun_of: Some(&original.id),
                 },
                 emit,
             )
             .await?;
-        match analysis_store::load(&self.data_dir, &answer.turn_id) {
-            Ok(mut rerun) => {
-                rerun.rerun_of = Some(original.id);
-                if let Err(error) = analysis_store::save(&self.data_dir, &rerun) {
-                    log::warn!(
-                        "analysis rerun {} was saved without lineage: {error}",
-                        answer.turn_id
-                    );
-                }
-            }
-            Err(error) => log::warn!(
-                "analysis rerun {} could not attach lineage: {error}",
-                answer.turn_id
-            ),
-        }
         Ok(answer)
     }
 
@@ -1983,6 +3255,92 @@ impl EngineState {
         ))
     }
 
+    /// Build the same bounded inventory page, limited to the files selected
+    /// by an Investigation when it is in selected-sources mode.
+    pub fn list_files_page_for_selection(
+        &self,
+        filter: catalog::FileListFilter,
+        query: Option<&str>,
+        offset: usize,
+        limit: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<catalog::FileListPage> {
+        if selection.is_none_or(InvestigationSourceSelection::is_all_sources) {
+            return self.list_files_page(filter, query, offset, limit);
+        }
+        let selection = selection.expect("selected mode was checked");
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let root = workspace
+            .workspace
+            .as_deref()
+            .ok_or(EngineError::NoWorkspace)?;
+        let sources: Vec<SourceInfo> = workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                selection.includes_path(&catalog::workspace_relative_path(
+                    root,
+                    Path::new(&source.path),
+                ))
+            })
+            .cloned()
+            .collect();
+        let skipped: Vec<_> = workspace
+            .skipped
+            .iter()
+            .filter(|file| selection.includes_path(&file.name.replace('\\', "/")))
+            .cloned()
+            .collect();
+        Ok(catalog::list_files_page(
+            root, &sources, &skipped, filter, query, offset, limit,
+        ))
+    }
+
+    /// Resolve a source's workspace-relative path before exposing it to an
+    /// Investigation-scoped tool.
+    pub fn source_selection_allows_name(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+        name: &str,
+    ) -> bool {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return true;
+        };
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = workspace.workspace.as_deref() else {
+            return false;
+        };
+        workspace.sources.iter().any(|source| {
+            let path = catalog::workspace_relative_path(root, Path::new(&source.path));
+            (source.name == name || source.view.as_deref() == Some(name) || path == name)
+                && selection.includes_path(&path)
+        })
+    }
+
+    fn source_selection_allowed_tables(
+        &self,
+        selection: &InvestigationSourceSelection,
+    ) -> HashSet<String> {
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(root) = workspace.workspace.as_deref() else {
+            return HashSet::new();
+        };
+        workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                source.view.is_some()
+                    && selection.includes_path(&catalog::workspace_relative_path(
+                        root,
+                        Path::new(&source.path),
+                    ))
+            })
+            .flat_map(|source| [Some(source.name.as_str()), source.view.as_deref()])
+            .flatten()
+            .map(str::to_ascii_lowercase)
+            .collect()
+    }
+
     /// Return the semantic projection for the current workspace. `None` means
     /// there is no mounted workspace or no valid revision yet.
     pub fn workspace_model(&self) -> Option<WorkspaceModel> {
@@ -2018,10 +3376,12 @@ impl EngineState {
             conversation_id,
             question,
             context_refs,
+            investigation_context,
             clarification,
             context_audit,
             catalog,
             answer,
+            rerun_of,
         } = turn;
         let deleted = self
             .deleted_conversations
@@ -2058,6 +3418,9 @@ impl EngineState {
                 snapshot.path == workspace.path && snapshot.revision == workspace.revision
             })
         });
+        let source_scope = workspace_snapshot.as_ref().map(|snapshot| {
+            AnalysisSourceScope::from_evidence(&answer.evidence, &snapshot.skipped)
+        });
         let record = AnalysisTurn {
             id: answer.turn_id.clone(),
             conversation_id: conversation_id.to_string(),
@@ -2075,9 +3438,11 @@ impl EngineState {
                 .as_ref()
                 .map(|workspace| workspace.revision.clone()),
             workspace_snapshot,
+            source_scope,
+            investigation_context: investigation_context.cloned(),
             context_audit: Some(context_audit.clone()),
             provenance: Some(answer.provenance.clone()),
-            rerun_of: None,
+            rerun_of: rerun_of.map(str::to_owned),
             state,
             contract: answer.contract.clone(),
             plan: answer.plan.clone().unwrap_or_else(|| LogicalPlan {
@@ -2096,17 +3461,49 @@ impl EngineState {
             }),
             result: AnalysisResult {
                 text: answer.text.clone(),
+                presentation_spec: answer.presentation_spec.clone(),
                 status: answer.status,
                 usage: answer.usage,
                 verification: answer.verification.clone(),
                 evidence,
             },
         };
-        if let Err(error) = analysis_store::save(&self.data_dir, &record) {
+        if let Err(error) = analysis_store::create(&self.data_dir, &record) {
             log::warn!(
                 "analysis turn {} was not persisted: {error}",
                 answer.turn_id
             );
+        } else if let Some(context) = investigation_context {
+            let _guard = self
+                .question_state_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let turn_ids = [answer.turn_id.clone()];
+            if let Err(error) = investigation::link_analysis_turns(
+                &self.data_dir,
+                &context.investigation_id,
+                &turn_ids,
+            ) {
+                log::warn!(
+                    "analysis turn {} was saved but not linked to Investigation {}: {error}",
+                    answer.turn_id,
+                    context.investigation_id
+                );
+            }
+            if let Some(question_id) = context.question_id.as_ref() {
+                if let Err(error) = investigation::link_analysis_turn_questions(
+                    &self.data_dir,
+                    &context.investigation_id,
+                    &answer.turn_id,
+                    std::slice::from_ref(question_id),
+                ) {
+                    log::warn!(
+                        "analysis turn {} was saved but not linked to Question {}: {error}",
+                        answer.turn_id,
+                        question_id
+                    );
+                }
+            }
         }
     }
 
@@ -2142,17 +3539,46 @@ impl EngineState {
     /// budget it lists every column with its type and any ingest note, and a few
     /// sample rows for a small workspace; a large/messy folder falls back to
     /// names + shape only (keeps the prompt small).
+    #[cfg(test)]
     pub(crate) fn schema_block(&self) -> String {
+        self.schema_block_for_source_selection(None)
+    }
+
+    fn schema_block_for_source_selection(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> String {
         let capabilities = self.settings().capabilities;
         let mut workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(cached) = &workspace.schema_cache {
-            return cached.clone();
+        let selected_only = selection.is_some_and(|selection| !selection.is_all_sources());
+        if !selected_only {
+            if let Some(cached) = &workspace.schema_cache {
+                return cached.clone();
+            }
         }
-        let sources = &workspace.sources;
         let workspace_root = workspace.workspace.clone();
-        let inspected = workspace.inspected_tables.clone();
+        let selected_sources: Vec<&SourceInfo> = workspace
+            .sources
+            .iter()
+            .filter(|source| {
+                selection.is_none_or(|selection| {
+                    workspace_root.as_deref().is_none_or(|root| {
+                        selection.includes_path(&catalog::workspace_relative_path(
+                            root,
+                            Path::new(&source.path),
+                        ))
+                    })
+                })
+            })
+            .collect();
+        let sources = &selected_sources;
+        let inspected = &workspace.inspected_tables;
         let tables: Vec<&SourceInfo> = if capabilities.table_analysis {
-            sources.iter().filter(|s| s.view.is_some()).collect()
+            sources
+                .iter()
+                .copied()
+                .filter(|s| s.view.is_some())
+                .collect()
         } else {
             Vec::new()
         };
@@ -2161,19 +3587,18 @@ impl EngineState {
             .map(|s| s.columns.as_ref().map(|c| c.len()).unwrap_or(0))
             .sum();
         let full = tables.len() <= 12 && total_cols <= 60;
-        // Small/typical folders (<=4 tables) see no change: samples for every
-        // table, as before. Above that, a table's samples only enter the
-        // digest once the model has actually called inspect_table on it -
-        // just-in-time instead of eagerly sampling every table upfront.
         let small = tables.len() <= 4;
 
         let mut p = String::new();
+        if selected_only {
+            p.push_str("Investigation source selection is active. Only the files listed below are available to this run; do not use files outside this selection.\n");
+        }
         if !capabilities.table_analysis {
             p.push_str(
                 "Table analysis is disabled by the current experimental capability policy.\n",
             );
         } else if tables.is_empty() {
-            p.push_str("No tables were detected.\n");
+            p.push_str("No tables were detected in the selected sources.\n");
         } else if full {
             p.push_str("Tables (columns and types shown; use inspect_table for values):\n");
             for s in &tables {
@@ -2287,7 +3712,11 @@ impl EngineState {
             }
         }
 
-        let docs: Vec<&SourceInfo> = sources.iter().filter(|s| s.view.is_none()).collect();
+        let docs: Vec<&SourceInfo> = sources
+            .iter()
+            .copied()
+            .filter(|s| s.view.is_none())
+            .collect();
         if !capabilities.document_analysis {
             p.push_str(
                 "Document analysis is disabled by the current experimental capability policy.\n",
@@ -2305,19 +3734,40 @@ impl EngineState {
                 }
             }
         }
-        workspace.schema_cache = Some(p.clone());
+        if !selected_only {
+            workspace.schema_cache = Some(p.clone());
+        }
         p
     }
 
     /// Assemble one bounded, prompt-ready projection of the current
     /// workspace context. Keeping this policy in the engine gives both
     /// desktop shells the same context budget and provenance behavior.
+    #[cfg(test)]
     pub(crate) fn context_packet(&self, question: &str, conversation_id: &str) -> ContextPacket {
+        self.context_packet_for_source_selection(question, conversation_id, None, None)
+    }
+
+    fn context_packet_for_source_selection(
+        &self,
+        question: &str,
+        conversation_id: &str,
+        selection: Option<&InvestigationSourceSelection>,
+        investigation_id: Option<&str>,
+    ) -> ContextPacket {
         let user_context = self.user_context();
-        let schema = self.schema_block();
-        let recent = self.session_block(conversation_id);
-        let learned = self.folder_memory_block();
-        let semantic_model = self.workspace_model_prompt_block();
+        let schema = self.schema_block_for_source_selection(selection);
+        let recent = self.session_block_for_source_selection(conversation_id, selection);
+        let selected_only = selection.is_some_and(|selection| !selection.is_all_sources());
+        // Learned notes describe the entire folder, not just the sources
+        // selected for this Investigation. They may contain facts from an
+        // excluded source, so keep them out of selected-source runs.
+        let learned = (!selected_only)
+            .then(|| self.folder_memory_block(investigation_id))
+            .flatten();
+        let semantic_model = (!selected_only)
+            .then(|| self.workspace_model_prompt_block())
+            .flatten();
         ContextAssembler::default().assemble(
             question,
             &user_context,
@@ -2330,7 +3780,16 @@ impl EngineState {
 
     /// The "Earlier in this conversation" block for `conversation_id`, or `None`
     /// on that conversation's first turn.
+    #[cfg(test)]
     pub(crate) fn session_block(&self, conversation_id: &str) -> Option<String> {
+        self.session_block_for_source_selection(conversation_id, None)
+    }
+
+    fn session_block_for_source_selection(
+        &self,
+        conversation_id: &str,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> Option<String> {
         let catalog = self.catalog();
         let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let turns = match inner.sessions.get(conversation_id) {
@@ -2341,6 +3800,11 @@ impl EngineState {
             "Earlier in this conversation (for reference resolution only; assistant wording and result values are not evidence):\n",
         );
         for t in turns {
+            if source_selection
+                .is_some_and(|selection| t.source_selection.as_ref() != Some(selection))
+            {
+                continue;
+            }
             let current_context = turn_context_matches(&t.workspace, &catalog);
             let scope = match (&t.workspace, current_context) {
                 (TurnWorkspace::NoWorkspace, _) => "general turn; no local evidence",
@@ -2453,6 +3917,116 @@ impl EngineState {
         Some((path.display().to_string(), text))
     }
 
+    /// Typed, provenance-preserving facts learned for the current workspace.
+    pub fn folder_memory_facts(&self) -> Option<Vec<SemanticFact>> {
+        let path = self.memory_path()?;
+        let facts = SemanticMemory::load(&semantic_memory::facts_path_for(&path));
+        Some(facts.facts().to_vec())
+    }
+
+    /// Review or edit one learned fact without changing the workspace data.
+    /// An accepted suggestion can stay with one Investigation or be promoted
+    /// to workspace scope; its source turn and evidence remain attached.
+    pub fn resolve_folder_memory_fact(
+        &self,
+        fact_id: &str,
+        action: &str,
+        statement: Option<&str>,
+        target_investigation_id: Option<&str>,
+    ) -> EngineResult<Vec<SemanticFact>> {
+        let memory_path = self.memory_path().ok_or(EngineError::NoWorkspace)?;
+        let facts_path = semantic_memory::facts_path_for(&memory_path);
+        let mut facts = SemanticMemory::load(&facts_path);
+        let original = facts
+            .facts()
+            .iter()
+            .find(|fact| fact.id == fact_id)
+            .cloned()
+            .ok_or_else(|| EngineError::msg("The learned fact is no longer available."))?;
+        if original.state == semantic_memory::FactState::Superseded {
+            return Err(EngineError::msg("Superseded knowledge cannot be changed."));
+        }
+        if let Some(target_id) = target_investigation_id {
+            let target = investigation::load(&self.data_dir, target_id)?;
+            if target.workspace_id != original.workspace {
+                return Err(EngineError::msg(
+                    "Knowledge can only be scoped to an Investigation in this workspace.",
+                ));
+            }
+        }
+
+        let at_ms = semantic_memory::now_ms();
+        match action {
+            "accept" => {
+                if original.authority != FactAuthority::ModelSuggestion
+                    || original.state != semantic_memory::FactState::Proposed
+                {
+                    return Err(EngineError::msg("Only a model suggestion can be accepted."));
+                }
+                if let Some(existing) = facts.fact_mut(fact_id) {
+                    existing.state = semantic_memory::FactState::Superseded;
+                    existing.updated_at_ms = at_ms;
+                }
+                let mut accepted = SemanticFact::new(SemanticFactInput {
+                    kind: original.kind,
+                    key: original.key.clone(),
+                    statement: original.statement.clone(),
+                    authority: FactAuthority::Confirmed,
+                    workspace: original.workspace.clone(),
+                    revision: original.revision.clone(),
+                    supporting_turn: original.supporting_turn.clone(),
+                    evidence_ids: original.evidence_ids.clone(),
+                    at_ms,
+                });
+                accepted.investigation_id = target_investigation_id.map(str::to_string);
+                accepted.origin_investigation_id = original
+                    .origin_investigation_id
+                    .clone()
+                    .or_else(|| original.investigation_id.clone());
+                accepted.supersedes.push(original.id.clone());
+                facts.upsert(accepted);
+            }
+            "edit" => {
+                let statement = statement.unwrap_or_default().trim();
+                if statement.is_empty() || statement.chars().count() > 1_000 {
+                    return Err(EngineError::msg(
+                        "Knowledge text must be non-empty and no longer than 1000 characters.",
+                    ));
+                }
+                if let Some(existing) = facts.fact_mut(fact_id) {
+                    existing.state = semantic_memory::FactState::Superseded;
+                    existing.updated_at_ms = at_ms;
+                }
+                let mut edited = SemanticFact::new(SemanticFactInput {
+                    kind: original.kind,
+                    key: original.key.clone(),
+                    statement: statement.to_string(),
+                    authority: FactAuthority::User,
+                    workspace: original.workspace.clone(),
+                    revision: original.revision.clone(),
+                    supporting_turn: original.supporting_turn.clone(),
+                    evidence_ids: original.evidence_ids.clone(),
+                    at_ms,
+                });
+                edited.investigation_id = target_investigation_id.map(str::to_string);
+                edited.origin_investigation_id = original
+                    .origin_investigation_id
+                    .clone()
+                    .or_else(|| original.investigation_id.clone());
+                edited.supersedes.push(original.id.clone());
+                facts.upsert(edited);
+            }
+            "remove" => {
+                facts.remove(fact_id);
+            }
+            _ => return Err(EngineError::msg("Unknown learned-knowledge action.")),
+        }
+
+        facts.save();
+        semantic_memory::sync_markdown_projection(&memory_path, &facts);
+        Ok(facts.facts().to_vec())
+    }
+
     /// Delete the current folder's learned notes (and its episode log).
     /// `Ok(false)` if there was nothing to delete; `Err` on no folder open.
     pub fn forget_folder_memory(&self) -> EngineResult<bool> {
@@ -2480,7 +4054,7 @@ impl EngineState {
     /// The learned-notes block for the system prompt, or `None` when memory is
     /// off, no folder is open, or nothing's been learned. Re-read from disk so a
     /// hand edit to `memory.md` lands on the next question.
-    pub(crate) fn folder_memory_block(&self) -> Option<String> {
+    pub(crate) fn folder_memory_block(&self, investigation_id: Option<&str>) -> Option<String> {
         if !memory::enabled() {
             return None;
         }
@@ -2493,7 +4067,8 @@ impl EngineState {
         } else {
             mem.semantic_core()
         };
-        let typed_block = typed.prompt_block(self.workspace_revision().as_deref());
+        let typed_block =
+            typed.prompt_block(self.workspace_revision().as_deref(), investigation_id);
         match (legacy, typed_block) {
             (Some(legacy), Some(typed)) => Some(format!("{legacy}\n\n{typed}")),
             (Some(legacy), None) => Some(legacy),
@@ -2526,7 +4101,13 @@ impl EngineState {
     /// facts, not code snapshotted against one verifier pass; see
     /// `docs/ARCHITECTURE.md`. `prior_q` is the previous question in this
     /// conversation, if any.
-    async fn record_turn_memory(&self, prior_q: Option<&str>, question: &str, answer: &Answer) {
+    async fn record_turn_memory(
+        &self,
+        prior_q: Option<&str>,
+        question: &str,
+        answer: &Answer,
+        investigation_id: Option<&str>,
+    ) {
         if !memory::writes_enabled() {
             return;
         }
@@ -2626,15 +4207,24 @@ impl EngineState {
             }
         }
 
-        for fact in observed_contract_facts(answer, &scope, revision, &evidence_ids, at_ms) {
+        for fact in observed_contract_facts(answer, &scope, revision.clone(), &evidence_ids, at_ms)
+        {
+            facts.upsert(fact);
+        }
+        for fact in proposed_contract_facts(
+            answer,
+            &scope,
+            revision,
+            &evidence_ids,
+            investigation_id,
+            at_ms,
+        ) {
             facts.upsert(fact);
         }
         mem.prune_tables(&self.known_views());
         mem.save();
-        if !facts.facts().is_empty() {
-            facts.save();
-            semantic_memory::sync_markdown_projection(&path, &facts);
-        }
+        facts.save();
+        semantic_memory::sync_markdown_projection(&path, &facts);
     }
 
     /// Decide whether a new correction updates an existing vocabulary note,
@@ -3353,6 +4943,25 @@ exactly, character for character, from the list below.";
         )
     }
 
+    /// Run a query within the selected files for one Investigation. The
+    /// backend enforces the table allowlist at execution time.
+    pub fn run_sql_with_source_selection(
+        &self,
+        sql: &str,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_sql(sql);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_scoped(&*workspace.data, sql, DEFAULT_ROW_CAP, &allowed)
+    }
+
     /// Run SQL while preserving the stop flag all the way into an interruptible
     /// backend query. This is separate from `run_sql` so command-style callers
     /// keep their small synchronous API.
@@ -3367,6 +4976,24 @@ exactly, character for character, from the list below.";
         )?;
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         query_workspace_cancellable(&*workspace.data, sql, DEFAULT_ROW_CAP, cancel)
+    }
+
+    pub fn run_sql_cancellable_with_source_selection(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_sql_cancellable(sql, cancel);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable_scoped(&*workspace.data, sql, DEFAULT_ROW_CAP, &allowed, cancel)
     }
 
     /// Chart queries have a larger bounded source allowance than model-facing
@@ -3390,6 +5017,34 @@ exactly, character for character, from the list below.";
                 DEFAULT_ROW_CAP,
                 crate::engine::analytics::chart::MAX_SOURCE_ROWS,
             ),
+            cancel,
+        )
+    }
+
+    pub fn run_chart_sql_cancellable_with_source_selection(
+        &self,
+        sql: &str,
+        cancel: Arc<AtomicBool>,
+        max_rows: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<QueryResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_chart_sql_cancellable(sql, cancel, max_rows);
+        };
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let allowed = self.source_selection_allowed_tables(selection);
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        query_workspace_cancellable_scoped(
+            &*workspace.data,
+            sql,
+            max_rows.clamp(
+                DEFAULT_ROW_CAP,
+                crate::engine::analytics::chart::MAX_SOURCE_ROWS,
+            ),
+            &allowed,
             cancel,
         )
     }
@@ -3441,6 +5096,51 @@ exactly, character for character, from the list below.";
             let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
             (
                 workspace.data.python_bridge(),
+                workspace.scratch.as_ref().map(WorkspaceScratch::lease),
+            )
+        };
+        let code = code.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _scratch_lease = scratch_lease;
+            pyexec::run(&code, bridge, Some(cancel))
+        })
+        .await
+        .map_err(|e| EngineError::msg(format!("python task panicked: {e}")))?
+    }
+
+    pub async fn run_python_cancellable_with_source_selection(
+        &self,
+        code: &str,
+        cancel: Arc<AtomicBool>,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<pyexec::PyResult> {
+        let Some(selection) = selection.filter(|selection| !selection.is_all_sources()) else {
+            return self.run_python_cancellable(code, cancel).await;
+        };
+        require_capability(
+            self.settings().capabilities.python_analysis,
+            "Python analysis",
+        )?;
+        let (bridge, scratch_lease) = {
+            let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+            let allowed = workspace
+                .sources
+                .iter()
+                .filter(|source| {
+                    source.view.is_some()
+                        && workspace.workspace.as_deref().is_some_and(|root| {
+                            selection.includes_path(&catalog::workspace_relative_path(
+                                root,
+                                Path::new(&source.path),
+                            ))
+                        })
+                })
+                .flat_map(|source| [Some(source.name.as_str()), source.view.as_deref()])
+                .flatten()
+                .map(str::to_owned)
+                .collect::<HashSet<_>>();
+            (
+                workspace.data.python_bridge().scoped(&allowed),
                 workspace.scratch.as_ref().map(WorkspaceScratch::lease),
             )
         };
@@ -3508,6 +5208,10 @@ exactly, character for character, from the list below.";
                 inspect,
                 context_refs,
                 clarification_reply: None,
+                investigation_id: None,
+                question_id: None,
+                investigation_context: None,
+                rerun_of: None,
             },
             emit,
         )
@@ -3528,6 +5232,10 @@ exactly, character for character, from the list below.";
             inspect,
             context_refs,
             clarification_reply: reply,
+            investigation_id,
+            question_id,
+            investigation_context: saved_investigation_context,
+            rerun_of,
         } = options;
         let _workspace_read_permit = self.workspace_gate.read();
         let settings = self.settings();
@@ -3552,11 +5260,62 @@ exactly, character for character, from the list below.";
             .as_ref()
             .map(|reply| self.resolve_clarification_reply(conversation_id, reply, &turn_catalog))
             .transpose()?;
-        let analysis_question = clarification
+        let prior_context = clarification
+            .as_ref()
+            .map(|resolved| self.analysis_turn_load(&resolved.turn_id))
+            .transpose()?
+            .and_then(|turn| turn.investigation_context);
+        let investigation_context = if let Some(snapshot) = saved_investigation_context {
+            Some(snapshot)
+        } else if let Some(snapshot) = prior_context {
+            Some(snapshot)
+        } else if let Some(id) = investigation_id {
+            let investigation = investigation::load(&self.data_dir, id)?;
+            if turn_catalog.workspace.as_deref() != Some(investigation.workspace_id.as_str()) {
+                return Err(EngineError::msg(
+                    "the Investigation does not belong to the mounted workspace",
+                ));
+            }
+            if investigation
+                .conversation_id
+                .as_deref()
+                .is_some_and(|linked| linked != conversation_id)
+            {
+                return Err(EngineError::msg(
+                    "the Investigation is linked to a different conversation",
+                ));
+            }
+            Some(investigation::context_snapshot_for_question(
+                &self.data_dir,
+                id,
+                question_id,
+            )?)
+        } else if question_id.is_some() {
+            return Err(EngineError::msg(
+                "a Question-specific run requires its Investigation ID",
+            ));
+        } else {
+            None
+        };
+        let request_question = clarification
             .as_ref()
             .map(|reply| reply.original_question.as_str())
             .unwrap_or(question);
-        let context = self.context_packet(analysis_question, conversation_id);
+        let analysis_question = request_question.to_owned();
+        let source_selection = investigation_context
+            .as_ref()
+            .map(|context| &context.source_selection);
+        let resolved_context_refs =
+            self.resolve_artifact_context_refs(context_refs, &turn_catalog, source_selection)?;
+        let context_refs = resolved_context_refs.as_slice();
+        let context = self.context_packet_for_source_selection(
+            &analysis_question,
+            conversation_id,
+            source_selection,
+            investigation_context
+                .as_ref()
+                .map(|context| context.investigation_id.as_str()),
+        );
         // Touch this conversation's memory slot (create it, mark it most-recently
         // used) and evict the least-recently-used one if we're over the cap.
         {
@@ -3584,13 +5343,53 @@ exactly, character for character, from the list below.";
         // A fresh stop-flag for this run, registered under the conversation id so
         // `cancel_run(id)` can find it.
         let cancel = Arc::new(AtomicBool::new(false));
-        self.cancel
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(conversation_id.to_string(), cancel.clone());
+        let turn_id = crate::engine::runtime::new_turn_id();
+        let question_status_context = investigation_context
+            .as_ref()
+            .filter(|context| context.question_id.is_some());
+        let mut previous_question_turn = None;
+        {
+            let _guard = self
+                .question_state_lock
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            self.cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(conversation_id.to_string(), cancel.clone());
+            if let Some(snapshot) = question_status_context {
+                let is_active = investigation::question_load(
+                    &self.data_dir,
+                    snapshot.question_id.as_deref().unwrap_or_default(),
+                )
+                .is_ok_and(|question| {
+                    question.investigation_id == snapshot.investigation_id
+                        && question.status == investigation::InvestigationQuestionStatus::Active
+                });
+                if is_active {
+                    match investigation::question_run_started(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        snapshot.question_id.as_deref().unwrap_or_default(),
+                        &turn_id,
+                    ) {
+                        Ok(previous_turn_id) => previous_question_turn = previous_turn_id,
+                        Err(error) => {
+                            let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                            if flags
+                                .get(conversation_id)
+                                .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                            {
+                                flags.remove(conversation_id);
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+        }
 
         let llm = self.llm_with_model(&effective_model);
-        let turn_id = crate::engine::runtime::new_turn_id();
         emit(crate::engine::evidence::AskEvent::TurnState {
             turn_id: turn_id.clone(),
             state: crate::engine::runtime::TurnState::Received,
@@ -3609,36 +5408,99 @@ exactly, character for character, from the list below.";
             conversation_id,
             model: &effective_model,
             turn_id: &turn_id,
-            question: analysis_question,
+            question: &analysis_question,
             context: &context,
             clarification: clarification.as_ref(),
             inspect,
             context_refs,
+            source_selection,
             cancel: cancel.clone(),
+            investigation_context: investigation_context.as_ref(),
             emit: &emit,
         })
         .await;
-        // Drop this run's stop-flag (unless a newer run for the same id already
-        // replaced it).
-        {
-            let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
-            if flags
-                .get(conversation_id)
-                .is_some_and(|f| Arc::ptr_eq(f, &cancel))
-            {
-                flags.remove(conversation_id);
+        let answer = match answer {
+            Ok(answer) => {
+                self.persist_analysis_turn(PersistAnalysisTurn {
+                    conversation_id,
+                    question: &analysis_question,
+                    context_refs,
+                    investigation_context: investigation_context.as_ref(),
+                    clarification: clarification.as_ref(),
+                    context_audit: &context.audit,
+                    catalog: &turn_catalog,
+                    answer: &answer,
+                    rerun_of: rerun_of.or(previous_question_turn.as_deref()),
+                });
+                if let Some(snapshot) = question_status_context {
+                    let question_id = snapshot.question_id.as_deref().unwrap_or_default();
+                    let context_is_current = investigation::context_snapshot_for_question(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        Some(question_id),
+                    )
+                    .is_ok_and(|current| current == *snapshot);
+                    let (status, reason) = if !context_is_current {
+                        (
+                            InvestigationQuestionAnswerStatus::Outdated,
+                            Some("The Question, source scope, or definitions changed during this run. Run the current Question again.".to_owned()),
+                        )
+                    } else {
+                        question_answer_status(&answer, cancel.load(Ordering::Relaxed))
+                    };
+                    let _guard = self
+                        .question_state_lock
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner());
+                    if let Err(error) = investigation::question_run_finished(
+                        &self.data_dir,
+                        &snapshot.investigation_id,
+                        question_id,
+                        &turn_id,
+                        status,
+                        reason.as_deref(),
+                    ) {
+                        log::warn!("could not update Question status for run {turn_id}: {error}");
+                    }
+                }
+                let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                if flags
+                    .get(conversation_id)
+                    .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                {
+                    flags.remove(conversation_id);
+                }
+                answer
             }
-        }
-        let answer = answer?;
-        self.persist_analysis_turn(PersistAnalysisTurn {
-            conversation_id,
-            question: analysis_question,
-            context_refs,
-            clarification: clarification.as_ref(),
-            context_audit: &context.audit,
-            catalog: &turn_catalog,
-            answer: &answer,
-        });
+            Err(error) => {
+                if let Some(snapshot) = question_status_context {
+                    let _guard = self
+                        .question_state_lock
+                        .lock()
+                        .unwrap_or_else(|state_error| state_error.into_inner());
+                    if let Some(question_id) = snapshot.question_id.as_deref() {
+                        if let Err(status_error) = investigation::question_run_finished(
+                            &self.data_dir,
+                            &snapshot.investigation_id,
+                            question_id,
+                            &turn_id,
+                            InvestigationQuestionAnswerStatus::Blocked,
+                            Some(&error.to_string()),
+                        ) {
+                            log::warn!("could not update blocked Question status for run {turn_id}: {status_error}");
+                        }
+                    }
+                }
+                let mut flags = self.cancel.lock().unwrap_or_else(|e| e.into_inner());
+                if flags
+                    .get(conversation_id)
+                    .is_some_and(|flag| Arc::ptr_eq(flag, &cancel))
+                {
+                    flags.remove(conversation_id);
+                }
+                return Err(error);
+            }
+        };
 
         // Fold this turn into the folder's learned notes (a correction becomes
         // a vocabulary note; an ordinary question teaches nothing). Needs the
@@ -3656,8 +5518,15 @@ exactly, character for character, from the list below.";
                     .and_then(|s| s.turns.last())
                     .map(|t| t.question.clone())
             };
-            self.record_turn_memory(prior_q.as_deref(), analysis_question, &answer)
-                .await;
+            self.record_turn_memory(
+                prior_q.as_deref(),
+                &analysis_question,
+                &answer,
+                investigation_context
+                    .as_ref()
+                    .map(|context| context.investigation_id.as_str()),
+            )
+            .await;
         }
 
         // Distil this turn for the next question in the conversation - but not a
@@ -3735,6 +5604,9 @@ exactly, character for character, from the list below.";
                                 revision: snapshot.revision.clone(),
                             })
                             .unwrap_or(TurnWorkspace::NoWorkspace),
+                        source_selection: investigation_context
+                            .as_ref()
+                            .map(|context| context.source_selection.clone()),
                         frame: frame.map(|frame| cap_chars(&frame, 600)),
                         queries,
                     });
@@ -3806,9 +5678,9 @@ exactly, character for character, from the list below.";
         self.llm().health().await
     }
 
-    /// One model call with no tools and no workspace context just a system
-    /// and a user message. Returns the reply text. Used by the eval harness's
-    /// `--judge` scorer; not on any product path.
+    /// One model call with no tools or workspace context, using only a system
+    /// and user message. Returns the reply text for bounded product proposals
+    /// and the eval harness's `--judge` scorer.
     pub async fn ask_once(
         &self,
         model: Option<&str>,
@@ -3883,9 +5755,10 @@ exactly, character for character, from the list below.";
         }
     }
 
-    /// Catalogued documents (text/PDF, not tables SQL already covers those),
-    /// as (name, path, kind), for the `grep_files`/`read_file` tools.
-    fn documents(&self) -> Vec<(String, String, SourceKind)> {
+    fn documents_for_selection(
+        &self,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> Vec<(String, String, SourceKind)> {
         let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
         let Some(root) = workspace.workspace.as_deref() else {
             return Vec::new();
@@ -3894,6 +5767,12 @@ exactly, character for character, from the list below.";
             .sources
             .iter()
             .filter(|s| s.view.is_none())
+            .filter(|s| {
+                selection.is_none_or(|selection| {
+                    selection
+                        .includes_path(&catalog::workspace_relative_path(root, Path::new(&s.path)))
+                })
+            })
             .map(|s| {
                 (
                     catalog::workspace_relative_path(root, Path::new(&s.path)),
@@ -3909,6 +5788,15 @@ exactly, character for character, from the list below.";
     /// nearby line context. The two-pass scan is bounded;
     /// callers must preserve the `incomplete` signal when reporting no hits.
     pub fn search_files(&self, query: &str, max_hits: usize) -> EngineResult<GrepResults> {
+        self.search_files_for_selection(query, max_hits, None)
+    }
+
+    pub fn search_files_for_selection(
+        &self,
+        query: &str,
+        max_hits: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<GrepResults> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
@@ -3923,7 +5811,7 @@ exactly, character for character, from the list below.";
             !has_search_operators(query) && document_search_tokens(query).len() > 1;
         let max_hits = max_hits.clamp(1, 50);
         let candidate_cap = max_hits.saturating_mul(16).clamp(48, 800);
-        let documents = self.documents();
+        let documents = self.documents_for_selection(selection);
 
         // First pass computes workspace-wide document frequency and average
         // passage length for BM25. Text stays streamed and is never persisted.
@@ -4046,6 +5934,15 @@ exactly, character for character, from the list below.";
     /// Exact case-insensitive regex lookup retained for callers that need
     /// grep-like line semantics. The agent-facing tool uses `search_files`.
     pub fn grep_files(&self, pattern: &str, max_hits: usize) -> EngineResult<Vec<GrepHit>> {
+        self.grep_files_for_selection(pattern, max_hits, None)
+    }
+
+    pub fn grep_files_for_selection(
+        &self,
+        pattern: &str,
+        max_hits: usize,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<Vec<GrepHit>> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
@@ -4055,7 +5952,7 @@ exactly, character for character, from the list below.";
             .build()
             .map_err(|e| EngineError::msg(format!("bad pattern: {e}")))?;
         let mut hits = Vec::new();
-        for (name, path, kind) in self.documents() {
+        for (name, path, kind) in self.documents_for_selection(selection) {
             if kind == SourceKind::Pdf {
                 let Ok(text) = self.pdf_text(&path) else {
                     continue;
@@ -4098,12 +5995,20 @@ exactly, character for character, from the list below.";
     /// document can't blow the context window `grep_files` can find a spot
     /// in a bigger file first.
     pub fn read_file(&self, name: &str) -> EngineResult<(String, bool)> {
+        self.read_file_for_selection(name, None)
+    }
+
+    pub fn read_file_for_selection(
+        &self,
+        name: &str,
+        selection: Option<&InvestigationSourceSelection>,
+    ) -> EngineResult<(String, bool)> {
         require_capability(
             self.settings().capabilities.document_analysis,
             "Document analysis",
         )?;
         let (path, kind) = self
-            .documents()
+            .documents_for_selection(selection)
             .into_iter()
             .find(|(n, _, _)| n == name)
             .map(|(_, p, k)| (p, k))
@@ -4301,6 +6206,336 @@ fn observed_contract_facts(
     facts
 }
 
+/// Store durable-looking pieces of the model's typed interpretation as
+/// proposals. They remain non-promptable until a user accepts them, and the
+/// Investigation that produced each proposal remains part of its provenance.
+fn proposed_contract_facts(
+    answer: &Answer,
+    scope: &str,
+    revision: Option<String>,
+    evidence_ids: &[String],
+    investigation_id: Option<&str>,
+    at_ms: u64,
+) -> Vec<SemanticFact> {
+    let Some(contract) = answer.contract.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut facts = Vec::new();
+    let mut propose = |key: String, statement: String| {
+        let statement = statement.trim();
+        if statement.is_empty() || facts.len() >= 24 {
+            return;
+        }
+        let mut fact = SemanticFact::new(SemanticFactInput {
+            kind: FactKind::Definition,
+            key,
+            statement: statement.chars().take(1_000).collect(),
+            authority: FactAuthority::ModelSuggestion,
+            workspace: scope.to_string(),
+            revision: revision.clone(),
+            supporting_turn: Some(answer.turn_id.clone()),
+            evidence_ids: evidence_ids.to_vec(),
+            at_ms,
+        });
+        fact.investigation_id = investigation_id.map(str::to_string);
+        fact.origin_investigation_id = investigation_id.map(str::to_string);
+        facts.push(fact);
+    };
+
+    for assumption in contract.assumptions.iter().take(12) {
+        let mut key_text = String::new();
+        for character in assumption.chars() {
+            if character.is_alphanumeric() {
+                key_text.extend(character.to_lowercase());
+            } else if !key_text.is_empty() && !key_text.ends_with('-') {
+                key_text.push('-');
+            }
+            if key_text.len() >= 64 {
+                break;
+            }
+        }
+        let key_text = key_text.trim_end_matches('-');
+        propose(
+            format!(
+                "assumption:{}",
+                if key_text.is_empty() {
+                    "general"
+                } else {
+                    key_text
+                }
+            ),
+            assumption.clone(),
+        );
+    }
+    if let Some(value_semantics) = contract.value_semantics.as_deref() {
+        propose(
+            "value-semantics".into(),
+            format!("Value semantics: {value_semantics}"),
+        );
+    }
+    if let Some(missing_policy) = contract.missing_policy.as_deref() {
+        propose(
+            "missing-value-policy".into(),
+            format!("Missing-value policy: {missing_policy}"),
+        );
+    }
+    if let Some(denominator) = contract.denominator.as_deref() {
+        propose("denominator".into(), format!("Denominator: {denominator}"));
+    }
+    for metric in contract.derived_metrics.iter().take(8) {
+        let operator = match metric.kind {
+            crate::engine::runtime::DerivedMetricKind::Ratio => "divides",
+            crate::engine::runtime::DerivedMetricKind::Difference => "subtracts",
+        };
+        propose(
+            format!("derived-metric:{}", metric.concept.to_lowercase()),
+            format!(
+                "{} {} {} from {}{}",
+                metric.concept,
+                operator,
+                metric.numerator,
+                metric.denominator,
+                metric
+                    .unit
+                    .as_deref()
+                    .map(|unit| format!(" (unit: {unit})"))
+                    .unwrap_or_default()
+            ),
+        );
+    }
+    facts
+}
+
+#[cfg(test)]
+mod proposed_contract_fact_tests {
+    use super::*;
+
+    fn answer_with_contract(contract: AnalysisContract) -> Answer {
+        Answer {
+            turn_id: "analysis-turn-1".into(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-1".into(),
+                turn_id: "analysis-turn-1".into(),
+                workspace_revision: Some("sales-r4".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: Some(contract),
+            grounding: None,
+            text: "The analysis is complete.".into(),
+            presentation_spec: None,
+            provenance: crate::engine::evidence::AnswerProvenance::default(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: VerificationStatus::NeedsReview,
+            clarification: None,
+            workspace: None,
+            usage: None,
+        }
+    }
+
+    #[test]
+    fn analysis_contract_suggestions_keep_investigation_and_evidence_provenance() {
+        let answer = answer_with_contract(AnalysisContract {
+            assumptions: vec!["Orders exclude test accounts".into()],
+            value_semantics: Some("positive values are gross merchandise revenue".into()),
+            missing_policy: Some("exclude rows with unknown order dates".into()),
+            denominator: Some("completed orders".into()),
+            derived_metrics: vec![crate::engine::runtime::ContractDerivedMetric {
+                concept: "average order value".into(),
+                kind: crate::engine::runtime::DerivedMetricKind::Ratio,
+                numerator: "net revenue".into(),
+                denominator: "completed orders".into(),
+                unit: Some("USD/order".into()),
+            }],
+            ..Default::default()
+        });
+
+        let facts = proposed_contract_facts(
+            &answer,
+            "/workspace/sales",
+            Some("sales-r4".into()),
+            &["evidence-1".into()],
+            Some("investigation-1"),
+            123,
+        );
+
+        assert_eq!(facts.len(), 5);
+        assert!(facts.iter().all(|fact| {
+            fact.authority == FactAuthority::ModelSuggestion
+                && fact.state == semantic_memory::FactState::Proposed
+                && fact.workspace == "/workspace/sales"
+                && fact.investigation_id.as_deref() == Some("investigation-1")
+                && fact.origin_investigation_id.as_deref() == Some("investigation-1")
+                && fact.revision.as_deref() == Some("sales-r4")
+                && fact.supporting_turn.as_deref() == Some("analysis-turn-1")
+                && fact.evidence_ids == vec!["evidence-1".to_string()]
+        }));
+        assert!(facts.iter().any(|fact| {
+            fact.key == "assumption:orders-exclude-test-accounts"
+                && fact.statement == "Orders exclude test accounts"
+        }));
+        assert!(facts.iter().any(|fact| {
+            fact.key == "derived-metric:average order value"
+                && fact.statement.contains("net revenue")
+        }));
+    }
+}
+
+#[cfg(test)]
+mod memory_resolution_tests {
+    use super::*;
+
+    #[test]
+    fn accepting_and_editing_a_suggestion_preserves_its_scope_and_provenance() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let data_dir = std::env::temp_dir().join(format!("fella-memory-resolution-{nonce}"));
+        let workspace_path = data_dir.join("workspace");
+        let other_workspace_path = data_dir.join("other-workspace");
+        std::fs::create_dir_all(&workspace_path).unwrap();
+        std::fs::create_dir_all(&other_workspace_path).unwrap();
+        let engine = EngineState::new(&data_dir).unwrap();
+        let memory_path = data_dir.join("memory/workspace.md");
+        {
+            let mut workspace = engine.workspace.lock().unwrap();
+            workspace.workspace = Some(workspace_path.clone());
+            workspace.memory_path = Some(memory_path.clone());
+        }
+        let local_investigation = investigation::create(
+            &data_dir,
+            workspace_path.to_str().unwrap(),
+            "Local analysis",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let other_investigation = investigation::create(
+            &data_dir,
+            workspace_path.to_str().unwrap(),
+            "Separate analysis",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let other_workspace_investigation = investigation::create(
+            &data_dir,
+            other_workspace_path.to_str().unwrap(),
+            "Different workspace",
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let mut proposal = SemanticFact::new(SemanticFactInput {
+            kind: FactKind::Definition,
+            key: "value-semantics".into(),
+            statement: "Net merchandise revenue excludes shipping".into(),
+            authority: FactAuthority::ModelSuggestion,
+            workspace: workspace_path.to_str().unwrap().into(),
+            revision: Some("sales-r4".into()),
+            supporting_turn: Some("analysis-turn-1".into()),
+            evidence_ids: vec!["evidence-1".into()],
+            at_ms: 123,
+        });
+        proposal.investigation_id = Some(local_investigation.id.clone());
+        proposal.origin_investigation_id = Some(local_investigation.id.clone());
+        let proposal_id = proposal.id.clone();
+        let mut memory = SemanticMemory::load(&semantic_memory::facts_path_for(&memory_path));
+        memory.upsert(proposal);
+        memory.save();
+
+        let accepted = engine
+            .resolve_folder_memory_fact(&proposal_id, "accept", None, Some(&local_investigation.id))
+            .unwrap();
+        let confirmed = accepted
+            .iter()
+            .find(|fact| {
+                fact.authority == FactAuthority::Confirmed
+                    && fact.state == semantic_memory::FactState::Active
+            })
+            .unwrap();
+        assert_eq!(
+            confirmed.investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            confirmed.origin_investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            confirmed.supporting_turn.as_deref(),
+            Some("analysis-turn-1")
+        );
+        assert_eq!(confirmed.evidence_ids, vec!["evidence-1".to_string()]);
+        let confirmed_id = confirmed.id.clone();
+
+        engine
+            .resolve_folder_memory_fact(
+                &confirmed_id,
+                "edit",
+                Some("Net merchandise revenue excludes shipping and gift cards"),
+                Some(&local_investigation.id),
+            )
+            .unwrap();
+        let edited = engine.folder_memory_facts().unwrap();
+        let active = edited
+            .iter()
+            .find(|fact| fact.state == semantic_memory::FactState::Active)
+            .unwrap();
+        assert_eq!(active.authority, FactAuthority::User);
+        assert_eq!(
+            active.investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(
+            active.origin_investigation_id.as_deref(),
+            Some(local_investigation.id.as_str())
+        );
+        assert_eq!(active.supporting_turn.as_deref(), Some("analysis-turn-1"));
+        assert_eq!(active.evidence_ids, vec!["evidence-1".to_string()]);
+        let active_id = active.id.clone();
+
+        let rejected = engine.resolve_folder_memory_fact(
+            &active_id,
+            "edit",
+            Some("Cross-workspace change"),
+            Some(&other_workspace_investigation.id),
+        );
+        assert!(rejected.is_err());
+        assert!(engine.folder_memory_facts().unwrap().iter().any(|fact| {
+            fact.id == active_id && fact.state == semantic_memory::FactState::Active
+        }));
+        assert!(!engine
+            .folder_memory_facts()
+            .unwrap()
+            .iter()
+            .any(|fact| fact.state == semantic_memory::FactState::Active
+                && fact.investigation_id.as_deref() == Some(other_investigation.id.as_str())));
+
+        let remaining = engine
+            .resolve_folder_memory_fact(&active_id, "remove", None, None)
+            .unwrap();
+        assert!(!remaining.iter().any(|fact| fact.id == active_id));
+        assert!(remaining.iter().any(|fact| {
+            fact.id == proposal_id && fact.state == semantic_memory::FactState::Superseded
+        }));
+
+        drop(engine);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
 /// What to do with a new correction against the existing vocabulary list.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VocabAction {
@@ -4420,6 +6655,43 @@ fn query_workspace_cancellable(
     data::ensure_read_only(sql)?;
     let started = Instant::now();
     let out = data.query_with_cancel(sql, max_rows, cancel)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_scoped(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_scoped(sql, max_rows, allowed_sources)?;
+    Ok(QueryResult {
+        columns: out.columns,
+        rows: out.rows,
+        row_count: out.row_count,
+        ms: started.elapsed().as_millis() as u64,
+        truncated: out.truncated,
+    })
+}
+
+fn query_workspace_cancellable_scoped(
+    data: &dyn DataEngine,
+    sql: &str,
+    max_rows: usize,
+    allowed_sources: &HashSet<String>,
+    cancel: Arc<AtomicBool>,
+) -> EngineResult<QueryResult> {
+    data::ensure_read_only(sql)?;
+    let started = Instant::now();
+    let out = data.query_with_cancel_scoped(sql, max_rows, allowed_sources, cancel)?;
     Ok(QueryResult {
         columns: out.columns,
         rows: out.rows,
@@ -4844,6 +7116,47 @@ mod jit_schema_tests {
             "the prompt should distinguish previews from full document contents"
         );
     }
+
+    #[test]
+    fn read_file_caps_document_text_and_reports_truncation() {
+        let ws = ScratchDir::new("read-file-cap-ws");
+        let data = ScratchDir::new("read-file-cap-data");
+        let contents = format!("{}TAIL", "x".repeat(READ_FILE_CHAR_CAP));
+        std::fs::write(ws.join("long-notes.txt"), &contents).unwrap();
+
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+        let (text, truncated) = engine.read_file("long-notes.txt").unwrap();
+
+        assert!(truncated);
+        assert_eq!(text.chars().count(), READ_FILE_CHAR_CAP);
+        assert!(!text.contains("TAIL"));
+    }
+
+    #[test]
+    fn sql_row_cap_keeps_total_count_and_truncation_signal() {
+        let ws = ScratchDir::new("sql-row-cap-ws");
+        let data = ScratchDir::new("sql-row-cap-data");
+        let rows = (0..1_001)
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>();
+        std::fs::write(
+            ws.join("measurements.csv"),
+            format!("value\n{}\n", rows.join("\n")),
+        )
+        .unwrap();
+
+        let engine = EngineState::new(&data).unwrap();
+        engine.open_workspace(&ws).unwrap();
+        let result = engine.run_sql("SELECT value FROM measurements").unwrap();
+
+        assert_eq!(
+            result.rows.len(),
+            crate::engine::analytics::data::DEFAULT_ROW_CAP
+        );
+        assert_eq!(result.row_count, 1_001);
+        assert!(result.truncated);
+    }
 }
 
 #[cfg(test)]
@@ -4914,6 +7227,332 @@ mod workspace_swap_tests {
 
         let _ = std::fs::remove_dir_all(old_workspace);
         let _ = std::fs::remove_dir_all(new_workspace);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+}
+
+#[cfg(test)]
+mod investigation_answer_status_tests {
+    use super::*;
+
+    fn temp_data_dir(label: &str) -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("fella-{label}-{nonce}"))
+    }
+
+    fn saved_question_turn(
+        turn_id: &str,
+        investigation: &Investigation,
+        question: &crate::engine::investigation::InvestigationQuestion,
+        context: InvestigationContextSnapshot,
+    ) -> AnalysisTurn {
+        let verification = vec![VerificationCheck {
+            label: "date coverage".into(),
+            ok: false,
+            outcome: Some(crate::engine::evidence::VerificationOutcome::Flagged),
+            detail: Some("Two source rows have no transaction date.".into()),
+            finding: None,
+        }];
+        AnalysisTurn {
+            id: turn_id.to_owned(),
+            conversation_id: investigation.conversation_id.clone().unwrap(),
+            question: question.text.clone(),
+            context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
+            clarification_of: None,
+            clarification_response: None,
+            workspace: Some(investigation.workspace_id.clone()),
+            workspace_revision: Some("workspace-r1".into()),
+            workspace_snapshot: None,
+            source_scope: None,
+            investigation_context: Some(context),
+            context_audit: None,
+            provenance: None,
+            rerun_of: None,
+            state: TurnState::NeedsReview,
+            contract: None,
+            plan: LogicalPlan::default(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: format!("trace-{turn_id}"),
+                turn_id: turn_id.to_owned(),
+                workspace_revision: Some("workspace-r1".into()),
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            verification: None,
+            result: AnalysisResult {
+                text: "The rows total 1,240, but two dates are missing.".into(),
+                presentation_spec: None,
+                status: VerificationStatus::NeedsReview,
+                usage: None,
+                verification,
+                evidence: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn unsupported_interpretation_is_a_distinct_coverage_outcome() {
+        let answer = Answer {
+            turn_id: "turn-unsupported".to_owned(),
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: "trace-unsupported".to_owned(),
+                turn_id: "turn-unsupported".to_owned(),
+                workspace_revision: None,
+                mode: None,
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: None,
+                steps: Vec::new(),
+            },
+            plan: None,
+            contract: Some(crate::engine::runtime::AnalysisContract {
+                interpretation: crate::engine::runtime::InterpretationStatus::Unsupported,
+                unresolved: vec!["The files do not contain cohort dates.".to_owned()],
+                ..Default::default()
+            }),
+            grounding: None,
+            text: "This cannot be answered from these files.".to_owned(),
+            presentation_spec: None,
+            provenance: crate::engine::evidence::AnswerProvenance::default(),
+            evidence: Vec::new(),
+            verification: Vec::new(),
+            status: crate::engine::evidence::VerificationStatus::Failed,
+            clarification: None,
+            workspace: None,
+            usage: None,
+        };
+
+        assert_eq!(
+            question_answer_status(&answer, false),
+            (
+                InvestigationQuestionAnswerStatus::Unsupported,
+                Some("The files do not contain cohort dates.".to_owned())
+            )
+        );
+        assert_eq!(
+            question_answer_status(&answer, true).0,
+            InvestigationQuestionAnswerStatus::Blocked,
+            "explicit cancellation takes precedence over the model's interpretation"
+        );
+    }
+
+    #[test]
+    fn question_answer_status_separates_review_insufficient_data_and_clarification() {
+        let no_checks = Vec::new();
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::NeedsReview,
+                None,
+                &no_checks,
+                None,
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::NeedsReview,
+                Some("The run produced an answer, but its verification is not conclusive.".into())
+            ),
+            "a run-wide verification concern is not proof of partial coverage"
+        );
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::InsufficientData,
+                None,
+                &no_checks,
+                None,
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::InsufficientData,
+                Some(
+                    "The run did not produce enough accepted evidence to answer this Question."
+                        .into()
+                )
+            )
+        );
+
+        let clarification = crate::engine::runtime::ClarificationRequest {
+            question: "Which date range should I use?".into(),
+            options: vec!["Calendar year".into(), "Fiscal year".into()],
+            reason: Some("The source includes both calendar and fiscal periods.".into()),
+        };
+        assert_eq!(
+            question_answer_status_parts(
+                VerificationStatus::NeedsReview,
+                None,
+                &no_checks,
+                Some(&clarification),
+                false,
+            ),
+            (
+                InvestigationQuestionAnswerStatus::WaitingForInput,
+                Some("The source includes both calendar and fiscal periods.".into())
+            ),
+            "a decision requested from the user should not be presented as a partial answer"
+        );
+    }
+
+    #[test]
+    fn app_investigation_reads_do_not_mark_a_workspace_runtime_run_interrupted() {
+        let data_dir = temp_data_dir("shared-question-run");
+        let app = EngineState::new(&data_dir).unwrap();
+        let workspace =
+            EngineState::new_workspace_runtime(&data_dir, app.cancel_registry()).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        investigation::question_run_started(
+            &data_dir,
+            &created.id,
+            &question.id,
+            "turn-live-question",
+        )
+        .unwrap();
+        workspace.cancel.lock().unwrap().insert(
+            "conversation-analysis".into(),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let while_running = app.investigation_load(&created.id).unwrap();
+        assert_eq!(
+            while_running.questions.as_ref().unwrap()[0].answer_status,
+            InvestigationQuestionAnswerStatus::Running,
+            "the app runtime must see the active cancellation entry owned by the workspace runtime"
+        );
+
+        workspace
+            .cancel
+            .lock()
+            .unwrap()
+            .remove("conversation-analysis");
+        let after_interruption = app.investigation_load(&created.id).unwrap();
+        let question = &after_interruption.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::Blocked
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some(investigation::INTERRUPTED_QUESTION_RUN_REASON)
+        );
+
+        drop(workspace);
+        drop(app);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn recovery_restores_a_saved_review_outcome_from_the_matching_turn() {
+        let data_dir = temp_data_dir("recover-question-answer");
+        let app = EngineState::new(&data_dir).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        let turn_id = "turn-saved-question-answer";
+        investigation::question_run_started(&data_dir, &created.id, &question.id, turn_id).unwrap();
+        let context = investigation::context_snapshot_for_question(
+            &data_dir,
+            &created.id,
+            Some(&question.id),
+        )
+        .unwrap();
+        let turn = saved_question_turn(turn_id, &created, &question, context);
+        analysis_store::create(&data_dir, &turn).unwrap();
+
+        // This reproduces the stale marker written by the earlier recovery
+        // path even though the canonical run already contains a reviewable answer.
+        investigation::question_run_finished(
+            &data_dir,
+            &created.id,
+            &question.id,
+            turn_id,
+            InvestigationQuestionAnswerStatus::Blocked,
+            Some(investigation::INTERRUPTED_QUESTION_RUN_REASON),
+        )
+        .unwrap();
+
+        let recovered = app.investigation_load(&created.id).unwrap();
+        let question = &recovered.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::NeedsReview
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some("Two source rows have no transaction date.")
+        );
+        assert_eq!(question.latest_analysis_turn_id.as_deref(), Some(turn_id));
+
+        drop(app);
+        let _ = std::fs::remove_dir_all(data_dir);
+    }
+
+    #[test]
+    fn legacy_incomplete_question_status_is_reclassified_from_its_saved_turn() {
+        let data_dir = temp_data_dir("migrate-legacy-incomplete-question");
+        let app = EngineState::new(&data_dir).unwrap();
+        let created = investigation::create(
+            &data_dir,
+            "/work/analysis",
+            "Revenue analysis",
+            Some("Explain revenue movement"),
+            None,
+            Some("conversation-analysis"),
+        )
+        .unwrap();
+        let question = created.questions.as_ref().unwrap()[0].clone();
+        let turn_id = "turn-legacy-incomplete-question";
+        investigation::question_run_started(&data_dir, &created.id, &question.id, turn_id).unwrap();
+        let context = investigation::context_snapshot_for_question(
+            &data_dir,
+            &created.id,
+            Some(&question.id),
+        )
+        .unwrap();
+        let turn = saved_question_turn(turn_id, &created, &question, context);
+        analysis_store::create(&data_dir, &turn).unwrap();
+        investigation::question_run_finished(
+            &data_dir,
+            &created.id,
+            &question.id,
+            turn_id,
+            InvestigationQuestionAnswerStatus::Incomplete,
+            Some("The run returned without fully answering this Question."),
+        )
+        .unwrap();
+
+        let migrated = app.investigation_load(&created.id).unwrap();
+        let question = &migrated.questions.as_ref().unwrap()[0];
+        assert_eq!(
+            question.answer_status,
+            InvestigationQuestionAnswerStatus::NeedsReview
+        );
+        assert_eq!(
+            question.answer_status_reason.as_deref(),
+            Some("Two source rows have no transaction date.")
+        );
+
+        drop(app);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 }

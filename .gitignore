@@ -45,9 +45,13 @@ vite.config.ts.timestamp-*
 /test-results/e2e-journeys/
 /test-results/e2e-chart-families/
 /test-results/e2e-analysis-families/
+/test-results/performance/
 
 # Personal notes
 /STUDY.md
+
+# Local-only audit captures
+/docs/audits/assets/*.png
 
 # Local tooling / editor / AI-assistant config (not part of the project)
 /.vscode

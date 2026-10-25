@@ -2,8 +2,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("--engine-stdio") {
+    let mut args = std::env::args_os().skip(1);
+    if let Some("--engine-stdio") = args
+        .next()
+        .and_then(|arg| arg.into_string().ok())
+        .as_deref()
+    {
         let Some(flag) = args.next() else {
             eprintln!("fella: --engine-stdio requires --data-dir <path>");
             std::process::exit(2);
@@ -22,6 +26,6 @@ fn main() {
         }
         return;
     }
-    eprintln!("fella engine: launch this process with --engine-stdio --data-dir <path>");
+    eprintln!("fella: launch with --engine-stdio --data-dir <path>");
     std::process::exit(2);
 }

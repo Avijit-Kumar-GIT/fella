@@ -537,7 +537,7 @@ test('chart journey: all concrete chart families render through one Electron con
 				}
 				await page.evaluate(() => { delete document.documentElement.dataset.colorMode; });
 
-				const detailsButton = assistant.getByRole('button', { name: 'Analysis details', exact: true });
+				const detailsButton = assistant.getByRole('button', { name: 'How this was analyzed', exact: true });
 				await expect(detailsButton).toBeVisible();
 				if (await detailsButton.getAttribute('aria-expanded') !== 'true') await detailsButton.click();
 				await expect(assistant.locator('.evidence-body')).toBeVisible();
@@ -563,7 +563,7 @@ test('chart journey: all concrete chart families render through one Electron con
 				try {
 					const assistant = page.locator('.msg.assistant').last();
 					record.assistant_dom_text = (await assistant.innerText()).slice(0, 8000);
-					const detailsButton = assistant.getByRole('button', { name: 'Analysis details', exact: true });
+					const detailsButton = assistant.getByRole('button', { name: 'How this was analyzed', exact: true });
 					if (await detailsButton.count() && await detailsButton.getAttribute('aria-expanded') !== 'true') await detailsButton.click();
 					const evidenceBody = assistant.locator('.evidence-body');
 					if (await evidenceBody.count()) {

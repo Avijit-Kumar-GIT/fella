@@ -3,13 +3,15 @@
 		baseName,
 		COMMAND_DESCRIPTIONS,
 		openConversation,
-		openFolder,
+		openRepository,
 		SLASH_COMMANDS
 	} from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { fadeQuick, pop } from '$lib/motion';
 	import { session } from '$lib/session.svelte';
-	import type { ConversationSummary, Project, SourceInfo } from '$lib/types';
+	import { Dialog } from '$lib/components/ui/dialog';
+	import { Input } from '$lib/components/ui/input';
+	import { Button } from '$lib/components/ui/button';
+	import type { ConversationSummary, SourceInfo } from '$lib/types';
 	import Icon from './Icon.svelte';
 
 	let { open = $bindable(false), onpick }: { open?: boolean; onpick: (cmd: string) => void } =
@@ -18,8 +20,6 @@
 	let query = $state('');
 	let sel = $state(0);
 	let input: HTMLInputElement | undefined = $state();
-	let dialog: HTMLDivElement | undefined = $state();
-	let returnFocus: HTMLElement | null = null;
 	let history = $state<ConversationSummary[]>([]);
 	let activeFilter = $state<SearchFilter>('all');
 	const shortcutModifier =
@@ -31,17 +31,15 @@
 		| { kind: 'repository'; path: string; name: string; count: number }
 		| { kind: 'conversation'; item: ConversationSummary }
 		| { kind: 'source'; source: SourceInfo }
-		| { kind: 'project'; project: Project }
 		| { kind: 'command'; command: string };
 	type SearchKind = SearchResult['kind'];
 	type SearchFilter = 'all' | SearchKind;
 
 	const filters: { id: SearchFilter; label: string }[] = [
 		{ id: 'all', label: 'All' },
-		{ id: 'repository', label: 'Repositories' },
+		{ id: 'repository', label: 'Workspaces' },
 		{ id: 'conversation', label: 'Conversations' },
 		{ id: 'source', label: 'Files' },
-		{ id: 'project', label: 'Projects' },
 		{ id: 'command', label: 'Actions' }
 	];
 
@@ -109,16 +107,12 @@
 			.filter((source) => includes(`${source.name} ${source.path} ${source.synopsis ?? ''}`))
 			.slice(0, 5)
 			.map((source) => ({ kind: 'source', source }));
-		const projectHits: SearchResult[] = session.projects
-			.filter((project) => includes(`${project.name} ${project.workspace} ${project.body}`))
-			.slice(0, 5)
-			.map((project) => ({ kind: 'project', project }));
 		const commandHits: SearchResult[] = matches.map((command) => ({ kind: 'command', command }));
-		return [...repositoryHits, ...conversationHits, ...sourceHits, ...projectHits, ...commandHits];
+		return [...repositoryHits, ...conversationHits, ...sourceHits, ...commandHits];
 	});
 
 	let resultGroups = $derived.by(() => {
-		const kinds: SearchKind[] = ['repository', 'conversation', 'source', 'project', 'command'];
+		const kinds: SearchKind[] = ['repository', 'conversation', 'source', 'command'];
 		return kinds
 			.filter((kind) => activeFilter === 'all' || activeFilter === kind)
 			.map((kind) => ({
@@ -133,15 +127,9 @@
 
 	$effect(() => {
 		if (open) {
-			returnFocus = document.activeElement as HTMLElement | null;
 			query = '';
 			sel = 0;
 			activeFilter = 'all';
-			queueMicrotask(() => input?.focus());
-		} else if (returnFocus) {
-			// Put focus back where it was when the palette opened.
-			returnFocus.focus();
-			returnFocus = null;
 		}
 	});
 
@@ -166,10 +154,7 @@
 	}
 
 	function key(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.stopPropagation();
-			close();
-		} else if ((e.ctrlKey || e.metaKey) && e.key === '[') {
+		if ((e.ctrlKey || e.metaKey) && e.key === '[') {
 			cycleFilter(-1);
 			e.preventDefault();
 		} else if ((e.ctrlKey || e.metaKey) && e.key === ']') {
@@ -191,11 +176,9 @@
 			case 'repository':
 				return `${result.count} conversation${result.count === 1 ? '' : 's'}`;
 			case 'conversation':
-				return result.item.workspace ? baseName(result.item.workspace) : 'No repository';
+				return result.item.workspace ? baseName(result.item.workspace) : 'General';
 			case 'source':
 				return result.source.path;
-			case 'project':
-				return baseName(result.project.workspace);
 			case 'command':
 				return COMMAND_DESCRIPTIONS[result.command] ?? '';
 		}
@@ -209,8 +192,6 @@
 				return result.item.title ?? result.item.preview;
 			case 'source':
 				return result.source.name;
-			case 'project':
-				return result.project.name;
 			case 'command':
 				return result.command;
 		}
@@ -224,8 +205,6 @@
 				return `conversation:${result.item.id}`;
 			case 'source':
 				return `source:${result.source.path}`;
-			case 'project':
-				return `project:${result.project.id}`;
 			case 'command':
 				return `command:${result.command}`;
 		}
@@ -236,21 +215,6 @@
 		return current ? resultKey(current) === resultKey(result) : false;
 	}
 
-	function icon(result: SearchResult): 'repository' | 'ask' | 'file' | 'project' | 'asterisk' {
-		switch (result.kind) {
-			case 'repository':
-				return 'repository';
-			case 'conversation':
-				return 'ask';
-			case 'source':
-				return 'file';
-			case 'project':
-				return 'project';
-			case 'command':
-				return 'asterisk';
-		}
-	}
-
 	async function select(result: SearchResult): Promise<void> {
 		close();
 		switch (result.kind) {
@@ -259,69 +223,35 @@
 				return;
 			case 'repository':
 				session.setWorkspaceView('ask');
-				await openFolder(result.path);
+				await openRepository(result.path);
 				return;
 			case 'conversation':
 				await openConversation(result.item);
 				return;
 			case 'source':
-				session.selectSource(result.source.path);
-				session.setWorkspacePane('sources');
-				return;
-			case 'project':
-				session.openProject(result.project.id);
+				session.openSourceTool(result.source);
 				return;
 		}
 	}
 
-	// Keep Tab inside the dialog while it's open; Escape closes from anywhere in it.
-	function trap(e: KeyboardEvent) {
-		if (e.key === 'Escape') {
-			e.stopPropagation();
-			close();
-			return;
-		}
-		if (e.key !== 'Tab' || !dialog) return;
-		const focusable = dialog.querySelectorAll<HTMLElement>(
-			'a[href], button:not([disabled]), input, [tabindex]:not([tabindex="-1"])'
-		);
-		if (focusable.length === 0) return;
-		const first = focusable[0];
-		const last = focusable[focusable.length - 1];
-		const active = document.activeElement;
-		if (e.shiftKey && active === first) {
-			e.preventDefault();
-			last.focus();
-		} else if (!e.shiftKey && active === last) {
-			e.preventDefault();
-			first.focus();
-		}
-	}
 </script>
 
-{#if open}
-	<div class="scrim">
-		<button
-			type="button"
-			class="backdrop"
-			aria-label="Close commands"
-			onclick={close}
-			transition:fadeQuick
-		></button>
-		<div
-			class="palette"
-			bind:this={dialog}
-			role="dialog"
-			aria-modal="true"
-			aria-label="Search Fella"
-			tabindex="-1"
-			onkeydown={trap}
-			transition:pop
-		>
+	<Dialog.Root bind:open>
+		<Dialog.Portal>
+			<Dialog.Overlay class="fella-ui-dialog-overlay" />
+			<Dialog.Content
+				class="fella-ui-dialog-content palette"
+				aria-label="Search Fella"
+				onOpenAutoFocus={(event) => {
+					event.preventDefault();
+					queueMicrotask(() => input?.focus());
+				}}
+			>
 			<div class="search">
 				<Icon name="search" size={16} />
-				<input
-					bind:this={input}
+				<Input
+					class="palette-search-input"
+					bind:ref={input}
 					bind:value={query}
 					onkeydown={key}
 					placeholder="Search Fella…"
@@ -329,18 +259,16 @@
 					aria-label="Search Fella"
 				/>
 			</div>
-			<div class="filters" aria-label="Search filters" role="tablist">
+			<div class="filters" aria-label="Search filters" role="group">
 				{#each filters as filter}
-					<button
-						class:active={activeFilter === filter.id}
-						class="filter"
-						type="button"
-						role="tab"
-						aria-selected={activeFilter === filter.id}
+					<Button
+						variant="ghost"
+						class={`filter${activeFilter === filter.id ? ' active' : ''}`}
+						aria-pressed={activeFilter === filter.id}
 						onclick={() => setFilter(filter.id)}
 					>
 						{filter.label}
-					</button>
+					</Button>
 				{/each}
 			</div>
 			<ul>
@@ -353,15 +281,12 @@
 						<li class="group-label">{group.label}</li>
 						{#each group.items as result (resultKey(result))}
 							<li class:sel={isSelected(result)}>
-								<button class="search-result" type="button" onclick={() => void select(result)}>
-									<span class="result-icon">
-										<Icon name={icon(result)} size={16} />
-									</span>
+								<Button variant="ghost" class="search-result" onclick={() => void select(result)}>
 									<span class="result-copy">
 										<strong>{label(result)}</strong>
 										{#if detail(result)}<small>{detail(result)}</small>{/if}
 									</span>
-								</button>
+								</Button>
 							</li>
 						{/each}
 					{/each}
@@ -373,35 +298,16 @@
 				<span class="footer-spacer"></span>
 				<span><kbd>{shortcutModifier}+[ / ]</kbd> Change filter</span>
 			</div>
-		</div>
-	</div>
-{/if}
+			</Dialog.Content>
+		</Dialog.Portal>
+	</Dialog.Root>
 
 <style>
-	.scrim {
-		position: fixed;
-		inset: 0;
-		display: flex;
-		justify-content: center;
-		align-items: flex-start;
-		padding-top: 10vh;
-		z-index: 50;
-	}
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		border: none;
-		padding: 0;
-		background: color-mix(in srgb, var(--bg) 55%, transparent);
-		cursor: default;
-	}
-	.palette {
-		position: relative;
+	:global(.palette) {
+		top: 10vh;
+		left: 50%;
+		transform: translateX(-50%);
 		width: min(680px, 92vw);
-		background: var(--bg-raised);
-		border: 1px solid var(--border);
-		border-radius: var(--radius);
-		box-shadow: var(--shadow-pop);
 		overflow: hidden;
 	}
 	.search {
@@ -413,21 +319,25 @@
 		border-bottom: 1px solid var(--border);
 		color: var(--text-faint);
 	}
-	input {
+	:global(.palette-search-input) {
 		flex: 1;
-		border: none;
+		min-width: 0;
+		min-height: 0;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
 		background: transparent;
 		color: var(--text);
 		font: inherit;
 		font-size: 15px;
-		padding: 0;
 		outline: none;
 	}
-	input::placeholder {
+	:global(.palette-search-input::placeholder) {
 		color: var(--text-faint);
 	}
-	input:focus-visible {
+	:global(.palette-search-input:focus-visible) {
 		box-shadow: none;
+		border-color: transparent;
 	}
 	.filters {
 		display: flex;
@@ -436,19 +346,23 @@
 		padding: 7px 10px;
 		border-bottom: 1px solid var(--border);
 	}
-	.filter {
+	.filters :global(.filter) {
+		height: auto;
+		min-height: 0;
+		justify-content: flex-start;
 		padding: 5px 10px;
 		border-radius: 5px;
+		background: transparent;
 		color: var(--text-faint);
 		font-size: var(--fs-sm);
 		white-space: nowrap;
 		transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 	}
-	.filter:hover {
+	.filters :global(.filter:hover) {
 		color: var(--text);
 		background: var(--bg-inset);
 	}
-	.filter.active {
+	.filters :global(.filter.active) {
 		background: var(--bg-inset);
 		color: var(--text);
 		font-weight: 600;
@@ -460,7 +374,7 @@
 		max-height: 52vh;
 		overflow-y: auto;
 	}
-	li.sel .search-result {
+	li.sel :global(.search-result) {
 		background: color-mix(in srgb, var(--brand) 8%, var(--bg-inset));
 	}
 	.hint {
@@ -483,29 +397,24 @@
 		font-weight: 650;
 		letter-spacing: 0.02em;
 	}
-	.search-result {
+	ul li :global(.search-result) {
 		width: 100%;
 		display: flex;
 		align-items: center;
-		gap: 10px;
+		justify-content: flex-start;
+		gap: 0;
 		min-height: 42px;
+		height: auto;
+		white-space: normal;
 		padding: 6px 10px;
 		border-radius: 6px;
+		background: transparent;
+		color: var(--text);
 		text-align: left;
 		transition: background var(--dur-fast) var(--ease);
 	}
-	.search-result:hover {
+	ul li :global(.search-result:hover) {
 		background: var(--bg-inset);
-	}
-	.result-icon {
-		display: grid;
-		place-items: center;
-		width: 24px;
-		height: 24px;
-		flex: none;
-		border-radius: var(--radius-chip);
-		background: transparent;
-		color: var(--text-faint);
 	}
 	.result-copy {
 		min-width: 0;

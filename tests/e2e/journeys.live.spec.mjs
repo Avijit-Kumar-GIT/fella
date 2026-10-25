@@ -88,7 +88,7 @@ async function loadTasks(suiteDir) {
 }
 
 async function expandAnalysisDetails(assistant) {
-	const disclosure = assistant.getByRole('button', { name: 'Analysis details', exact: true });
+	const disclosure = assistant.getByRole('button', { name: 'How this was analyzed', exact: true });
 	if (await disclosure.count() === 0) return { available: false, text: '', steps: [] };
 	if (await disclosure.getAttribute('aria-expanded') !== 'true') await disclosure.click();
 	const body = assistant.locator('.evidence-body');

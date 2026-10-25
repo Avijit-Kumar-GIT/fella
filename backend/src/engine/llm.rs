@@ -65,9 +65,20 @@ fn model_num_ctx() -> u32 {
 /// logs a warning when the estimate still crowds that ceiling.
 /// ponytail: chars/4, swap for a real tokenizer only if the clamp/warn misfires.
 fn fit_num_ctx(messages_json: &Json, tools_json: Option<&Json>) -> u32 {
+    let presentation = tools_json
+        .and_then(Json::as_array)
+        .is_some_and(|tools| json_tools_need_presentation_budget(tools));
+    fit_num_ctx_with_output_budget(messages_json, tools_json, output_token_budget(presentation))
+}
+
+fn fit_num_ctx_with_output_budget(
+    messages_json: &Json,
+    tools_json: Option<&Json>,
+    output_tokens: u32,
+) -> u32 {
     let len = |v: &Json| serde_json::to_string(v).map(|s| s.len()).unwrap_or(0);
     let approx_tok = ((len(messages_json) + tools_json.map(len).unwrap_or(0)) / 4) as u32;
-    ((approx_tok * 5 / 4) + max_output_tokens())
+    ((approx_tok * 5 / 4) + output_tokens)
         .next_multiple_of(2048)
         .clamp(model_num_ctx(), 32768)
 }
@@ -82,6 +93,59 @@ fn max_output_tokens() -> u32 {
         .and_then(|v| v.parse().ok())
         .filter(|&n: &u32| n >= 64)
         .unwrap_or(1024)
+}
+
+/// A generated presentation is a complete JSON tree rather than a short tool
+/// argument. Keep ordinary calls unchanged, but reserve enough output budget
+/// for the final answer spec.
+fn is_presentation_output_tool(name: &str) -> bool {
+    matches!(name, "fella_presentation_answer")
+}
+
+fn presentation_output_needs_large_budget(description: &str) -> bool {
+    const BINDINGS_MARKER: &str = "Available result bindings";
+    let Some((_, bindings_text)) = description.split_once(BINDINGS_MARKER) else {
+        // Keep the conservative behavior for callers that provide a custom
+        // finalizer schema without Fella's result-binding catalog.
+        return true;
+    };
+    let Some(start) = bindings_text.find('[') else {
+        return true;
+    };
+    let Some(end) = bindings_text.rfind(']') else {
+        return true;
+    };
+    serde_json::from_str::<Vec<Json>>(&bindings_text[start..=end])
+        .map(|bindings| !bindings.is_empty())
+        .unwrap_or(true)
+}
+
+fn output_token_budget(presentation: bool) -> u32 {
+    let configured = max_output_tokens();
+    if presentation {
+        configured.max(8192)
+    } else {
+        configured
+    }
+}
+
+fn request_output_tokens(tools: &[ToolSchema]) -> u32 {
+    output_token_budget(tools.iter().any(|tool| {
+        is_presentation_output_tool(&tool.name)
+            && presentation_output_needs_large_budget(&tool.description)
+    }))
+}
+
+fn json_tools_need_presentation_budget(tools: &[Json]) -> bool {
+    tools.iter().any(|tool| {
+        let function = &tool["function"];
+        function["name"]
+            .as_str()
+            .is_some_and(is_presentation_output_tool)
+            && presentation_output_needs_large_budget(
+                function["description"].as_str().unwrap_or_default(),
+            )
+    })
 }
 
 /// Whether to let a reasoning model (gpt-oss, deepseek-r1, qwen3, …) emit its
@@ -277,9 +341,50 @@ impl LlmClient {
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
         if self.is_openai() {
-            self.chat_openai(messages, tools, on_retry, on_delta).await
+            self.chat_openai(messages, tools, None, on_retry, on_delta)
+                .await
         } else {
-            self.chat_ollama(messages, tools, on_retry, on_delta).await
+            self.chat_ollama(messages, tools, None, on_retry, on_delta)
+                .await
+        }
+    }
+
+    /// Ask for one schema-constrained JSON response after a model ignores its
+    /// finalizer tool. This is a recovery path for providers such as Ollama
+    /// whose native chat endpoint does not support forcing a tool call.
+    pub async fn chat_structured(
+        &self,
+        messages: &[ChatMessage],
+        schema: &Json,
+        on_retry: RetryNotify<'_>,
+        on_delta: RetryNotify<'_>,
+    ) -> EngineResult<ChatResponse> {
+        if self.is_openai() {
+            self.chat_openai(messages, &[], Some(schema), on_retry, on_delta)
+                .await
+        } else {
+            self.chat_ollama(messages, &[], Some(schema), on_retry, on_delta)
+                .await
+        }
+    }
+
+    /// Ask for a JSON object without provider-specific schema features. The
+    /// caller still validates it against Fella's complete local catalog; this
+    /// is a compatibility recovery for models that ignore or reject schemas.
+    pub async fn chat_json(
+        &self,
+        messages: &[ChatMessage],
+        on_retry: RetryNotify<'_>,
+        on_delta: RetryNotify<'_>,
+    ) -> EngineResult<ChatResponse> {
+        if self.is_openai() {
+            let json_object = json!({ "type": "json_object" });
+            self.chat_openai(messages, &[], Some(&json_object), on_retry, on_delta)
+                .await
+        } else {
+            let json_format = json!("json");
+            self.chat_ollama(messages, &[], Some(&json_format), on_retry, on_delta)
+                .await
         }
     }
 
@@ -421,6 +526,7 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        structured_schema: Option<&Json>,
         on_retry: RetryNotify<'_>,
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
@@ -430,8 +536,15 @@ impl LlmClient {
             (!tools.is_empty()).then(|| Json::Array(tools.iter().map(tool_schema_json).collect()));
         // `FELLA_MODEL_NUM_CTX_FIXED` pins num_ctx to the floor (no growth) so
         // the eval harness can measure fixed-vs-adaptive on a big workspace.
+        let output_tokens = if structured_schema.is_some() {
+            output_token_budget(true)
+        } else {
+            request_output_tokens(tools)
+        };
         let num_ctx = if std::env::var_os("FELLA_MODEL_NUM_CTX_FIXED").is_some() {
             model_num_ctx()
+        } else if structured_schema.is_some() {
+            fit_num_ctx_with_output_budget(&messages_json, tools_json.as_ref(), output_tokens)
         } else {
             fit_num_ctx(&messages_json, tools_json.as_ref())
         };
@@ -450,11 +563,14 @@ impl LlmClient {
             "options": {
                 "temperature": 0.2,
                 "num_ctx": num_ctx,
-                "num_predict": max_output_tokens(),
+                "num_predict": output_tokens,
             },
         });
         if let Some(t) = tools_json {
             body["tools"] = t;
+        }
+        if let Some(schema) = structured_schema {
+            body["format"] = schema.clone();
         }
 
         let v = self.send_stream(&url, &body, on_retry, on_delta).await?;
@@ -474,6 +590,7 @@ impl LlmClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolSchema],
+        structured_schema: Option<&Json>,
         on_retry: RetryNotify<'_>,
         on_delta: RetryNotify<'_>,
     ) -> EngineResult<ChatResponse> {
@@ -491,7 +608,7 @@ impl LlmClient {
             // reasoning tokens count against this budget, so the usual 1024
             // cap would starve the visible answer; floor it at 8192 so the
             // runaway guard stays without clipping normal replies.
-            body["max_completion_tokens"] = json!(max_output_tokens().max(8192));
+            body["max_completion_tokens"] = json!(request_output_tokens(tools).max(8192));
             if openai_gpt5_family(&self.model) {
                 // Its default `reasoning_effort` is rejected alongside function
                 // tools here; `"none"` is the fast, trace-free path Fella wants.
@@ -499,10 +616,31 @@ impl LlmClient {
             }
         } else {
             body["temperature"] = json!(0.2);
-            body["max_tokens"] = json!(max_output_tokens());
+            body["max_tokens"] = json!(request_output_tokens(tools));
         }
         if !tools.is_empty() {
             body["tools"] = Json::Array(tools.iter().map(tool_schema_json).collect());
+        }
+        if let Some(schema) = structured_schema {
+            body["response_format"] = if schema["type"].as_str() == Some("json_object") {
+                schema.clone()
+            } else {
+                json!({
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "fella_presentation_answer",
+                        "strict": false,
+                        "schema": schema,
+                    }
+                })
+            };
+        }
+        if structured_schema.is_some() {
+            if openai_reasoning_model(&self.model) {
+                body["max_completion_tokens"] = json!(output_token_budget(true).max(8192));
+            } else {
+                body["max_tokens"] = json!(output_token_budget(true));
+            }
         }
 
         // Stream so the text appears token by token like the Ollama path.
@@ -1133,6 +1271,43 @@ mod tests {
         assert!(got > 8192, "should grow past the floor, got {got}");
         assert_eq!(got % 2048, 0, "should land on a 2048 boundary, got {got}");
         assert!(got <= 32768, "should be clamped at 32k, got {got}");
+    }
+
+    #[test]
+    fn presentation_output_budget_is_scoped_to_the_finalizer_tool() {
+        let schema = |name: &str| ToolSchema {
+            name: name.into(),
+            description: String::new(),
+            parameters: json!({"type": "object"}),
+        };
+        let ordinary = max_output_tokens();
+        assert_eq!(request_output_tokens(&[]), ordinary);
+        assert_eq!(request_output_tokens(&[schema("run_sql")]), ordinary);
+        assert_eq!(
+            request_output_tokens(&[schema("my_fella_presentation_answer")]),
+            ordinary
+        );
+        assert_eq!(
+            request_output_tokens(&[schema("fella_presentation_answer")]),
+            ordinary.max(8192)
+        );
+    }
+
+    #[test]
+    fn presentation_context_fit_reserves_the_larger_output_budget() {
+        let messages = json!([{"role": "user", "content": "saved results".repeat(1000)}]);
+        let tool = ToolSchema {
+            name: "fella_presentation_answer".into(),
+            description: String::new(),
+            parameters: json!({"type": "object"}),
+        };
+        let tools = json!([tool_schema_json(&tool)]);
+        let approx = ((messages.to_string().len() + tools.to_string().len()) / 4) as u32;
+        let expected = ((approx * 5 / 4) + request_output_tokens(&[tool]))
+            .next_multiple_of(2048)
+            .clamp(model_num_ctx(), 32768);
+        assert_eq!(fit_num_ctx(&messages, Some(&tools)), expected);
+        assert!(fit_num_ctx(&messages, Some(&tools)) >= fit_num_ctx(&messages, None));
     }
 
     #[test]
