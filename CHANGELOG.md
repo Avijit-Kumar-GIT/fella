@@ -6,6 +6,30 @@ All notable changes to Fella are recorded here. Format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-25
+
+### Added
+
+- Persistent, named Investigations linked to their conversations, with briefs,
+  source choices, ordered Questions, recorded runs, Findings, and Results.
+- JSON-render analytical answers that can combine narrative, metrics, tables,
+  charts, callouts, and supported controls bound to saved analytical results.
+- Reusable analytical artifacts with revision comparisons and reports that can
+  export portable Markdown and Fella snapshots.
+
+### Changed
+
+- Reorganized the desktop workspace around Chat, Files, Reports, and a
+  responsive Notebook for Investigation work.
+- Saved analytical outputs retain their supporting analysis when a conversation
+  is deleted. Presentation failures leave the canonical answer available as
+  text.
+
+### Removed
+
+- OpenUI presentation paths and the terminal pane; JSON-render is the structured
+  answer renderer.
+
 ## [0.3.0] - 2026-10-07
 
 ### Added
@@ -385,7 +409,8 @@ folder of your own files with deterministic SQL / Python, and shows its working.
 - The hosted pack browser isn't live yet: `/packs add <path>` works offline, and
   `/packs install <id>` pulls from a small seed catalog.
 
-[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.5...v0.2.0
 [0.1.5]: https://github.com/Avijit-Kumar-GIT/fella/compare/v0.1.4...v0.1.5
