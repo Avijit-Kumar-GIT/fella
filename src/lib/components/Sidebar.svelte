@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ipc, isDesktop } from '$lib/ipc';
-	import { errMsg, openConversation, openRepository, openFolder } from '$lib/commands';
+	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
 	import type { StudioDocument } from '$lib/analytics-artifacts';
 	import { Button } from '$lib/components/ui/button';
@@ -330,7 +330,7 @@
 									<Input class="rename-input" bind:ref={renameInput} bind:value={renameValue} onkeydown={(e) => { if (e.key === 'Enter') commitRename(c); else if (e.key === 'Escape') renamingId = null; }} onblur={() => commitRename(c)} aria-label="Rename conversation" />
 								{:else}
 									<Button variant="ghost" class={session.conversationId === c.id ? 'conversation-row active' : 'conversation-row'} type="button" onclick={() => void open(c, group.label === 'Investigations')} title={title(c)} aria-label={`Open conversation: ${title(c)}`} aria-current={session.conversationId === c.id ? 'page' : undefined}>
-										<span class="conversation-copy"><span class="conversation-title-line"><strong>{title(c)}</strong>{#if session.conversationId === c.id}<Icon name="pencil" size={11} />{/if}</span><small>{subtitle(c)}</small></span>
+										<span class="conversation-copy"><strong>{title(c)}</strong><small>{subtitle(c)}</small></span>
 									</Button>
 									<div class="row-actions">
 										<Button variant="ghost" size="icon" class="ren" type="button" aria-label="Rename conversation" onclick={(e) => startRename(c, e)}><Icon name="pencil" size={14} /></Button>
@@ -377,8 +377,6 @@
 				</section>
 			{/if}
 			<div class="sidebar-footer">
-				<span class="local-profile" title="Local profile"><Icon name="user" size={16} /></span>
-				<Button variant="ghost" class="add-folder-button" type="button" onclick={() => void openFolder()}><Icon name="plus" size={13} />Add sources</Button>
 				<Button variant="ghost" size="icon" class={`settings-button${session.workspaceView === 'settings' ? ' active' : ''}`} title={`Settings (${shortcutModifier}+,)`} aria-label="Settings" aria-keyshortcuts="Control+Comma Meta+Comma" aria-current={session.workspaceView === 'settings' ? 'page' : undefined} onclick={() => session.setWorkspaceView('settings')}><Icon name="settings" size={15} /></Button>
 			</div>
 	</aside>
@@ -435,7 +433,7 @@
 	:global(.identity-menu-trigger) { position:absolute; right:12px; opacity:0; display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
 	.workspace-identity:hover :global(.identity-menu-trigger), :global(.identity-menu-trigger:focus-visible), :global(.identity-menu-trigger[data-state='open']) { opacity:1; }
 	.sidebar-mode-switch { flex:none; display:flex; width:calc(100% - 24px); gap:0; margin:16px 12px 0; padding:4px; }
-	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:30px; height:30px; padding:0 6px; font-size:12.5px; font-weight:400; }
+	.sidebar :global(.sidebar-mode-option) { flex:1 1 0; justify-content:center; min-width:0; min-height:30px; height:30px; padding:0 6px; border-radius:999px; font-size:12.5px; font-weight:400; }
 	.repository-section { display:flex; flex:1; flex-direction:column; min-height:0; overflow-y:auto; scrollbar-width:thin; padding:0 12px; margin-top:20px; }
 	.conversation-group + .conversation-group { margin-top:20px; }
 	.section-head { display:flex; align-items:center; gap:8px; min-height:23px; padding:0 8px 6px; }
@@ -449,7 +447,6 @@
 	.sidebar :global(.conversation-row:hover), :global(.report-row:hover), .folder-row:hover { background:var(--bg-raised); color:var(--text); }
 	.sidebar :global(.conversation-row.active), :global(.report-row.active) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
 	.conversation-copy, .report-copy { display:grid; min-width:0; flex:1; gap:0; text-align:left; }
-	.conversation-title-line { display:flex; min-width:0; align-items:center; gap:6px; }
 	.conversation-copy strong, .report-copy strong { overflow:hidden; color:var(--text); font-size:13px; font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
 	.conversation-copy small, .report-copy small { display:block; overflow:hidden; color:var(--text-dim); font-size:var(--fs-xs); font-weight:400; line-height:1.35; text-overflow:ellipsis; white-space:nowrap; }
 	.row-actions { position:absolute; top:11px; right:5px; display:none; gap:1px; padding-left:3px; background:var(--bg-raised-2, var(--bg-inset)); border-radius:var(--radius-sm); }
@@ -468,15 +465,10 @@
 	.catalog-warning strong { color:var(--text-dim); font-size:var(--fs-xs); font-weight:500; }
 	.catalog-warning small { color:var(--text-faint); font-size:11px; line-height:1.45; }
 	:global(.report-row) { min-height:50px; }
-	.sidebar-footer { display:flex; align-items:center; gap:12px; padding:12px; margin-top:auto; }
-	:global(.add-folder-button) { display:flex; flex:1; justify-content:center; min-width:0; min-height:38px; gap:8px; border:1px solid var(--border); border-radius:999px; background:var(--bg-raised); color:var(--text-dim); font-size:var(--fs-xs); }
-	:global(.add-folder-button:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
+	.sidebar-footer { display:flex; align-items:center; justify-content:flex-end; gap:12px; padding:12px; margin-top:auto; }
 	:global(.settings-button) { display:grid; width:15px; min-width:15px; height:32px; flex:none; place-items:center; border-radius:999px; color:var(--text-faint); }
 	:global(.settings-button:hover), :global(.settings-button.active) { background:var(--bg-raised); color:var(--text); }
 	:global(.collapse-btn) { background:transparent !important; width:14px !important; min-width:14px !important; padding:0 !important; }
-	.conversation-title-line :global(svg) { flex:none; color:var(--text-faint); }
-	.item-wrap:hover .conversation-title-line > :global(svg), .item-wrap:focus-within .conversation-title-line > :global(svg) { opacity:0; }
-	.local-profile { display:grid; width:32px; height:32px; flex:none; place-items:center; border-radius:50%; background:var(--brand); color:var(--on-brand); }
 
 	:global(.workspace-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
 	:global(.conversation-delete-dialog) { width:min(420px,calc(100vw - 32px)); display:grid; gap:18px; padding:22px; }
