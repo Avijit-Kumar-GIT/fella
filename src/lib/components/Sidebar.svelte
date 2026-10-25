@@ -293,8 +293,8 @@
 
 	<aside class="sidebar">
 			<div class="header">
+				<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={14} /></Button>
 				<div class="header-actions">
-					<Button variant="ghost" size="icon" class="icon-btn collapse-btn" type="button" aria-label="Collapse sidebar" title={`Collapse sidebar (${shortcutModifier}+B)`} onclick={() => session.toggleSidebar()}><Icon name="panel" size={14} /></Button>
 					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="Search" title={`Search (${shortcutModifier}+K)`} aria-keyshortcuts="Control+K Meta+K" aria-haspopup="dialog" onclick={() => onsearch?.()}><Icon name="search" size={14} /></Button>
 					<Button variant="ghost" size="icon" class="icon-btn" type="button" aria-label="New conversation" title={`New conversation (${shortcutModifier}+Shift+A)`} aria-keyshortcuts="Control+Shift+A Meta+Shift+A" onclick={newChat}><Icon name="plus" size={15} /></Button>
 				</div>
@@ -427,8 +427,8 @@
 	.sidebar { display:flex; flex-direction:column; flex:none; width:268px; min-width:268px; max-width:268px; height:100%; padding:0; background:var(--sidebar-surface); border-right:1px solid var(--border); }
 	.header { display:flex; align-items:center; justify-content:space-between; flex:none; height:48px; padding:16px 16px 0; -webkit-app-region:drag; }
 	.header-actions { display:flex; align-items:center; gap:8px; -webkit-app-region:no-drag; }
-	.header-actions :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:32px; height:32px; min-height:32px; padding:0; border:0; border-radius:999px; background:var(--bg-raised-2); color:var(--text-dim); cursor:pointer; }
-	.header-actions :global(.icon-btn:hover), :global(.section-action:hover), :global(.identity-menu-trigger:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
+	.header :global(.icon-btn), :global(.section-action) { display:grid; place-items:center; width:32px; height:32px; min-height:32px; padding:0; border:0; border-radius:999px; background:var(--bg-raised-2); color:var(--text-dim); cursor:pointer; -webkit-app-region:no-drag; }
+	.header :global(.icon-btn:hover), :global(.section-action:hover), :global(.identity-menu-trigger:hover) { background:var(--bg-raised-2, var(--bg-inset)); color:var(--text); }
 	.workspace-identity { position:relative; display:flex; min-width:0; align-items:center; gap:8px; margin-top:24px; padding:0 16px; }
 	:global(.identity-menu-trigger) { position:absolute; right:12px; opacity:0; display:grid; width:28px; height:28px; flex:none; place-items:center; border:0; border-radius:999px; background:transparent; color:var(--text-faint); cursor:pointer; }
 	.workspace-identity:hover :global(.identity-menu-trigger), :global(.identity-menu-trigger:focus-visible), :global(.identity-menu-trigger[data-state='open']) { opacity:1; }
