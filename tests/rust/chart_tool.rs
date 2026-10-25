@@ -92,6 +92,7 @@ async fn make_chart_reuses_a_python_result_without_rerunning_or_copying_source_r
         python_queries_complete: result.python_queries_complete,
         ms: 0,
         error: None,
+        error_kind: None,
         verifier_disposition: None,
     };
     let prior = [source];
@@ -200,6 +201,7 @@ async fn make_chart_rejects_inspection_samples_as_incomplete_chart_sources() {
         python_queries_complete: None,
         ms: 0,
         error: None,
+        error_kind: None,
         verifier_disposition: None,
     };
     let prior = [inspection];

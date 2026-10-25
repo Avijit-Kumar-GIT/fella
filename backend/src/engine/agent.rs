@@ -20,7 +20,7 @@ use crate::engine::runtime::{
     ModelCallTrace, PlanStrategy, ResolvedClarification, TraceStep, TurnState,
 };
 use crate::engine::state::EngineState;
-use crate::engine::tools::{Registry, ToolOutput};
+use crate::engine::tools::{Registry, ToolContext, ToolOutput};
 use crate::engine::{friction, planner, risk, Catalog};
 
 /// Hard cap on tool-calling iterations per question, before the loop forces
@@ -107,7 +107,7 @@ fn presentation_bindings(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
                 "tool": item.tool,
                 "columns": columns,
                 "row_count": item.row_count.unwrap_or(rows.len()),
-                "complete": item.row_count.map_or(true, |count| count == rows.len())
+                "complete": item.row_count.is_none_or(|count| count == rows.len())
             }))
         })
         .collect()
@@ -321,7 +321,7 @@ fn presentation_sample(evidence: &[EvidenceItem]) -> Vec<serde_json::Value> {
                 "tool": item.tool,
                 "columns": columns,
                 "row_count": item.row_count.unwrap_or(rows.len()),
-                "complete": item.row_count.map_or(true, |count| count == rows.len()),
+                "complete": item.row_count.is_none_or(|count| count == rows.len()),
                 "sample_rows": rows.iter().take(24).collect::<Vec<_>>()
             }))
         })
@@ -506,15 +506,19 @@ fn question_needs_time_chart(question: &str, evidence: &[EvidenceItem]) -> bool 
         })
 }
 
+struct PresentationRunContext<'a> {
+    ids: &'a mut RunIds,
+    usage: &'a mut Option<Usage>,
+    cancel: &'a AtomicBool,
+}
+
 async fn ensure_presentation(
     llm: &LlmClient,
     question: &str,
     answer: &str,
     evidence: &[EvidenceItem],
     current_spec: Option<&serde_json::Value>,
-    ids: &mut RunIds,
-    usage: &mut Option<Usage>,
-    cancel: &AtomicBool,
+    run: &mut PresentationRunContext<'_>,
 ) -> Option<serde_json::Value> {
     let current_is_valid = current_spec.is_some_and(|spec| {
         validate_presentation_shape(spec).is_ok()
@@ -525,8 +529,10 @@ async fn ensure_presentation(
         && (!current_is_valid
             || chart_required && !current_spec.is_some_and(presentation_has_chart));
     if needs_composition {
-        if let Some(spec) =
-            compose_presentation(llm, question, answer, evidence, ids, usage, cancel).await
+        if let Some(spec) = compose_presentation(
+            llm, question, answer, evidence, run.ids, run.usage, run.cancel,
+        )
+        .await
         {
             return Some(spec);
         }
@@ -578,7 +584,7 @@ async fn compose_presentation(
     };
     match first {
         Ok(response) => {
-            record_model_call(ids, started, true, response.usage.clone());
+            record_model_call(ids, started, true, response.usage);
             *usage = Usage::merge(usage.take(), response.usage);
             let require_chart = question_needs_time_chart(question, evidence);
             match parse_structured_presentation(&response.content)
@@ -613,7 +619,7 @@ async fn compose_presentation(
         },
         _ = cancelled(cancel) => return None,
     };
-    record_model_call(ids, retry_started, true, response.usage.clone());
+    record_model_call(ids, retry_started, true, response.usage);
     *usage = Usage::merge(usage.take(), response.usage);
     let require_chart = question_needs_time_chart(question, evidence);
     match parse_structured_presentation(&response.content)
@@ -1404,15 +1410,18 @@ the requested measure, filters, and scope. State just the number(s); don't round
                 }
             }
             let presentation_spec = if profile.presentation_rule {
+                let mut run = PresentationRunContext {
+                    ids: &mut ids,
+                    usage: &mut usage,
+                    cancel: cancel.as_ref(),
+                };
                 ensure_presentation(
                     llm,
                     question,
                     &text,
                     &evidence,
                     presentation_final.as_ref().map(|answer| &answer.spec),
-                    &mut ids,
-                    &mut usage,
-                    cancel.as_ref(),
+                    &mut run,
                 )
                 .await
             } else {
@@ -1677,14 +1686,17 @@ the requested measure, filters, and scope. State just the number(s); don't round
                     tool: planned_call.name.clone(),
                     args: args.clone(),
                 });
+                let tool_context = ToolContext {
+                    prior_evidence: &evidence,
+                    conversation_id: Some(&ids.conversation_id),
+                    source_selection,
+                };
                 let (mut item, result) = run_tool_call(
                     engine,
                     &catalog,
                     registry,
-                    &ids.conversation_id,
                     &planned_call,
-                    &evidence,
-                    source_selection,
+                    &tool_context,
                     cancel.clone(),
                 )
                 .await;
@@ -1787,15 +1799,18 @@ run again. Use the previous result, refine the call, or answer now.\n\n{prev}",
 
         tool_calls_total += pending.len();
 
+        let tool_context = ToolContext {
+            prior_evidence: &evidence,
+            conversation_id: Some(&ids.conversation_id),
+            source_selection,
+        };
         let ran = futures_util::future::join_all(pending.iter().map(|&i| {
             run_tool_call(
                 engine,
                 &catalog,
                 registry,
-                &ids.conversation_id,
                 &resp.tool_calls[i],
-                &evidence,
-                source_selection,
+                &tool_context,
                 cancel.clone(),
             )
         }))
@@ -2005,15 +2020,18 @@ not confident, say so plainly rather than guessing."
         ids.grounding.as_ref(),
     );
     let presentation_spec = if profile.presentation_rule {
+        let mut run = PresentationRunContext {
+            ids: &mut ids,
+            usage: &mut usage,
+            cancel: cancel.as_ref(),
+        };
         ensure_presentation(
             llm,
             question,
             &text,
             &evidence,
             final_output.as_ref().map(|answer| &answer.spec),
-            &mut ids,
-            &mut usage,
-            cancel.as_ref(),
+            &mut run,
         )
         .await
     } else {
@@ -2445,10 +2463,8 @@ async fn run_tool_call(
     engine: &EngineState,
     catalog: &Catalog,
     registry: &Registry,
-    conversation_id: &str,
     call: &ToolCall,
-    prior_evidence: &[EvidenceItem],
-    source_selection: Option<&InvestigationSourceSelection>,
+    tool_context: &ToolContext<'_>,
     cancel: Arc<AtomicBool>,
 ) -> (EvidenceItem, String) {
     let started = Instant::now();
@@ -2461,13 +2477,8 @@ async fn run_tool_call(
             Some("workspace_stale"),
         );
     }
-    let tool_context = crate::engine::tools::ToolContext {
-        prior_evidence,
-        conversation_id: Some(conversation_id),
-        source_selection,
-    };
     let result = registry
-        .run_with_context_cancel(engine, &call.name, &call.arguments, &tool_context, cancel)
+        .run_with_context_cancel(engine, &call.name, &call.arguments, tool_context, cancel)
         .await;
     if !catalog_matches(engine, catalog) {
         return tool_error(
@@ -2481,9 +2492,13 @@ async fn run_tool_call(
     match result {
         Some(Ok(out)) => {
             let mut sources = out.sources.clone();
-            for source in
-                tool_operation_sources(catalog, &call.name, &call.arguments, &out, source_selection)
-            {
+            for source in tool_operation_sources(
+                catalog,
+                &call.name,
+                &call.arguments,
+                &out,
+                tool_context.source_selection,
+            ) {
                 if !sources.contains(&source) {
                     sources.push(source);
                 }
@@ -2514,7 +2529,11 @@ async fn run_tool_call(
                 .and_then(|chart| chart.metadata.as_ref())
                 .and_then(|metadata| metadata.source_evidence_id.as_deref())
             {
-                if let Some(source) = prior_evidence.iter().find(|item| item.id == source_id) {
+                if let Some(source) = tool_context
+                    .prior_evidence
+                    .iter()
+                    .find(|item| item.id == source_id)
+                {
                     for source in &source.sources {
                         if !sources.contains(source) {
                             sources.push(source.clone());

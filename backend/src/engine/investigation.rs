@@ -4070,7 +4070,7 @@ mod tests {
             }))
             .unwrap();
         crate::engine::analysis_store::create(&data_dir, &turn).unwrap();
-        link_analysis_turns(&data_dir, &created.id, &[turn.id.clone()]).unwrap();
+        link_analysis_turns(&data_dir, &created.id, std::slice::from_ref(&turn.id)).unwrap();
 
         let saved = create_finding(
             &data_dir,
