@@ -2,6 +2,13 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
+
+const devRootKey = createHash('sha256')
+	.update(resolve(process.cwd()).replaceAll('\\', '/').toLowerCase())
+	.digest('hex')
+	.slice(0, 16);
 
 // @sveltejs/kit in this version takes adapter/config through the plugin options
 // rather than a separate svelte.config.js.
@@ -18,14 +25,15 @@ export default defineConfig({
 			adapter: adapter({
 				pages: 'build',
 				assets: 'build',
-				fallback: 'index.html',
+				fallback: 'fella-fallback.html',
 				precompress: false,
 				strict: true
 			})
 		})
 	],
 
-	// Electron development uses the same stable Vite port in electron/dev.mjs.
+	// Electron development prefers port 1420 and selects a nearby free port if
+	// another process already owns it.
 	clearScreen: false,
 	// These dependencies are reached through lazy Svelte panes and renderers.
 	// Pre-bundling the known set together avoids several successive optimizer
@@ -50,8 +58,9 @@ export default defineConfig({
 	},
 	server: {
 		host: '127.0.0.1',
-		port: 1420,
+		port: Number(process.env.FELLA_VITE_PORT ?? 1420),
 		strictPort: true,
+		headers: { 'X-Fella-Dev-Root': devRootKey },
 		watch: {
 			// Rust changes are rebuilt by Cargo, not Vite.
 			ignored: ['**/backend/**']

@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, scree
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { EngineClient, assertBinary, isRegularFile } from './engine.mjs';
 import { checkAndApply } from './update.mjs';
@@ -12,6 +12,18 @@ const root = resolve(here, '..');
 let engine;
 let isQuitting = false;
 app.setName('Fella');
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+if (!hasSingleInstanceLock) {
+	app.quit();
+} else {
+	app.on('second-instance', () => {
+		const window = BrowserWindow.getAllWindows()[0];
+		if (!window) return;
+		if (window.isMinimized()) window.restore();
+		if (!window.isVisible()) window.show();
+		window.focus();
+	});
+}
 
 protocol.registerSchemesAsPrivileged([
 	{
@@ -197,8 +209,12 @@ async function waitForDevServer(url, timeoutMs = 15000) {
 	while (Date.now() < deadline) {
 		try {
 			const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(1000) });
-			if (response.ok || response.status < 500) return;
-			lastError = new Error(`development server returned HTTP ${response.status}`);
+			const expectedRoot = process.env.FELLA_DEV_ROOT_KEY;
+			if ((response.ok || response.status < 500)
+				&& (!expectedRoot || response.headers.get('x-fella-dev-root') === expectedRoot)) return;
+			lastError = expectedRoot
+				? new Error('the response is not from this Fella checkout')
+				: new Error(`development server returned HTTP ${response.status}`);
 		} catch (error) {
 			lastError = error;
 		}
@@ -306,6 +322,7 @@ function isTrustedAppFrame(event) {
 }
 
 app.whenReady().then(() => {
+	if (!hasSingleInstanceLock) return;
 	installApplicationMenu();
 	const buildRoot = app.isPackaged
 		? resolve(app.getAppPath(), 'build')
@@ -321,6 +338,16 @@ app.whenReady().then(() => {
 			const body = await readFile(target);
 			return new Response(body, { headers: { 'Content-Type': contentType(target) } });
 		} catch (error) {
+			if (error?.code === 'ENOENT' && extname(relativeTarget) === '') {
+				try {
+					const fallback = join(buildRoot, 'fella-fallback.html');
+					return new Response(await readFile(fallback), {
+						headers: { 'Content-Type': 'text/html; charset=utf-8' }
+					});
+				} catch (fallbackError) {
+					console.error(`Fella fallback asset not found: ${buildRoot}`, fallbackError);
+				}
+			}
 			console.error(`Fella asset not found: ${target}`, error);
 			return new Response('Not Found', { status: 404 });
 		}
