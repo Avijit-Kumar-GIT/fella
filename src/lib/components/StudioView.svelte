@@ -79,6 +79,7 @@
 
 	function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 	function message(cause: unknown): string { return cause instanceof Error ? cause.message : String(cause); }
+	function sourceLabel(path: string): string { return path.replace(/[/\\]+$/, '').split(/[/\\]/).at(-1) || 'Mounted folder'; }
 	function documentKey(root: string, id: string): string { return JSON.stringify([root, id]); }
 	function resultKey(root: string, placement: Pick<StudioPlacement, 'artifact_id' | 'revision'>): string { return JSON.stringify([root, placement.artifact_id, placement.revision]); }
 	function makeDraft(document: StudioDocument): Draft {
@@ -138,8 +139,8 @@
 		if (resolved[key] && !force) return;
 		if (resolving.has(key)) return resolving.get(key);
 		resolveErrors = { ...resolveErrors, [key]: '' };
-		const task = ipc.artifactResolve(root, placement.artifact_id, placement.revision).then(value => {
-			if (value.artifact.workspace !== root || value.artifact.id !== placement.artifact_id || value.revision.revision !== placement.revision) throw new Error('The saved output does not match this workspace and pinned revision.');
+		const task = ipc.artifactResolveSaved(placement.artifact_id, placement.revision).then(value => {
+			if (value.artifact.id !== placement.artifact_id || value.revision.revision !== placement.revision) throw new Error('The saved output does not match its pinned revision.');
 			if (!disposed) resolved = { ...resolved, [key]: value };
 		}).catch(cause => {
 			if (!disposed) resolveErrors = { ...resolveErrors, [key]: message(cause) };
@@ -150,7 +151,7 @@
 
 	async function refreshOutputs(root: string): Promise<void> {
 		try {
-			const available = await ipc.artifactList(root);
+			const available = await ipc.artifactListForReports();
 			if (!disposed && workspace === root) { artifacts = available; listError = ''; }
 		} catch (cause) { if (!disposed && workspace === root) listError = message(cause); }
 	}
@@ -169,7 +170,7 @@
 			let document = id ? available.find(item => item.id === id) : available[0];
 			if (id && !document) throw new Error('This report is no longer available in the selected workspace.');
 			if (!document && artifactId) {
-				const output = await ipc.artifactResolve(root, artifactId);
+				const output = await ipc.artifactResolveSaved(artifactId);
 				if (disposed || request !== navigation) return;
 				document = await ipc.studioCreate(root, output.artifact.title);
 				if (disposed || request !== navigation) return;
@@ -204,7 +205,7 @@
 		initialRequests.add(key);
 		try {
 			if (target.placements.some(placement => placement.artifact_id === id)) return;
-			const output = await ipc.artifactResolve(target.document.workspace, id);
+			const output = await ipc.artifactResolveSaved(id);
 			if (disposed || target.locked) { initialRequests.delete(key); return; }
 			addResolved(target, output);
 		} catch (cause) { initialRequests.delete(key); target.error = message(cause); }
@@ -236,7 +237,7 @@
 	}
 
 	function addResolved(target: Draft, output: ResolvedArtifact): void {
-		if (target.locked || output.artifact.workspace !== target.document.workspace) return;
+		if (target.locked) return;
 		const placement: StudioPlacement = { id: crypto.randomUUID(), artifact_id: output.artifact.id, revision: output.revision.revision, view_state: {} };
 		resolved = { ...resolved, [resultKey(target.document.workspace, placement)]: output };
 		target.placements = [...target.placements, placement];
@@ -248,7 +249,7 @@
 		const target = current;
 		if (!target || target.locked) return;
 		try {
-			const output = await ipc.artifactResolve(target.document.workspace, id);
+			const output = await ipc.artifactResolveSaved(id);
 			if (disposed || current !== target) return;
 			addResolved(target, output);
 		} catch (cause) { if (!disposed && current === target) target.error = message(cause); }
@@ -345,7 +346,7 @@
 			const document = clone(target.document);
 			const outputs: StudioReportArtifacts = {};
 			await Promise.all(document.placements.map(async placement => {
-				try { outputs[placement.id] = await ipc.artifactResolve(document.workspace, placement.artifact_id, placement.revision); }
+				try { outputs[placement.id] = await ipc.artifactResolveSaved(placement.artifact_id, placement.revision); }
 				catch { outputs[placement.id] = null; }
 			}));
 			if (disposed) return;
@@ -536,7 +537,7 @@
 
 <Dialog.Root bind:open={createOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><form class="dialog-form" onsubmit={event => { event.preventDefault(); void create(); }}><Dialog.Title class="dialog-title">New report</Dialog.Title><Dialog.Description class="dialog-description">Arrange saved analysis and your own notes.</Dialog.Description><label>Name<Input aria-label="New report name" bind:value={newTitle} maxlength={120} placeholder="For example, quarterly review" /></label>{#if createError}<p class="dialog-error" role="alert">{createError}</p>{/if}<div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button type="submit" size="sm" disabled={!newTitle.trim() || creating}>{creating ? 'Creating…' : 'Create report'}</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>
 
-<Dialog.Root bind:open={pickerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-picker"><div class="picker-heading"><div><Dialog.Title class="dialog-title">Add saved output</Dialog.Title><Dialog.Description class="dialog-description">Uses the saved result. No analysis is rerun.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close saved outputs"><Icon name="x" size={16} /></Dialog.Close></div><Input aria-label="Find saved outputs" bind:value={pickerSearch} placeholder="Find an output…" />{#if listError}<p class="dialog-error" role="alert">{listError}</p><Button size="sm" variant="ghost" onclick={() => void refreshOutputs(workspace)}>Retry</Button>{/if}<ul class="output-picker-list">{#each filteredArtifacts as artifact (artifact.id)}<li><button onclick={() => void addArtifact(artifact.id)}><strong>{artifact.title}</strong><span>Revision {artifact.current_revision}</span><Icon name="plus" size={14} /></button></li>{/each}</ul>{#if !filteredArtifacts.length && !listError}<p class="document-caption">{pickerSearch.trim() ? 'No matching saved outputs.' : 'No saved results in this workspace yet. Ask a question to produce one.'}</p>{/if}</Dialog.Content></Dialog.Portal></Dialog.Root>
+<Dialog.Root bind:open={pickerOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-picker"><div class="picker-heading"><div><Dialog.Title class="dialog-title">Add saved output</Dialog.Title><Dialog.Description class="dialog-description">Choose an analysis from any mounted folder. The saved result is reused without rerunning it.</Dialog.Description></div><Dialog.Close class="studio-icon-button" aria-label="Close saved outputs"><Icon name="x" size={16} /></Dialog.Close></div><Input aria-label="Find saved outputs" bind:value={pickerSearch} placeholder="Find an output…" />{#if listError}<p class="dialog-error" role="alert">{listError}</p><Button size="sm" variant="ghost" onclick={() => void refreshOutputs(workspace)}>Retry</Button>{/if}<ul class="output-picker-list">{#each filteredArtifacts as artifact (artifact.id)}<li><button onclick={() => void addArtifact(artifact.id)}><strong>{artifact.title}</strong><span>Revision {artifact.current_revision} · {sourceLabel(artifact.workspace)}</span><Icon name="plus" size={14} /></button></li>{/each}</ul>{#if !filteredArtifacts.length && !listError}<p class="document-caption">{pickerSearch.trim() ? 'No matching saved outputs.' : 'No saved results yet. Ask a question to produce one.'}</p>{/if}</Dialog.Content></Dialog.Portal></Dialog.Root>
 
 <Dialog.Root bind:open={checkpointOpen}><Dialog.Portal><Dialog.Overlay class="fella-ui-dialog-overlay" /><Dialog.Content class="fella-ui-dialog-content studio-dialog"><form class="dialog-form" onsubmit={event => { event.preventDefault(); void checkpoint(); }}><Dialog.Title class="dialog-title">Save checkpoint</Dialog.Title><Dialog.Description class="dialog-description">Keep this document’s notes, order, selections, and pinned revisions.</Dialog.Description><label>Name<Input aria-label="Checkpoint name" bind:value={checkpointTitle} maxlength={120} /></label><div class="dialog-actions"><Dialog.Close class="studio-cancel">Cancel</Dialog.Close><Button type="submit" size="sm" disabled={!checkpointTitle.trim() || current?.locked}>Save checkpoint</Button></div></form></Dialog.Content></Dialog.Portal></Dialog.Root>
 

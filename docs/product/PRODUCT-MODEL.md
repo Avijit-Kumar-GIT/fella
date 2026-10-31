@@ -12,6 +12,9 @@ Fella uses “workspace” for two related but different ideas:
   catalog, context, and source revision an analysis can use.
 - The **window layout** arranges Chat and the optional Notebook surface. It
   changes where existing work appears; it never changes data access or scope.
+- The **app workspace** organizes content in the Fella window and owns Reports.
+  It is independent of the mounted folder; each saved output retains its own
+  mounted source scope and revision.
 
 The titlebar's Workspace selector refers to the mounted folder. Notebook is a
 view of work in the same window, not another mounted folder or analytical
@@ -21,7 +24,8 @@ workspace.
 
 | Object | Owns | Does not own |
 | --- | --- | --- |
-| **Mounted Workspace** | Folder identity, catalog, revision, workspace context, and local knowledge. | Window layout, a conversation transcript, or a copy of source files. |
+| **Mounted Workspace** | Folder identity, catalog, revision, workspace context, and local knowledge. | Window layout, Reports, a conversation transcript, or a copy of source files. |
+| **App workspace** | The window's collection of Reports and their organization. | Source access, catalog state, or analytical execution. |
 | **Source** | A workspace-relative file or supported sheet, plus its observed catalog metadata. | A claim that it was used in a particular run. |
 | **Conversation** | Ordered messages, the user's immediate requests, and the selected folder scope when applicable. | The canonical analysis trace or a required Investigation. |
 | **Investigation** | A named, durable analytical effort: brief, source choices, saved Questions, status, and links to its Conversation and runs. | Duplicated message transcripts, tool outputs, or evidence payloads. |
@@ -29,7 +33,7 @@ workspace.
 | **Analysis turn** | One execution's request, workspace/source revision, interpretation, tool trace, result, checks, evidence, and rerun lineage. | Later edits to the Investigation or a generated presentation. |
 | **Evidence and checks** | Observations, computations, provenance, and what a specific verification check establishes. | A guarantee that the business interpretation is correct. |
 | **Saved result / artifact** | A reusable output linked to the producing run, source revision, and presentation revision. | A new analytical execution when it is reopened or rearranged. |
-| **Report** | A user-organized document that references saved results and can be exported. | A second analytics engine or a silent recomputation. |
+| **Report** | A user-organized app-workspace document that references saved results from one or more mounted folders and can be exported. | A second analytics engine or a silent recomputation. |
 
 ## Relationships
 
@@ -44,7 +48,9 @@ Mounted Workspace ──contains──> Sources, context, and revisions
         │                                                       ├── Analysis turns
         │                                                       └── Findings and saved results
         │                                                               └── Evidence and checks
-        └──owns──> Reports ──reference──> Saved results / artifacts
+App workspace ──owns──> Reports ──reference──> Saved results / artifacts
+                                                │
+                                                └──retain source scope──> Mounted Workspace / run / evidence
 ```
 
 A Conversation may exist without an Investigation. An Investigation has a
@@ -63,7 +69,9 @@ history.
   records that relationship.
 - **Deletion is clear.** Deleting a Conversation deletes its transcript and
   linked Investigation. Saved results, reports, supporting analysis records,
-  and revisions remain in the Workspace; the confirmation explains this.
+  and revisions remain in the app workspace. Their artifact records retain the
+  mounted source scope and evidence that produced them; the confirmation
+  explains this.
 - **Runs are historical records.** Reruns append new records. They preserve
   their original source revision, scope, method, result, and evidence.
 - **Presentation has no analytical authority.** Generated components can

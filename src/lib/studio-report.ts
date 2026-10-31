@@ -95,11 +95,11 @@ export function buildStudioReport(document: StudioDocument, artifacts: StudioRep
 			lines.push(`## Saved output ${cell(placement.artifact_id)}`, '', `Saved output is unavailable: artifact ${cell(placement.artifact_id)}, revision ${placement.revision}. Nothing was recomputed or silently omitted.`, '');
 			continue;
 		}
-		if (resolved.artifact.workspace !== document.workspace || resolved.artifact.id !== placement.artifact_id || resolved.revision.revision !== placement.revision || resolved.revision.run_id !== resolved.run.id) {
-			lines.push(`## Saved output ${cell(placement.artifact_id)}`, '', 'Saved output does not match the pinned workspace, artifact, revision, or run. Its content has not been exported.', '');
+		if (resolved.artifact.id !== placement.artifact_id || resolved.revision.revision !== placement.revision || resolved.revision.run_id !== resolved.run.id || resolved.run.workspace !== resolved.artifact.workspace) {
+			lines.push(`## Saved output ${cell(placement.artifact_id)}`, '', 'Saved output does not match the pinned artifact, revision, or source run. Its content has not been exported.', '');
 			continue;
 		}
-		lines.push(`## ${line(resolved.artifact.title) || 'Untitled output'}`, '', `Artifact ${cell(placement.artifact_id)} · revision ${placement.revision}`, '', `Source revision: ${cell(artifactSourceRevision(resolved))}`, '', `Original question: ${line(resolved.run.question)}`, '');
+		lines.push(`## ${line(resolved.artifact.title) || 'Untitled output'}`, '', `Artifact ${cell(placement.artifact_id)} · revision ${placement.revision}`, '', `Source folder: ${cell(resolved.artifact.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || 'Mounted folder')}`, '', `Source revision: ${cell(artifactSourceRevision(resolved))}`, '', `Original question: ${line(resolved.run.question)}`, '');
 		if (resolved.revision.change_note) lines.push(`Revision note: ${line(resolved.revision.change_note)}`, '');
 		lines.push('### Saved answer', '', resolved.run.result.text || 'No narrative answer was recorded.', '');
 		const caveats = artifactCaveats(resolved);
@@ -122,7 +122,7 @@ export function buildStudioReport(document: StudioDocument, artifacts: StudioRep
 		lines.push('### Exact saved values', '');
 		if (!resolved.results.length) lines.push('No bound tabular results were saved for this output.', '');
 		for (const result of resolved.results) lines.push(exactResultMarkdown(result), '');
-		lines.push(...provenance(resolved.run, document.workspace), '');
+		lines.push(...provenance(resolved.run, resolved.artifact.workspace), '');
 	}
 	lines.push('---', '', 'Exported from saved analytical records. No model call or live source query is required. Conversation transcripts are excluded. Source revisions identify historical inputs; they do not guarantee those original files remain available for recomputation.');
 	return `${lines.join('\n').trim()}\n`;

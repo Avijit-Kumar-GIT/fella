@@ -94,8 +94,11 @@ export const ipc = {
 	artifactCreate: (workspaceId: string, turnId: string, title: string, spec: unknown) =>
 		invoke<ArtifactRecord>('artifact_create', { workspaceId, turnId, title, spec }),
 	artifactList: (workspaceId: string) => invoke<ArtifactRecord[]>('artifact_list', { workspaceId }),
+	artifactListForReports: () => invoke<ArtifactRecord[]>('artifact_list_for_reports'),
 	artifactResolve: (workspaceId: string, artifactId: string, revision?: number) =>
 		invoke<ResolvedArtifact>('artifact_resolve', { workspaceId, artifactId, revision }),
+	artifactResolveSaved: (artifactId: string, revision?: number) =>
+		invoke<ResolvedArtifact>('artifact_resolve_saved', { artifactId, revision }),
 	artifactRevise: (workspaceId: string, artifactId: string, baseRevision: number, update: { run_id?: string; spec?: unknown; change_note: string }) =>
 		invoke<ResolvedArtifact>('artifact_revise', { workspaceId, artifactId, baseRevision, runId: update.run_id, spec: update.spec, changeNote: update.change_note }),
 	artifactAdopt: (workspaceId: string, artifactId: string, baseRevision: number, revision: number) =>

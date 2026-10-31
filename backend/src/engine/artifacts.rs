@@ -1,4 +1,4 @@
-//! Workspace-owned analytical outputs and ordered Studio documents.
+//! Source-scoped analytical outputs and app-workspace-owned Reports.
 //!
 //! These records reference immutable canonical runs; they never persist values
 //! supplied by a renderer as analytical evidence. SQLite makes metadata updates,
@@ -21,6 +21,10 @@ use super::runtime::AnalysisTurn;
 /// Schema attached to new JSON-render artifacts. Legacy expression-based
 /// artifact rows are removed by the one-time store migration below.
 pub const SCHEMA_VERSION: &str = "fella-json-render-v1";
+/// Reports belong to the Fella window's content workspace, not a mounted data
+/// folder. Artifact records retain their own mounted source workspace.
+pub const APP_WORKSPACE_ID: &str = "fella-app-workspace";
+const STUDIO_OWNER_MIGRATION: &str = "reports-app-workspace-v1";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SPEC_BYTES: usize = 256 * 1024;
@@ -508,6 +512,39 @@ fn store_unlocked(data_dir: &Path) -> EngineResult<Connection> {
         }
         db.execute("INSERT INTO artifact_metadata(key,value) VALUES('schema_version',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [SCHEMA_VERSION])?;
     }
+    let owner_migration = db
+        .query_row(
+            "SELECT value FROM artifact_metadata WHERE key='studio_owner_migration'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if owner_migration.as_deref() != Some(STUDIO_OWNER_MIGRATION) {
+        let mut db = db;
+        let tx = db.transaction()?;
+        let mut query = tx.prepare("SELECT id, body FROM studio_documents")?;
+        let documents = query
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(query);
+        for (id, body) in documents {
+            let mut document: StudioDocument = decode(&body)?;
+            document.workspace = APP_WORKSPACE_ID.to_owned();
+            tx.execute(
+                "UPDATE studio_documents SET workspace=?2, body=?3 WHERE id=?1",
+                params![id, APP_WORKSPACE_ID, encode(&document)?],
+            )?;
+        }
+        tx.execute(
+            "INSERT INTO artifact_metadata(key,value) VALUES('studio_owner_migration',?1)
+             ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            [STUDIO_OWNER_MIGRATION],
+        )?;
+        tx.commit()?;
+        return Ok(db);
+    }
     Ok(db)
 }
 
@@ -549,6 +586,28 @@ fn load_artifact_unlocked(
     if record.id != id || record.workspace != workspace {
         return Err(EngineError::msg(
             "artifact identity does not match its stored owner",
+        ));
+    }
+    Ok(record)
+}
+
+/// Resolve an artifact by its opaque, globally unique ID. The artifact record
+/// supplies the mounted source scope; callers cannot substitute another path.
+fn load_artifact_by_id_unlocked(db: &Connection, id: &str) -> EngineResult<ArtifactRecord> {
+    validate_id(id)?;
+    let (workspace, body): (String, String) = db
+        .query_row(
+            "SELECT workspace, body FROM artifacts WHERE id = ?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| EngineError::msg("saved analytical output is unavailable"))?;
+    let record: ArtifactRecord = decode(&body)?;
+    validate_artifact(&record)?;
+    if record.id != id || record.workspace != workspace {
+        return Err(EngineError::msg(
+            "artifact identity does not match its stored source scope",
         ));
     }
     Ok(record)
@@ -823,6 +882,24 @@ pub fn list(data_dir: &Path, workspace: &str) -> EngineResult<Vec<ArtifactRecord
         .collect()
 }
 
+/// List locally saved outputs for report authoring. Each returned record keeps
+/// its own source workspace; this does not grant the presentation runtime data
+/// access or change any analysis scope.
+pub fn list_for_reports(data_dir: &Path) -> EngineResult<Vec<ArtifactRecord>> {
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let db = store_unlocked(data_dir)?;
+    let mut query = db.prepare("SELECT id FROM artifacts ORDER BY id")?;
+    let ids = query
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut records = ids
+        .iter()
+        .map(|id| load_artifact_by_id_unlocked(&db, id))
+        .collect::<EngineResult<Vec<_>>>()?;
+    records.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+    Ok(records)
+}
+
 pub fn load(data_dir: &Path, workspace: &str, artifact_id: &str) -> EngineResult<ArtifactRecord> {
     validate_workspace(workspace)?;
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
@@ -845,8 +922,27 @@ fn resolve_unlocked(
     number: Option<u64>,
 ) -> EngineResult<ResolvedArtifact> {
     let artifact = load_artifact_unlocked(db, workspace, artifact_id)?;
+    resolve_record_unlocked(data_dir, db, artifact, number)
+}
+
+fn resolve_saved_unlocked(
+    data_dir: &Path,
+    db: &Connection,
+    artifact_id: &str,
+    number: Option<u64>,
+) -> EngineResult<ResolvedArtifact> {
+    let artifact = load_artifact_by_id_unlocked(db, artifact_id)?;
+    resolve_record_unlocked(data_dir, db, artifact, number)
+}
+
+fn resolve_record_unlocked(
+    data_dir: &Path,
+    _db: &Connection,
+    artifact: ArtifactRecord,
+    number: Option<u64>,
+) -> EngineResult<ResolvedArtifact> {
     let revision = revision(&artifact, number.unwrap_or(artifact.current_revision))?.clone();
-    let run = load_run(data_dir, workspace, &revision.run_id)?;
+    let run = load_run(data_dir, &artifact.workspace, &revision.run_id)?;
     let results = eligible_results(&run)?;
     Ok(ResolvedArtifact {
         artifact,
@@ -854,6 +950,15 @@ fn resolve_unlocked(
         run,
         results,
     })
+}
+
+pub fn resolve_saved(
+    data_dir: &Path,
+    artifact_id: &str,
+    number: Option<u64>,
+) -> EngineResult<ResolvedArtifact> {
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    resolve_saved_unlocked(data_dir, &store_unlocked(data_dir)?, artifact_id, number)
 }
 
 pub fn resolve(
@@ -1128,6 +1233,41 @@ pub fn studio_list(data_dir: &Path, workspace: &str) -> EngineResult<Vec<StudioD
         .collect()
 }
 
+pub fn studio_list_all(data_dir: &Path) -> EngineResult<Vec<StudioDocument>> {
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let db = store_unlocked(data_dir)?;
+    let mut query = db.prepare("SELECT id FROM studio_documents ORDER BY id")?;
+    let ids = query
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut documents = ids
+        .iter()
+        .map(|id| load_studio_by_id_unlocked(&db, id))
+        .collect::<EngineResult<Vec<_>>>()?;
+    documents.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+    Ok(documents)
+}
+
+fn load_studio_by_id_unlocked(db: &Connection, id: &str) -> EngineResult<StudioDocument> {
+    validate_id(id)?;
+    let body: String = db
+        .query_row(
+            "SELECT body FROM studio_documents WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| EngineError::msg("Report does not exist"))?;
+    let document: StudioDocument = decode(&body)?;
+    validate_studio(&document)?;
+    if document.id != id {
+        return Err(EngineError::msg(
+            "Report identity does not match its stored record",
+        ));
+    }
+    Ok(document)
+}
+
 pub fn studio_load(
     data_dir: &Path,
     workspace: &str,
@@ -1160,19 +1300,18 @@ pub fn studio_save(
     // placement changes then commit atomically, even across an application crash.
     let mut artifact_ids = HashSet::new();
     for placement in &document.placements {
-        resolve_unlocked(
+        resolve_saved_unlocked(
             data_dir,
             &tx,
-            workspace,
             &placement.artifact_id,
             Some(placement.revision),
         )?;
         artifact_ids.insert(placement.artifact_id.clone());
     }
     for id in artifact_ids {
-        let mut artifact = load_artifact_unlocked(&tx, workspace, &id)?;
+        let mut artifact = load_artifact_by_id_unlocked(&tx, &id)?;
         for revision in &artifact.revisions {
-            load_run(data_dir, workspace, &revision.run_id)?;
+            load_run(data_dir, &artifact.workspace, &revision.run_id)?;
         }
         artifact.saved = true;
         artifact.updated_at_ms = now_ms();
@@ -1227,10 +1366,9 @@ pub fn studio_restore(
         .ok_or_else(|| EngineError::msg("Studio checkpoint does not exist"))?
         .clone();
     for placement in &checkpoint.placements {
-        resolve_unlocked(
+        resolve_saved_unlocked(
             data_dir,
             &db,
-            workspace,
             &placement.artifact_id,
             Some(placement.revision),
         )?;

@@ -1,6 +1,7 @@
 import { ipc } from './ipc';
 import { session } from './session.svelte';
 import type { ArtifactRecord, ResolvedArtifact } from './analytics-artifacts';
+import { APP_WORKSPACE_ID } from './analytics-artifacts';
 import type { Message } from './types';
 import type { PresentationSpec } from './presentation/types';
 import { cachePresentation } from './presentation/snapshot';
@@ -81,12 +82,10 @@ export async function ensureAnalyticalOutput(
 }
 
 export async function saveOutputToStudio(resolved: ResolvedArtifact): Promise<void> {
-	const workspace = resolved.artifact.workspace;
-	if (session.catalog.workspace !== workspace) throw new Error('Open the result’s workspace before creating a report.');
-	const documents = await ipc.studioList(workspace);
+	const documents = await ipc.studioList(APP_WORKSPACE_ID);
 	const existing = documents.find(document => document.placements.some(placement => placement.artifact_id === resolved.artifact.id && placement.revision === resolved.revision.revision));
 	if (existing) { session.openStudioTool(existing.id); return; }
-	const document = await ipc.studioCreate(workspace, resolved.artifact.title);
-	await ipc.studioSave(workspace, document.id, document.version, { title: document.title, body: '', placements: [{ id: `placement_${crypto.randomUUID().replaceAll('-', '')}`, artifact_id: resolved.artifact.id, revision: resolved.revision.revision, view_state: {} }] });
-	if (session.catalog.workspace === workspace) session.openStudioTool(document.id);
+	const document = await ipc.studioCreate(APP_WORKSPACE_ID, resolved.artifact.title);
+	await ipc.studioSave(APP_WORKSPACE_ID, document.id, document.version, { title: document.title, body: '', placements: [{ id: `placement_${crypto.randomUUID().replaceAll('-', '')}`, artifact_id: resolved.artifact.id, revision: resolved.revision.revision, view_state: {} }] });
+	session.openStudioTool(document.id);
 }

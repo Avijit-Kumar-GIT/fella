@@ -30,12 +30,12 @@ The existing numerical comparison assertions remain unchanged.
 4. Revisions identify baseline/current/proposed/historical roles from artifact
    pointers only. Viewing or keeping a revision does not adopt, mutate, rerun,
    clear verification, move Studio pins or replace report snapshots.
-5. Dependency discovery is workspace-scoped and deterministic. Report exact
+5. Dependency discovery is app-workspace-scoped and deterministic. Report exact
    Studio placement/checkpoint references to the baseline revision; do not infer
    prose references, claim every consumer is indexed, or imply pinned records
    automatically update. Reports/Findings outside this dependency index are an
    explicit limitation. A comparison without dependency context says not scanned.
-6. Forged/unvalidated resolved data and cross-workspace inputs expose no detailed
+6. Forged/unvalidated resolved data and cross-source-workspace inputs expose no detailed
    semantic/method metadata or dependency identities. No model/network calls or
    live source queries are needed for comparison.
 7. Shared AnalyticalDiff.svelte presents the five dimensions in a single clear

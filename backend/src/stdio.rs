@@ -483,12 +483,23 @@ async fn dispatch(
                     &workspace,
                 ))
             }
+            "artifact_list_for_reports" => value_result(
+                crate::engine::artifacts::list_for_reports(engine.analytical_data_dir()),
+            ),
             "artifact_resolve" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let artifact_id: String = required(&request.params, "artifactId")?;
                 value_result(crate::engine::artifacts::resolve(
                     engine.analytical_data_dir(),
                     &workspace,
+                    &artifact_id,
+                    request.params.get("revision").and_then(Value::as_u64),
+                ))
+            }
+            "artifact_resolve_saved" => {
+                let artifact_id: String = required(&request.params, "artifactId")?;
+                value_result(crate::engine::artifacts::resolve_saved(
+                    engine.analytical_data_dir(),
                     &artifact_id,
                     request.params.get("revision").and_then(Value::as_u64),
                 ))

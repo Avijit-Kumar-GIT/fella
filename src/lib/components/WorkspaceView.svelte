@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
+	import { APP_WORKSPACE_ID } from '$lib/analytics-artifacts';
 	import { requestArtifactChange } from '$lib/commands';
 	import { session, type WorkspaceTool } from '$lib/session.svelte';
 	import type { Investigation, SourceInfo } from '$lib/types';
@@ -161,14 +162,14 @@
 			{/if}
 			{#if activeTool.kind === 'result' && workspacePath && activeTool.artifactId && activeTool.artifactRevision}
 				<ResultDocument workspace={workspacePath} artifactId={activeTool.artifactId} revision={activeTool.artifactRevision} />
-			{:else if activeTool.kind === 'studio' && workspacePath}
+			{:else if activeTool.kind === 'studio'}
 				{@const ownerTool = activeTool}
-				{#key `${workspacePath}:${ownerTool.id}`}
+				{#key `${APP_WORKSPACE_ID}:${ownerTool.id}`}
 					{#await import('./StudioView.svelte')}
 						<p role="status">Opening report…</p>
 					{:then module}
 						<module.default
-							workspace={workspacePath}
+							workspace={APP_WORKSPACE_ID}
 							documentId={ownerTool.documentId}
 							newReport={ownerTool.newReport}
 							embedded={defaultInspector}

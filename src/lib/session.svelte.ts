@@ -1134,8 +1134,7 @@ class Session {
 
 	openStudioTool(documentId: string | null = null, artifactId: string | null = null): WorkspaceTool | null {
 		this.workspaceSection = 'reports';
-		const context = this.activeWorkspaceContext;
-		if (!context || !this.catalog.workspace) return null;
+		const context = this.activeWorkspaceContext ?? this.#ensureWorkspaceContext(this.activeWorkspaceId);
 		const tool: WorkspaceTool = { id: 'studio', kind: 'studio', documentId, initialArtifactId: artifactId };
 		context.activeTool = tool;
 		context.workspacePane = 'context';

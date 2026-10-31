@@ -822,7 +822,7 @@ pub fn compare_with_dependencies(
     let Some(diff) = report.analytical_diff.as_mut() else {
         return Ok(report);
     };
-    let documents = artifacts::studio_list(data_dir, &before.artifact.workspace)?;
+    let documents = artifacts::studio_list_all(data_dir)?;
     let mut impact = diff.impact.clone();
     impact.scanned = true;
     impact.complete = documents.len() <= MAX_ITEMS;
@@ -1124,9 +1124,6 @@ pub fn export_snapshot(
         .collect();
     let mut supplied = BTreeMap::new();
     for value in resolved {
-        if value.artifact.workspace != document.workspace {
-            return Err(err("report artifact belongs to a different workspace"));
-        }
         let key = (value.artifact.id.clone(), value.revision.revision);
         if supplied.insert(key, value).is_some() {
             return Err(err("report artifact pins are duplicated"));
@@ -1223,7 +1220,7 @@ pub fn export_studio(data_dir: &Path, workspace: &str, document_id: &str) -> Eng
         .collect();
     let resolved = pins
         .into_iter()
-        .map(|(id, revision)| artifacts::resolve(data_dir, workspace, &id, Some(revision)))
+        .map(|(id, revision)| artifacts::resolve_saved(data_dir, &id, Some(revision)))
         .collect::<EngineResult<Vec<_>>>()?;
     let json = export_snapshot(&document, &resolved)?;
     if artifacts::studio_load(data_dir, workspace, document_id)?.version != document.version {

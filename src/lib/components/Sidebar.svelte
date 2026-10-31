@@ -2,6 +2,7 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { errMsg, openConversation, openRepository } from '$lib/commands';
 	import { GENERAL_WORKSPACE_ID, session } from '$lib/session.svelte';
+	import { APP_WORKSPACE_ID } from '$lib/analytics-artifacts';
 	import type { StudioDocument } from '$lib/analytics-artifacts';
 	import { Button } from '$lib/components/ui/button';
 	import { Dialog } from '$lib/components/ui/dialog';
@@ -31,14 +32,13 @@
 	let reportsError = $state('');
 	let reportsRequest = 0;
 	$effect(() => {
-		const path = session.catalog.workspace;
 		const reportsVersion = session.reportsVersion;
 		void reportsVersion;
 		const request = ++reportsRequest;
-		if (mode !== 'reports' || !path) { workspaceReports = []; reportsError = ''; return; }
+		if (mode !== 'reports') { workspaceReports = []; reportsError = ''; return; }
 		workspaceReports = [];
 		reportsError = '';
-		void ipc.studioList(path).then((reports) => {
+		void ipc.studioList(APP_WORKSPACE_ID).then((reports) => {
 			if (request === reportsRequest) workspaceReports = reports;
 		}).catch(() => { if (request === reportsRequest) reportsError = 'Could not load reports.'; });
 	});
@@ -163,7 +163,7 @@
 	function selectMode(next: 'chat' | 'files' | 'reports'): void {
 		mode = next;
 		onsectionselect?.(next);
-		if (next !== 'reports' || !session.catalog.workspace) return;
+		if (next !== 'reports') return;
 		if (session.activeWorkspaceTool?.kind !== 'studio') session.openStudioTool();
 	}
 
@@ -360,10 +360,8 @@
 				</section>
 			{:else}
 				<section class="repository-section report-history" aria-label="Workspace reports">
-					<div class="section-head"><h2>Reports</h2><span class="group-count">{workspaceReports.length}</span><Button variant="ghost" size="icon" class="section-action report-add" aria-label="New report" title="New report" disabled={!session.catalog.workspace} onclick={newReport}><Icon name="plus" size={16} /></Button></div>
-					{#if !session.catalog.workspace}
-						<p class="sidebar-empty">Open a folder to view reports.</p>
-					{:else if reportsError}
+					<div class="section-head"><h2>Reports</h2><span class="group-count">{workspaceReports.length}</span><Button variant="ghost" size="icon" class="section-action report-add" aria-label="New report" title="New report" onclick={newReport}><Icon name="plus" size={16} /></Button></div>
+					{#if reportsError}
 						<p class="sidebar-empty" role="status">{reportsError}</p>
 					{:else}
 						<div class="report-list">
@@ -390,7 +388,7 @@
 					Delete {workspaceDeleteTarget?.name ?? 'workspace'}?
 				</Dialog.Title>
 				<Dialog.Description class="workspace-delete-description">
-					This removes the workspace from the sidebar and deletes its conversations. Saved results, reports and their supporting records are kept; reconnect the folder to open them. The folder, files, and project notes are not deleted.
+					This removes the folder from the sidebar and deletes its conversations. Saved results and Reports remain in the app workspace; reconnect the folder when you want to analyze its files again. The folder, files, and project notes are not deleted.
 				</Dialog.Description>
 			</div>
 			{#if workspaceDeleteError}
@@ -412,7 +410,7 @@
 		<Dialog.Content class="fella-ui-dialog-content conversation-delete-dialog">
 			<Dialog.Title class="workspace-delete-title" level={2}>Delete conversation?</Dialog.Title>
 			<Dialog.Description class="workspace-delete-description">
-				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}”, its transcript, and any linked Investigation will be deleted. Saved results, reports, their supporting analysis records, and revisions will remain available in this workspace.
+				“{conversationDeleteTarget ? title(conversationDeleteTarget) : ''}”, its transcript, and any linked Investigation will be deleted. Saved results, Reports, their supporting analysis records, and revisions will remain available in the app workspace.
 			</Dialog.Description>
 			{#if conversationDeleteError}<p class="workspace-delete-error" role="alert">{conversationDeleteError}</p>{/if}
 			<div class="workspace-delete-actions">

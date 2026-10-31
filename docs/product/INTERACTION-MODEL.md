@@ -19,9 +19,11 @@ Fella window
     └── Notebook — optional Chat + selected Investigation/tool layout
 ```
 
-The **mounted Workspace** is the folder that scopes source access. The **window
-layout** is how Chat and a companion surface are arranged. Notebook does not
-create a second Workspace, grant data access, or create an Investigation.
+The **mounted Workspace** is the folder that scopes source access. The **app
+workspace** organizes content in the Fella window and owns its Reports. The
+**window layout** is how Chat and a companion surface are arranged. Notebook
+does not create a second mounted Workspace, grant data access, or create an
+Investigation.
 
 ## Chat and Investigations
 
@@ -53,8 +55,10 @@ findings or expose raw internal reasoning.
   Files or Investigation Sources.
 - **Investigation Sources** controls the eligible sources for that
   Investigation. It is distinct from the general Files browser.
-- **Reports** contains saved report documents and exported analysis. It can open
-  beside Chat without overflowing the pane.
+- **Reports** contains the app workspace's saved report documents and exported
+  analysis. It is available with or without a mounted folder, and a report can
+  reference saved results from multiple mounted folders while preserving each
+  result's source scope. It can open beside Chat without overflowing the pane.
 - The former shell/terminal tool has been removed.
 
 ## Layout and interaction rules

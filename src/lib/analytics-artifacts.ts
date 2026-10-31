@@ -1,6 +1,9 @@
 import type { AnalysisTurn } from './types';
 import type { PresentationSpec } from './presentation/types';
 
+/** The app window owns Reports; mounted folders remain per-result provenance. */
+export const APP_WORKSPACE_ID = 'fella-app-workspace';
+
 export interface BoundResult {
 	id: string;
 	columns: string[];

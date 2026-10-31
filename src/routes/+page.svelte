@@ -13,6 +13,7 @@
 	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
 	import WorkspaceSourceView from '$lib/components/WorkspaceSourceView.svelte';
 	import StudioDetailsView from '$lib/components/StudioDetailsView.svelte';
+	import { APP_WORKSPACE_ID } from '$lib/analytics-artifacts';
 	import WorkspacePanelLayout from '$lib/components/WorkspacePanelLayout.svelte';
 	import { dispatch, loadStartupCatalog, openContext, openFolder, openRepository, stop } from '$lib/commands';
 	import { ipc, isDesktop } from '$lib/ipc';
@@ -41,7 +42,7 @@
 	let activeView = $derived(session.workspaceView);
 	let showRightPane = $derived.by(() => {
 		if (session.workspaceSection === 'files') return Boolean(session.catalog.workspace) && fileInspectorOpen;
-		if (session.workspaceSection === 'reports') return Boolean(session.catalog.workspace) && reportInspectorOpen;
+		if (session.workspaceSection === 'reports') return reportInspectorOpen;
 		return session.workspacePaneOpen || Boolean(session.activeChat.companionPane) ||
 			(session.contentLayout === 'notebook' && !session.catalog.workspace);
 	});
@@ -452,8 +453,8 @@
 									<WorkspaceView expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
 								{:else if session.workspaceSection === 'files' && session.catalog.workspace}
 									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
-								{:else if session.workspaceSection === 'reports' && session.catalog.workspace}
-										<StudioDetailsView workspace={session.catalog.workspace} documentId={session.activeWorkspaceTool?.kind === 'studio' ? session.activeWorkspaceTool.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
+								{:else if session.workspaceSection === 'reports'}
+										<StudioDetailsView workspace={APP_WORKSPACE_ID} documentId={session.activeWorkspaceTool?.kind === 'studio' ? session.activeWorkspaceTool.documentId ?? null : null} onclose={() => (reportInspectorOpen = false)} />
 								{/if}
 								{#if session.contentLayout === 'notebook' && !scopedWorkspaceActive && session.workspaceSection === 'chat'}
 									<div class="notebook-empty"><h1>Open a folder to explore your information</h1><p>Your conversation stays here. Notebook view organizes your files, Investigations and reports beside it.</p><button onclick={() => void openFolder()}>Open folder</button></div>

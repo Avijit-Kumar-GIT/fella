@@ -28,7 +28,7 @@
 			return;
 		}
 		loading = !alreadyVisible;
-		void Promise.all([ipc.studioList(root), ipc.artifactList(root)]).then(async ([documents, available]) => {
+		void Promise.all([ipc.studioList(root), ipc.artifactListForReports()]).then(async ([documents, available]) => {
 			if (request !== requestId || workspace !== root || documentId !== id) return;
 			const selectedDocument = documents.find((item) => item.id === id) ?? null;
 			document = selectedDocument;

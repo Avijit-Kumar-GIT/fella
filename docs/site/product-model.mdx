@@ -8,7 +8,7 @@ Fella keeps the conversation easy to start while giving analytical work a durabl
 
 ## The interface
 
-The app has three sidebar destinations: **Chat**, **Files**, and **Reports**. Here, **window workspace** means how Chat and the optional Notebook are arranged in the window. The title-bar switcher chooses a **mounted folder** (called a workspace in saved records); that folder is the data boundary and does not determine the window layout.
+The app has three sidebar destinations: **Chat**, **Files**, and **Reports**. The **app workspace** organizes content in the Fella window and owns Reports. The title-bar switcher chooses a **mounted folder** (called a workspace in analysis records); that folder is the data boundary, not the owner of a Report.
 
 | Surface | What it is for |
 | --- | --- |
@@ -32,7 +32,7 @@ Notebook stays in the same app window. On a narrow window, the panes adapt to th
 | Evidence | The recorded source references, computations, outputs, and checks for a run. Evidence is not a guarantee that the interpretation was right. |
 | Finding | A saved conclusion linked to a Question, run, and evidence, with caveats, assumptions, and revision history. |
 | Artifact | A reusable, result-bound visualization or analytical output. Each revision points to its saved run and exact source results. |
-| Report | A document in the mounted-folder workspace with authored notes and references to exact artifact revisions. Updating an artifact does not silently change a report that pins an earlier revision. |
+| Report | A document owned by the app workspace, with authored notes and references to exact artifact revisions from one or more mounted folders. Updating an artifact does not silently change a report that pins an earlier revision. |
 
 The normal path is lightweight: ask in Chat, then open Notebook when the work benefits from a brief, a Question plan, source choices, run history, or saved Findings. The Investigation can be named, edited, resumed, and reviewed independently of the transcript.
 
@@ -74,7 +74,7 @@ Plain-language answers remain valid when a structured view is unnecessary or can
 
 ## Retention and deletion
 
-Deleting a conversation removes its transcript and linked Investigation. Saved artifacts, reports, their revisions, and the analysis records needed to support saved work remain in that workspace. The confirmation dialog explains this before deletion. Removing a workspace from the sidebar also leaves its folder and files untouched; reconnect the folder to open its saved reports and results.
+Deleting a conversation removes its transcript and linked Investigation. Saved artifacts, Reports, their revisions, and the analysis records needed to support saved work remain in the app workspace. The confirmation dialog explains this before deletion. Removing a mounted folder from the sidebar also leaves its folder and files untouched; Reports and saved results remain available, while reconnecting the folder is needed to analyze its files again.
 
 ## Current boundary
 
