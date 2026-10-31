@@ -179,6 +179,9 @@ end-to-end acceptance slice has been exercised in the desktop app.
 - Multiple Reports can be created and reopened. Saving a placement retains the
   referenced analytical record and pinned revision independently of its
   originating conversation.
+- Opening the Northstar analyst sample idempotently creates one in-progress
+  Report with its objective and analysis outline. It starts without findings or
+  fabricated results; verified outputs can be added as the user investigates.
 - Placements support labels and full/half widths. Layouts collapse to one
   column in narrower panes. Markdown and portable Report export retain the
   layout metadata.

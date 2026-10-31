@@ -4,6 +4,7 @@ import { ipc, isDesktop, isElectron, pickFolder, sampleWorkspacePath } from './i
 import { Conversation, isActualQuestion, session } from './session.svelte';
 import type {
 	AskEvent,
+	Catalog,
 	ConversationSummary,
 	Message,
 	Investigation,
@@ -94,6 +95,33 @@ export const COMMAND_DESCRIPTIONS: Record<string, string> = {
 	'/help': 'show all commands'
 };
 
+const NORTHSTAR_SAMPLE_PATHS = [
+	'catalog/products.csv',
+	'commerce/order_lines.csv',
+	'commerce/orders/orders_2023.csv',
+	'commerce/orders/orders_2024.csv',
+	'commerce/orders/orders_2025.csv',
+	'docs/metric_policy_current.md',
+	'finance/refund_transactions.csv'
+];
+
+function isNorthstarSample(catalog: Catalog): boolean {
+	const paths = catalog.sources.map((source) => source.path.replaceAll('\\', '/').toLowerCase());
+	return NORTHSTAR_SAMPLE_PATHS.every((samplePath) =>
+		paths.some((path) => path === samplePath || path.endsWith(`/${samplePath}`))
+	);
+}
+
+async function seedNorthstarSampleReport(catalog: Catalog): Promise<void> {
+	if (!isNorthstarSample(catalog)) return;
+	try {
+		await ipc.studioSeedNorthstarSample();
+		session.reportsVersion++;
+	} catch (error) {
+		console.warn('Could not create the Northstar sample Report:', error);
+	}
+}
+
 /** Every valid next value for the current input matching command names before
  *  the first space, then the fixed argument set for `/login`, `/logout`,
  *  `/model` and `/schema`, each narrowed by what's already typed. Drives both
@@ -175,6 +203,7 @@ export async function openFolder(
 	if (!chosen) return false;
 	const alreadyOpen = session.workspaceWindows.find((workspace) => workspace.path === chosen);
 	if (alreadyOpen && !alreadyOpen.historyOnly) {
+		void seedNorthstarSampleReport(alreadyOpen.catalog);
 		if (session.focusWorkspace(alreadyOpen.id)) {
 			if (options.focusAfterOpen) {
 				session.setWorkspaceView('ask');
@@ -199,6 +228,7 @@ export async function openFolder(
 		if (!session.registerWorkspace(catalog)) {
 			throw new Error('Fella could not open this workspace. Try again or choose another folder.');
 		}
+		void seedNorthstarSampleReport(catalog);
 		if (options.focusAfterOpen) {
 			session.setWorkspaceView('ask');
 			session.setWorkspacePaneOpen(false);

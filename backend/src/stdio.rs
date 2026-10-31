@@ -589,6 +589,9 @@ async fn dispatch(
                     &workspace,
                 ))
             }
+            "studio_seed_northstar_sample" => {
+                value_result(engine.studio_seed_northstar_sample_report())
+            }
             "studio_create" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let title: String = required(&request.params, "title")?;

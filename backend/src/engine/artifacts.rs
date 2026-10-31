@@ -26,6 +26,7 @@ pub const SCHEMA_VERSION: &str = "fella-json-render-v1";
 /// folder. Artifact records retain their own mounted source workspace.
 pub const APP_WORKSPACE_ID: &str = "fella-app-workspace";
 const STUDIO_OWNER_MIGRATION: &str = "reports-app-workspace-v1";
+const NORTHSTAR_SAMPLE_REPORT_ID: &str = "studio_northstar_sample_revenue_v1";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SPEC_BYTES: usize = 256 * 1024;
@@ -1697,6 +1698,47 @@ pub fn studio_create(
         &document,
         StudioRevisionKind::Created,
         "Report created.",
+    )?;
+    tx.commit()?;
+    Ok(document)
+}
+
+/// Return the one stable starter Report for the Northstar analyst sample.
+/// It belongs to the app workspace and contains no invented analytical output.
+pub fn studio_seed_northstar_sample_report(data_dir: &Path) -> EngineResult<StudioDocument> {
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let db = store_unlocked(data_dir)?;
+    let exists = db
+        .query_row(
+            "SELECT 1 FROM studio_documents WHERE id=?1 AND workspace=?2",
+            params![NORTHSTAR_SAMPLE_REPORT_ID, APP_WORKSPACE_ID],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if exists {
+        return load_studio_unlocked(&db, APP_WORKSPACE_ID, NORTHSTAR_SAMPLE_REPORT_ID);
+    }
+
+    let now = now_ms();
+    let document = StudioDocument {
+        id: NORTHSTAR_SAMPLE_REPORT_ID.to_owned(),
+        workspace: APP_WORKSPACE_ID.to_owned(),
+        title: "Northstar Outfitters — Revenue review".to_owned(),
+        version: 1,
+        body: "**Status: In progress**\n\n## Objective\nExplain how Northstar Outfitters’ net merchandise revenue changed between Q3 and Q4 2025.\n\n## Work plan\n- Confirm the current finance metric policy, source coverage, and date basis.\n- Compare revenue, order volume, and average order value across both quarters.\n- Identify the product, refund, or source-quality factors that explain the change.\n\n## Evidence to add\nNo findings are attached yet. Add verified analysis from Chat as the investigation progresses. Check `docs/metric_policy_current.md` before accepting a revenue definition; archived exports may use older rules.".to_owned(),
+        placements: Vec::new(),
+        checkpoints: Vec::new(),
+        created_at_ms: now,
+        updated_at_ms: now,
+    };
+    let tx = db.unchecked_transaction()?;
+    put_studio_unlocked(&tx, &document)?;
+    store_studio_revision_unlocked(
+        &tx,
+        &document,
+        StudioRevisionKind::Created,
+        "In-progress starter Report created for the Northstar sample workspace.",
     )?;
     tx.commit()?;
     Ok(document)

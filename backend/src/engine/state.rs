@@ -5699,6 +5699,13 @@ exactly, character for character, from the list below.";
         Ok(resp.content)
     }
 
+    /// Idempotently create the starter Report when the Northstar sample is open.
+    pub fn studio_seed_northstar_sample_report(
+        &self,
+    ) -> EngineResult<crate::engine::artifacts::StudioDocument> {
+        crate::engine::artifacts::studio_seed_northstar_sample_report(self.analytical_data_dir())
+    }
+
     /// Ask the metadata-only Report Design runtime for a preview. The response
     /// cannot execute analysis or persist changes; callers apply the returned
     /// optimistic-versioned update only after user confirmation.
