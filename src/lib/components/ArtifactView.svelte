@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
-	import type { ArtifactComparison, BoundResult, ResolvedArtifact } from '$lib/analytics-artifacts';
+	import type { ArtifactComparison, ArtifactRecord, BoundResult, ResolvedArtifact } from '$lib/analytics-artifacts';
 	import type { EvidenceItem } from '$lib/types';
 	import { artifactCaveats, artifactSourceRevision } from '$lib/studio-report';
 	import { Button } from '$lib/components/ui/button';
@@ -13,21 +13,27 @@
 
 	let {
 		resolved,
+		displayTitle,
+		latestArtifact,
 		viewState = $bindable({}),
 		onstatechange,
 		onrevisionchange,
 		onrequestchange,
 		reviewOnly = false,
 		autoCompare = false,
+		showActiveFilters = true,
 		onadopted
 	}: {
 		resolved: ResolvedArtifact;
+		displayTitle?: string;
+		latestArtifact?: ArtifactRecord;
 		viewState?: Record<string, unknown>;
 		onstatechange?: (state: Record<string, unknown>) => void;
 		onrevisionchange?: (revision: number) => void;
 		onrequestchange?: (artifact: ResolvedArtifact, instruction: string) => void | Promise<void>;
 		reviewOnly?: boolean;
 		autoCompare?: boolean;
+		showActiveFilters?: boolean;
 		onadopted?: (output: ResolvedArtifact) => void;
 	} = $props();
 
@@ -48,10 +54,17 @@
 	let comparisonOperation = 0;
 	let autoCompared = '';
 	let caveats = $derived(artifactCaveats(displayed));
+	let authoritativeArtifact = $derived(latestArtifact ?? displayed.artifact);
+	let sourceMayBeStale = $derived(
+		session.catalog.workspace === displayed.artifact.workspace &&
+		!!session.catalog.revision &&
+		artifactSourceRevision(displayed) !== 'Not recorded' &&
+		artifactSourceRevision(displayed) !== session.catalog.revision
+	);
 	let evidence = $derived(displayed.run.result.evidence.filter((item): item is EvidenceItem => Boolean(item && typeof item === 'object' && 'tool' in item)));
-	let revisions = $derived([...displayed.artifact.revisions].sort((a, b) => b.revision - a.revision));
-	let baseline = $derived(displayed.revision.revision !== displayed.artifact.current_revision
-		? displayed.artifact.current_revision
+	let revisions = $derived([...authoritativeArtifact.revisions].sort((a, b) => b.revision - a.revision));
+	let baseline = $derived(displayed.revision.revision !== authoritativeArtifact.current_revision
+		? authoritativeArtifact.current_revision
 		: displayed.revision.parent_revision ?? null);
 	let initialState = $derived(JSON.parse(JSON.stringify(viewState)) as Record<string, unknown>);
 	$effect(() => {
@@ -125,6 +138,11 @@
 
 	async function adopt(): Promise<void> {
 		const target = displayed;
+		if (onrevisionchange) {
+			onrevisionchange(authoritativeArtifact.current_revision);
+			notice = `This Report now uses revision ${authoritativeArtifact.current_revision}.`;
+			return;
+		}
 		const request = ++operation;
 		busy = true; actionError = ''; notice = '';
 		try {
@@ -167,7 +185,7 @@
 		const request = ++operation;
 		busy = true; actionError = ''; notice = '';
 		try {
-			await onrequestchange(target, text);
+			await onrequestchange(authoritativeArtifact === target.artifact ? target : { ...target, artifact: authoritativeArtifact }, text);
 			if (request !== operation) return;
 			instruction = ''; changeOpen = false;
 			notice = 'Change requested in the conversation. This saved revision has not been overwritten.';
@@ -193,18 +211,21 @@
 	</div>
 {/snippet}
 
-<article class="artifact" aria-label={`Saved output: ${displayed.artifact.title}`} data-artifact-id={displayed.artifact.id} data-artifact-revision={displayed.revision.revision}>
+	<article class="artifact" aria-label={`Saved output: ${displayTitle?.trim() || displayed.artifact.title}`} data-artifact-id={displayed.artifact.id} data-artifact-revision={displayed.revision.revision}>
 	<header class="artifact-header">
-		<div class="artifact-heading"><h2>{displayed.artifact.title}</h2><span class="revision-caption">Revision {displayed.revision.revision}{displayed.revision.revision === displayed.artifact.current_revision ? ' · current' : ' · historical'}</span></div>
+		<div class="artifact-heading"><h2>{displayTitle?.trim() || displayed.artifact.title}</h2><span class="revision-caption">Revision {displayed.revision.revision}{displayed.revision.revision === authoritativeArtifact.current_revision ? ' · current' : ' · historical'}</span></div>
 		<div class="artifact-actions">
-			<Select ariaLabel="Pinned artifact revision" value={String(displayed.revision.revision)} options={revisions.map(revision => ({ value: String(revision.revision), label: `Revision ${revision.revision}${revision.revision === displayed.artifact.current_revision ? ' · current' : ''}` }))} onValueChange={value => void chooseRevision(value)} disabled={busy} />
+			<Select ariaLabel="Pinned artifact revision" value={String(displayed.revision.revision)} options={revisions.map(revision => ({ value: String(revision.revision), label: `Revision ${revision.revision}${revision.revision === authoritativeArtifact.current_revision ? ' · current' : ''}` }))} onValueChange={value => void chooseRevision(value)} disabled={busy} />
 			{#if baseline}<Button variant="ghost" size="sm" aria-expanded={compareOpen} onclick={() => void compare()}>{compareOpen ? 'Close comparison' : 'Compare'}</Button>{/if}
 			{#if onrequestchange}<Button variant="ghost" size="sm" aria-expanded={changeOpen} onclick={() => changeOpen = !changeOpen}><Icon name="pencil" size={14} />Request a change</Button>{/if}
 		</div>
 	</header>
 	{#if actionError}<p class="inline-error" role="alert">{actionError}</p>{:else if notice}<p class="quiet-note" role="status">{notice}</p>{/if}
 	{#if displayed.revision.revision !== displayed.artifact.current_revision}
-		<div class="historical-note"><span>This placement stays on revision {displayed.revision.revision}.</span><Button variant="ghost" size="sm" disabled={busy} onclick={() => void adopt()}>Use as current revision</Button></div>
+		<div class="historical-note"><span>This placement stays on revision {displayed.revision.revision}.</span><Button variant="ghost" size="sm" disabled={busy} onclick={() => void adopt()}>{onrevisionchange ? `Update Report to revision ${authoritativeArtifact.current_revision}` : 'Use as current revision'}</Button></div>
+	{/if}
+	{#if sourceMayBeStale}
+		<div class="historical-note source-stale-note"><span>Source files changed since this analysis. Saved values remain unchanged and may be out of date.</span>{#if onrequestchange}<Button variant="ghost" size="sm" disabled={busy} onclick={() => void requestChange('Re-run this analysis against the current mounted source revision, preserving its metric definition and population.')}>Analyze current data</Button>{/if}</div>
 	{/if}
 	{#if changeOpen && onrequestchange}
 		<form class="change-form" onsubmit={event => { event.preventDefault(); requestChange(); }}>
@@ -242,7 +263,7 @@
 		{#if displayed.revision.spec && Presentation && !rendererError}
 			{#key `${displayed.artifact.id}:${displayed.revision.revision}`}
 				<svelte:boundary>
-					<Presentation spec={displayed.revision.spec} results={displayed.results} {initialState} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
+					<Presentation spec={displayed.revision.spec} results={displayed.results} {initialState} interactionScope={displayed.artifact.workspace} {showActiveFilters} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
 					{#snippet failed()}
 						<p class="quiet-note" role="status">The interactive presentation is unavailable. The saved answer and exact values are unchanged.</p>
 						<MarkdownContent text={displayed.run.result.text} />
@@ -295,6 +316,7 @@
 	.artifact-actions :global(.fella-ui-select) { width: auto; max-width: 210px; min-height: 30px; border-radius: 999px; font-size: var(--fs-xs); }
 	.inline-error { color: var(--err); font-size: var(--fs-xs); overflow-wrap: anywhere; }
 	.historical-note { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
+	.source-stale-note { padding:var(--space-2) var(--space-3); border:1px solid color-mix(in srgb, var(--warning, #d4a84f) 35%, var(--border)); border-radius:var(--radius-sm); background:var(--bg-inset); }
 	.form-actions { display: flex; align-items: center; justify-content: end; gap: var(--space-2); }
 	.change-form { display: grid; gap: var(--space-3); padding: var(--space-4); background: var(--bg-inset); border-radius: var(--radius-window); }
 	label { display: grid; gap: var(--space-2); color: var(--text-dim); }

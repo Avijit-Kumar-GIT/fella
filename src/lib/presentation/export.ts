@@ -6,6 +6,7 @@ import { formatPresentationValue, presentationColumnLabel, type PresentationForm
 export interface PresentationExportOptions {
 	state?: PresentationState;
 	chartSnapshots?: Record<string, string>;
+	interactionScope?: string;
 }
 
 function escape(value: unknown): string {
@@ -62,7 +63,7 @@ export function exportPresentation(spec: PresentationSpec, results: BoundResult[
 		const fallback = results.map((result) => `## Saved result: ${escape(result.id)}\n\n${scope(result)}\n\n${resultRows(result, result.rows.map((_, i) => i), result.columns)}`).join('\n\n');
 		return { markdown: `The saved presentation could not be validated. Exact saved results are included below.\n\n${fallback}`, warnings: validation.issues.map((issue) => issue.message), resultIds: [] };
 	}
-	const state = resolvePresentationState(validation.spec, options.state ?? {}, results);
+	const state = resolvePresentationState(validation.spec, options.state ?? {}, results, options.interactionScope);
 	const elements = validation.spec.elements as Record<string, { type: string; props: Record<string, unknown>; children: string[] }>;
 	function render(key: string): string {
 		const node = elements[key]; const { type, props, children } = node;

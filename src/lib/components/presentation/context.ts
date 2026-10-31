@@ -1,11 +1,14 @@
 import { getContext, setContext } from 'svelte';
 import type { BoundResult, PresentationAction, PresentationState } from '../../presentation/types';
+import type { RowFilterValue } from '../../presentation/results';
 
 interface PresentationContext {
 	readonly results: BoundResult[];
 	readonly state: PresentationState;
 	readonly interactive: boolean;
+	readonly interactionScope?: string;
 	update(key: string, value: unknown): void;
+	selectRows(resultId: string, interactionGroup: string | undefined, values: RowFilterValue[]): void;
 	runAction(action: unknown): void;
 	action(action: PresentationAction): void;
 }

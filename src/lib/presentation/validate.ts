@@ -63,13 +63,32 @@ function validateBindings(spec: SpecRecord, results: BoundResult[]): string[] {
 			const result = requireResult(results, String(props.resultId));
 			resultIds.add(result.id);
 			if (element.type === 'Table' && Array.isArray(props.fields) && props.fields.some((field) => typeof field !== 'string' || !result.columns.includes(field))) throw new Error(`${path}: a table field is not present in the saved result.`);
+			if ((element.type === 'Table' || element.type === 'Chart') && Array.isArray(props.linkBy) && props.linkBy.some((field) => typeof field !== 'string' || !result.columns.includes(field))) throw new Error(`${path}: a linked filter field is not present in the saved result.`);
+			if (element.type === 'Table' && Array.isArray(props.linkBy)) {
+				const visibleFields = Array.isArray(props.fields) ? props.fields : result.columns;
+				if (props.linkBy.some((field) => !visibleFields.includes(field))) throw new Error(`${path}: linked table fields must be visible in the table.`);
+			}
 			if (element.type === 'Table' && props.columnFormats && Object.keys(props.columnFormats as object).some((field) => !result.columns.includes(field))) throw new Error(`${path}: a formatted field is not present in the saved result.`);
 			if (element.type === 'ResultFilter') {
 				if (!result.columns.includes(String(props.field))) throw new Error(`${path}: filter field is not present in the saved result.`);
 				const index = result.columns.indexOf(String(props.field));
 				if (new Set(result.rows.map((row) => row[index])).size > 200) throw new Error(`${path}: filter has too many choices; use a more focused result.`);
 			}
-			if (element.type === 'Chart') validateChartSpec(props.spec, result);
+			if (element.type === 'Chart') {
+				validateChartSpec(props.spec, result);
+				if (Array.isArray(props.linkBy)) {
+					const encoded = new Map<string, boolean>();
+					function collect(value: unknown): void {
+						if (Array.isArray(value)) { value.forEach(collect); return; }
+						if (!value || typeof value !== 'object') return;
+						const record = value as Record<string, unknown>;
+						if (typeof record.field === 'string') encoded.set(record.field, !('aggregate' in record) && !('bin' in record) && !('timeUnit' in record));
+						for (const child of Object.values(record)) collect(child);
+					}
+					collect(props.spec);
+					if (props.linkBy.some((field) => !encoded.get(String(field)))) throw new Error(`${path}: linked chart fields must be encoded as raw, unaggregated saved values.`);
+				}
+			}
 		}
 		if (element.type === 'Tabs') {
 			const labels = props.labels as string[];

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
-	import type { ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioCheckpoint, StudioDocument, StudioPlacement } from '$lib/analytics-artifacts';
+	import type { ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioCheckpoint, StudioDesignProposal, StudioDocument, StudioPlacement, StudioRevision } from '$lib/analytics-artifacts';
+	import type { FilterSelection } from '$lib/presentation/results';
+	import type { StudioPlacementWidth } from '$lib/analytics-artifacts';
 	import { buildStudioReport, studioReportFilename, type StudioReportArtifacts } from '$lib/studio-report';
 	import { Button } from '$lib/components/ui/button';
 	import { DropdownMenu } from '$lib/components/ui/dropdown-menu';
@@ -37,6 +39,9 @@
 	};
 	let current = $state<Draft | null>(null);
 	let documents = $state<StudioDocument[]>([]);
+	let documentHistory = $state<StudioRevision[]>([]);
+	let historyError = $state('');
+	let comparedRevision = $state<StudioRevision | null>(null);
 	let artifacts = $state<ArtifactRecord[]>([]);
 	let resolved = $state<Record<string, ResolvedArtifact>>({});
 	let resolveErrors = $state<Record<string, string>>({});
@@ -54,7 +59,14 @@
 	let reportJson = '';
 	let reportBusy = $state(false);
 	let reportError = $state('');
-	let notesEditing = $state(false);
+	let reportMode = $state<'analyze' | 'design'>('analyze');
+	let designRequest = $state('');
+	let proposalRequest = $state('');
+	let designProposal = $state<StudioDesignProposal | null>(null);
+	let designBusy = $state(false);
+	let designError = $state('');
+	let selectedPlacementId = $state<string | null>(null);
+	let viewerStates = $state<Record<string, Record<string, unknown>>>({});
 	let pickerOpen = $state(false);
 	let pickerSearch = $state('');
 	let createOpen = $state(false);
@@ -68,6 +80,7 @@
 	let announcement = $state('');
 	let requestedKey = '';
 	let navigation = 0;
+	let historyRequest = 0;
 	let disposed = false;
 	const drafts = new Map<string, Draft>();
 	const timers = new Map<Draft, ReturnType<typeof setTimeout>>();
@@ -75,6 +88,21 @@
 	const resolving = new Map<string, Promise<void>>();
 	const initialRequests = new Set<string>();
 	let filteredArtifacts = $derived(artifacts.filter(artifact => artifact.title.toLocaleLowerCase().includes(pickerSearch.trim().toLocaleLowerCase())));
+	let activeReportFilters = $derived.by(() => {
+		const unique = new Map<string, { scope: string; key: string; filter: FilterSelection }>();
+		for (const placement of current?.placements ?? []) {
+			const scope = resolved[resultKey(current?.document.workspace ?? workspace, placement)]?.artifact.workspace;
+			if (!scope) continue;
+			const state = viewerStates[placement.id] ?? placement.view_state;
+			for (const [key, raw] of Object.entries(state)) {
+				if (!raw || typeof raw !== 'object') continue;
+				const filter = raw as FilterSelection;
+				if (filter.interactionGroup && filter.interactionScope === scope && filter.value !== null) unique.set(`${scope}\u0000${key}`, { scope, key, filter });
+			}
+		}
+		return [...unique.values()];
+	});
+	let hasUnsavedViewDefaults = $derived(!!current?.placements.some(placement => JSON.stringify(viewerStates[placement.id] ?? placement.view_state) !== JSON.stringify(placement.view_state)));
 	let status = $derived(current?.saving ? 'Saving…' : current?.error ? 'Couldn’t save' : current && current.edits !== current.savedEdits ? 'Unsaved changes' : 'Saved');
 
 	function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -93,6 +121,7 @@
 	}
 	function changed(target: Draft): void {
 		if (target.locked) return;
+		designProposal = null; proposalRequest = '';
 		++target.edits; target.error = ''; target.notice = '';
 		const timer = timers.get(target);
 		if (timer) clearTimeout(timer);
@@ -122,6 +151,7 @@
 					const saved = await ipc.studioSave(target.document.workspace, target.document.id, target.document.version, payload);
 					target.document = saved; target.savedEdits = edits; target.error = '';
 					remember(saved);
+					void refreshHistory(saved.workspace, saved.id);
 					if (!disposed && workspace === saved.workspace && current === target) onopen?.(saved.id, saved.title);
 				}
 				return true;
@@ -156,12 +186,25 @@
 		} catch (cause) { if (!disposed && workspace === root) listError = message(cause); }
 	}
 
+	async function refreshHistory(root: string, id: string): Promise<void> {
+		const request = ++historyRequest;
+		historyError = '';
+		try {
+			const history = await ipc.studioHistory(root, id);
+			if (!disposed && workspace === root && current?.document.id === id && request === historyRequest) documentHistory = history;
+		} catch (cause) {
+			if (!disposed && workspace === root && current?.document.id === id && request === historyRequest) historyError = message(cause);
+		}
+	}
+
 	async function open(root: string, id: string | null, artifactId: string | null = null): Promise<void> {
 		const request = ++navigation;
 		if (current) void saveDraft(current);
 		requestedKey = JSON.stringify([root, id]);
 		current = null; loading = true; loadError = ''; documents = []; artifacts = [];
-		notesEditing = false; pickerOpen = false; checkpointOpen = false; restoreTarget = null;
+		documentHistory = []; historyError = ''; comparedRevision = null; ++historyRequest;
+		reportMode = 'analyze'; viewerStates = {}; pickerOpen = false; checkpointOpen = false; restoreTarget = null;
+		designProposal = null; designRequest = ''; proposalRequest = ''; designError = ''; selectedPlacementId = null;
 		try {
 			const available = await ipc.studioList(root);
 			if (disposed || request !== navigation) return;
@@ -179,6 +222,7 @@
 			if (document) {
 				const target = drafts.get(documentKey(root, document.id)) ?? makeDraft(document);
 				current = target;
+				void refreshHistory(root, target.document.id);
 				requestedKey = JSON.stringify([root, document.id]);
 				for (const placement of target.placements) void resolvePlacement(root, placement);
 				if (artifactId) await addInitial(target, artifactId);
@@ -228,7 +272,9 @@
 			if (disposed || workspace !== root) return;
 			if (current) void saveDraft(current);
 			++navigation; loading = false; loadError = '';
-			current = makeDraft(document); notesEditing = true;
+			current = makeDraft(document); reportMode = 'analyze'; viewerStates = {};
+			designProposal = null; designRequest = ''; proposalRequest = ''; designError = ''; selectedPlacementId = null;
+			void refreshHistory(document.workspace, document.id);
 			requestedKey = JSON.stringify([root, document.id]);
 			remember(document); createOpen = false; newTitle = '';
 			onopen?.(document.id, document.title);
@@ -238,11 +284,25 @@
 
 	function addResolved(target: Draft, output: ResolvedArtifact): void {
 		if (target.locked) return;
-		const placement: StudioPlacement = { id: crypto.randomUUID(), artifact_id: output.artifact.id, revision: output.revision.revision, view_state: {} };
+		const placement: StudioPlacement = { id: crypto.randomUUID(), artifact_id: output.artifact.id, revision: output.revision.revision, label: '', width: 'full', view_state: {} };
 		resolved = { ...resolved, [resultKey(target.document.workspace, placement)]: output };
 		target.placements = [...target.placements, placement];
 		changed(target); pickerOpen = false;
 		announcement = `${output.artifact.title} added to the report.`;
+	}
+
+	function setPlacementLabel(target: Draft, id: string, label: string): void {
+		if (target.locked) return;
+		const bounded = label.slice(0, 160);
+		if (target.placements.find(placement => placement.id === id)?.label === bounded) return;
+		target.placements = target.placements.map(placement => placement.id === id ? { ...placement, label: bounded } : placement);
+		changed(target);
+	}
+
+	function setPlacementWidth(target: Draft, id: string, width: StudioPlacementWidth): void {
+		if (target.locked || target.placements.find(placement => placement.id === id)?.width === width) return;
+		target.placements = target.placements.map(placement => placement.id === id ? { ...placement, width } : placement);
+		changed(target);
 	}
 
 	async function addArtifact(id: string): Promise<void> {
@@ -269,22 +329,223 @@
 	function remove(target: Draft, id: string): void {
 		if (target.locked) return;
 		target.placements = target.placements.filter(item => item.id !== id); changed(target);
+		if (selectedPlacementId === id) selectedPlacementId = null;
 		announcement = 'Output removed from this document. Its saved analytical record is unchanged.';
+	}
+
+	function setDesignTarget(id: string): void {
+		selectedPlacementId = selectedPlacementId === id ? null : id;
+		designProposal = null; proposalRequest = ''; designError = '';
+	}
+
+	function placementTitle(target: Draft, placement: StudioPlacement): string {
+		const output = resolved[resultKey(target.document.workspace, placement)]?.artifact
+			?? artifacts.find(item => item.id === placement.artifact_id);
+		return placement.label?.trim() || output?.title || 'Saved output';
+	}
+
+	function proposalSummary(target: Draft, proposal: StudioDesignProposal): string[] {
+		const update = proposal.update;
+		if (!update) return [];
+		const summary: string[] = [];
+		if (update.title !== target.title) summary.push(`Report title: ${update.title}`);
+		if (update.body !== target.body) summary.push('Report notes will change.');
+		if (update.placements.length !== target.placements.length) {
+			summary.push(`${target.placements.length} outputs → ${update.placements.length} outputs`);
+		}
+		const currentIds = target.placements.map(item => item.id);
+		const nextIds = update.placements.map(item => item.id);
+		if (currentIds.length === nextIds.length && currentIds.some((id, index) => id !== nextIds[index])) summary.push('Output order will change.');
+		for (const next of update.placements) {
+			const before = target.placements.find(item => item.id === next.id);
+			const nextLabel = next.label?.trim() ?? '';
+			if (before && ((before.label?.trim() ?? '') !== nextLabel || (before.width ?? 'full') !== (next.width ?? 'full'))) {
+				summary.push(`${placementTitle(target, next)}: ${next.width ?? 'full'} width${nextLabel ? ` · titled “${nextLabel}”` : ''}`);
+			}
+			if (!before) summary.push(`Add ${placementTitle(target, next)} (${next.width ?? 'full'} width)`);
+		}
+		for (const before of target.placements) {
+			if (!update.placements.some(item => item.id === before.id)) summary.push(`Remove ${placementTitle(target, before)} from this Report`);
+		}
+		return summary.length ? summary : ['No layout changes were proposed.'];
+	}
+
+	function proposalHasChanges(target: Draft, proposal: StudioDesignProposal): boolean {
+		return proposalSummary(target, proposal).some(item => item !== 'No layout changes were proposed.');
+	}
+
+	function compareReportRevision(revision: StudioRevision, target: Draft): string[] {
+		const changes: string[] = [];
+		if (revision.title !== target.title) changes.push(`Title: “${revision.title}”`);
+		if (revision.body !== target.body) changes.push('Report notes differ.');
+		const currentIds = target.placements.map(item => item.id);
+		const oldIds = revision.placements.map(item => item.id);
+		for (const old of revision.placements) {
+			const next = target.placements.find(item => item.id === old.id);
+			if (!next) changes.push(`Removed since this version: ${placementTitle(target, old)}.`);
+			else if (old.artifact_id !== next.artifact_id) changes.push(`Saved output changed: ${placementTitle(target, next)}.`);
+			else if (old.revision !== next.revision) changes.push(`${placementTitle(target, next)}: analytical revision ${old.revision} → ${next.revision}.`);
+			else if ((old.label ?? '') !== (next.label ?? '') || (old.width ?? 'full') !== (next.width ?? 'full')) changes.push(`${placementTitle(target, next)}: label or layout changed.`);
+		}
+		for (const next of target.placements) if (!oldIds.includes(next.id)) changes.push(`Added since this version: ${placementTitle(target, next)}.`);
+		if (currentIds.length === oldIds.length && currentIds.some((id, index) => id !== oldIds[index])) changes.push('Output order changed.');
+		return changes.length ? changes : ['No differences in the saved Report composition.'];
+	}
+
+	function revisionKindLabel(kind: StudioRevision['kind']): string {
+		return ({ created: 'Created', presentation: 'Presentation', analytical: 'Analysis', checkpoint: 'Checkpoint', restored: 'Restored', imported: 'Imported' })[kind];
+	}
+
+	async function restoreHistoryRevision(revision: StudioRevision): Promise<void> {
+		const target = current;
+		if (!target || target.locked || target.document.version === revision.version) return;
+		target.locked = true;
+		try {
+			if (!await saveDraft(target)) return;
+			const saved = await ipc.studioRestoreRevision(target.document.workspace, target.document.id, target.document.version, revision.version);
+			target.document = saved; target.title = saved.title; target.body = saved.body; target.placements = clone(saved.placements);
+			target.savedEdits = target.edits; target.error = ''; target.notice = `Report revision ${revision.version} restored as a new version. Newer history remains available.`;
+			designProposal = null; proposalRequest = ''; selectedPlacementId = null; comparedRevision = null;
+			viewerStates = Object.fromEntries(target.placements.map(placement => [placement.id, clone(placement.view_state)]));
+			for (const placement of saved.placements) void resolvePlacement(saved.workspace, placement);
+			remember(saved); void refreshHistory(saved.workspace, saved.id);
+		} catch (cause) { target.error = message(cause); }
+		finally { target.locked = false; }
+	}
+
+	async function proposeDesign(): Promise<void> {
+		const target = current;
+		const request = designRequest.trim();
+		if (!target || target.locked || designBusy || !request) return;
+		designBusy = true; designError = ''; designProposal = null; proposalRequest = '';
+		try {
+			if (!await saveDraft(target)) throw new Error(target.error || 'Save the Report before requesting a design change.');
+			const editsAtStart = target.edits;
+			const proposal = await ipc.studioDesignPropose(
+				target.document.workspace,
+				target.document.id,
+				target.document.version,
+				request,
+				selectedPlacementId
+			);
+			if (disposed || current !== target) return;
+			if (editsAtStart !== target.edits) throw new Error('The Report changed while Fella was preparing the suggestion. Review the current Report and ask again.');
+			if (proposal.base_version !== target.document.version) throw new Error('This suggestion is for an older Report version. Refresh and ask again.');
+			designProposal = proposal; proposalRequest = request;
+		} catch (cause) {
+			if (!disposed && current === target) designError = message(cause);
+		} finally {
+			if (!disposed) designBusy = false;
+		}
+	}
+
+	function discardDesignProposal(): void {
+		designProposal = null; proposalRequest = ''; designError = ''; designRequest = '';
+	}
+
+	function applyDesignProposal(): void {
+		const target = current;
+		const proposal = designProposal;
+		if (!target || !proposal || proposal.requires_analysis || !proposal.update || target.locked) return;
+		if (proposal.base_version !== target.document.version || target.edits !== target.savedEdits) {
+			designError = 'The Report changed after this suggestion. Ask again to review an up-to-date proposal.';
+			return;
+		}
+		const priorViewerStates = viewerStates;
+		target.title = proposal.update.title;
+		target.body = proposal.update.body;
+		target.placements = clone(proposal.update.placements);
+		viewerStates = Object.fromEntries(target.placements.map(placement => [placement.id, clone(priorViewerStates[placement.id] ?? placement.view_state)]));
+		for (const placement of target.placements) void resolvePlacement(target.document.workspace, placement);
+		changed(target);
+		designRequest = ''; designError = ''; selectedPlacementId = null; proposalRequest = '';
+		announcement = 'Report design applied. Saving changes.';
+	}
+
+	async function continueAnalysis(placement: StudioPlacement): Promise<void> {
+		const target = current;
+		if (!target || !designProposal?.requires_analysis || !onrequestchange) return;
+		const resolvedArtifact = resolved[resultKey(target.document.workspace, placement)];
+		if (!resolvedArtifact) {
+			designError = 'Open this saved output before continuing its analytical change.';
+			return;
+		}
+		designBusy = true; designError = '';
+		try {
+			if (!await saveDraft(target)) throw new Error(target.error || 'Save the Report before continuing.');
+			reportMode = 'analyze';
+			await onrequestchange(resolvedArtifact, proposalRequest);
+			designProposal = null; proposalRequest = ''; designRequest = '';
+			announcement = `Analytical change sent to the conversation for ${placementTitle(target, placement)}.`;
+		} catch (cause) { designError = message(cause); }
+		finally { designBusy = false; }
 	}
 	function pin(target: Draft, id: string, revision: number): void {
 		if (target.locked) return;
 		const placement = target.placements.find(item => item.id === id);
 		if (!placement || placement.revision === revision) return;
+		const scope = resolved[resultKey(target.document.workspace, placement)]?.artifact.workspace;
+		if (scope) removeSharedFilter(scope);
+		viewerStates = { ...viewerStates, [id]: {} };
 		target.placements = target.placements.map(item => item.id === id ? { ...item, revision, view_state: {} } : item);
 		changed(target);
 		void resolvePlacement(target.document.workspace, { ...placement, revision });
 	}
 	function selectState(target: Draft, id: string, state: Record<string, unknown>): void {
-		if (target.locked) return;
 		const placement = target.placements.find(item => item.id === id);
-		if (!placement || JSON.stringify(placement.view_state) === JSON.stringify(state)) return;
-		target.placements = target.placements.map(item => item.id === id ? { ...item, view_state: clone(state) } : item);
+		if (!placement) return;
+		const scope = resolved[resultKey(target.document.workspace, placement)]?.artifact.workspace;
+		const nextStates = { ...viewerStates, [id]: clone(state) };
+		if (scope) {
+			const shared = Object.fromEntries(Object.entries(state).filter(([, value]) => {
+				if (!value || typeof value !== 'object') return false;
+				const filter = value as FilterSelection;
+				return !!filter.interactionGroup && filter.interactionScope === scope;
+			}));
+			for (const peer of target.placements) {
+				if (peer.id === id) continue;
+				const peerScope = resolved[resultKey(target.document.workspace, peer)]?.artifact.workspace;
+				if (peerScope !== scope) continue;
+				const prior = nextStates[peer.id] ?? peer.view_state;
+				const local = Object.fromEntries(Object.entries(prior).filter(([, value]) => {
+					if (!value || typeof value !== 'object') return true;
+					const filter = value as FilterSelection;
+					return !(filter.interactionGroup && filter.interactionScope === scope);
+				}));
+				nextStates[peer.id] = { ...local, ...shared };
+			}
+		}
+		viewerStates = nextStates;
+	}
+
+	function removeSharedFilter(scope: string, key?: string): void {
+		const target = current;
+		if (!target) return;
+		const next = { ...viewerStates };
+		for (const placement of target.placements) {
+			const placementScope = resolved[resultKey(target.document.workspace, placement)]?.artifact.workspace;
+			if (placementScope !== scope) continue;
+			const state = next[placement.id] ?? placement.view_state;
+			const filtered = Object.fromEntries(Object.entries(state).filter(([entryKey, value]) => {
+				if (!value || typeof value !== 'object') return true;
+				const filter = value as FilterSelection;
+				return !(filter.interactionGroup && filter.interactionScope === scope && (key === undefined || key === entryKey));
+			}));
+			next[placement.id] = filtered;
+		}
+		viewerStates = next;
+	}
+
+	function saveViewDefaults(target: Draft): void {
+		if (target.locked) return;
+		const placements = target.placements.map(placement => {
+			const state = viewerStates[placement.id];
+			return state && JSON.stringify(state) !== JSON.stringify(placement.view_state) ? { ...placement, view_state: clone(state) } : placement;
+		});
+		if (placements.every((placement, index) => placement === target.placements[index])) return;
+		target.placements = placements;
 		changed(target);
+		announcement = 'Current filter selections saved as report defaults.';
 	}
 
 	async function checkpoint(): Promise<void> {
@@ -295,7 +556,7 @@
 		try {
 			if (!await saveDraft(target)) return;
 			const saved = await ipc.studioCheckpoint(target.document.workspace, target.document.id, target.document.version, title);
-			target.document = saved; remember(saved);
+			target.document = saved; remember(saved); void refreshHistory(saved.workspace, saved.id);
 			target.notice = 'Checkpoint saved.';
 			if (current === target) { checkpointOpen = false; checkpointTitle = ''; }
 		} catch (cause) { target.error = message(cause); }
@@ -313,7 +574,9 @@
 			target.document = await ipc.studioCheckpoint(target.document.workspace, target.document.id, target.document.version, `Before restoring ${selected.title}`);
 			const saved = await ipc.studioRestore(target.document.workspace, target.document.id, target.document.version, selected.id);
 			target.document = saved; target.title = saved.title; target.body = saved.body; target.placements = clone(saved.placements);
+			designProposal = null; proposalRequest = ''; selectedPlacementId = null;
 			target.savedEdits = target.edits; target.error = ''; target.notice = 'Checkpoint restored. The previous document is preserved in history.';
+			void refreshHistory(saved.workspace, saved.id);
 			remember(saved);
 			for (const placement of saved.placements) void resolvePlacement(saved.workspace, placement);
 			if (current === target) restoreTarget = null;
@@ -331,6 +594,7 @@
 			remember(saved);
 			if (!disposed && current === target) {
 				current = makeDraft(saved); current.notice = 'Edits saved as a separate document. The original is unchanged.';
+				void refreshHistory(saved.workspace, saved.id);
 				requestedKey = JSON.stringify([saved.workspace, saved.id]); onopen?.(saved.id);
 			}
 		} catch (cause) { target.error = message(cause); }
@@ -353,8 +617,8 @@
 			let presentation: import('$lib/studio-report').StudioReportOptions['presentation'];
 			try {
 				const { exportPresentation } = await import('$lib/presentation/export');
-				presentation = ({ spec, results, state }) => {
-					const snapshot = exportPresentation(spec, results, { state });
+				presentation = ({ spec, results, state, interactionScope }) => {
+					const snapshot = exportPresentation(spec, results, { state, interactionScope });
 					return { markdown: snapshot.markdown, disclosures: snapshot.warnings };
 				};
 			} catch { /* The original presentation, answer and exact values remain exportable. */ }
@@ -456,11 +720,13 @@
 		</div>
 		<div class="toolbar-actions">
 			{#if current}
-				<Button class="studio-action" variant="ghost" size="sm" aria-label={notesEditing ? 'Done editing report' : 'Edit report'} title={notesEditing ? 'Done editing report' : 'Edit report'} disabled={current.locked} onclick={() => {
-					if (notesEditing) { notesEditing = false; if (current) void saveDraft(current); }
-					else notesEditing = true;
-				}}>{#if notesEditing}<Icon name="check" size={14} />{#if !embedded}Done{/if}{:else}<Icon name="pencil" size={12} />{#if !embedded}Edit{/if}{/if}</Button>
+				<div class="mode-switch" role="group" aria-label="Report mode">
+					<button class:active={reportMode === 'analyze'} aria-pressed={reportMode === 'analyze'} onclick={() => reportMode = 'analyze'}>Analyze</button>
+					<button class:active={reportMode === 'design'} aria-pressed={reportMode === 'design'} onclick={() => reportMode = 'design'}>Design</button>
+				</div>
+				{#if reportMode === 'design' && hasUnsavedViewDefaults}<Button class="studio-action save-defaults" variant="ghost" size="sm" aria-label="Save filters as default" title="Save filters as default" disabled={current.locked} onclick={() => current && saveViewDefaults(current)}><Icon name="check" size={13} />{#if !embedded}Save filters as default{/if}</Button>{/if}
 				<span class="save-status" role="status" aria-live="polite">{status}</span>
+				<button class="studio-icon-button" aria-label="Refresh saved output revisions" title="Refresh saved output revisions" onclick={() => void refreshOutputs(workspace)}><Icon name="refresh" size={14} /></button>
 				<Button class="studio-action" variant="ghost" size="sm" aria-label="Export report" title={exportBusy ? 'Exporting report' : 'Export report'} disabled={exportBusy || current.locked} onclick={() => void download()}><Icon name="download" size={12} />{#if !embedded}{exportBusy ? 'Exporting…' : 'Export'}{/if}</Button>
 			{/if}
 			<DropdownMenu.Root><DropdownMenu.Trigger class="studio-icon-button" aria-label="More report actions" title="More report actions"><Icon name="more-horizontal" size={16} /></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content class="fella-ui-menu-content" align="end">
@@ -481,18 +747,42 @@
 			{@const target = current}
 			<div class="studio-document" data-studio-document-id={target.document.id}>
 				<div class="document-heading">
-					{#if !embedded || notesEditing}
-						{#if notesEditing}
-							<input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" />
-						{:else}
-							<h1 class="document-title">{target.title.trim() || 'Untitled report'}</h1>
-						{/if}
-					{/if}
+					{#if reportMode === 'design'}
+						<input class="document-title" aria-label="Report title" maxlength="120" value={target.title} disabled={target.locked} oninput={event => { target.title = event.currentTarget.value; changed(target); }} placeholder="Untitled report" />
+					{:else}<h1 class="document-title">{target.title.trim() || 'Untitled report'}</h1>{/if}
 					<p class="document-caption">Report · Updated {new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' }).format(new Date(target.document.updated_at_ms))}</p>
 				</div>
 				{#if target.error}<div class="save-error"><p role="alert">{target.error}</p><div><Button size="sm" variant="outline" disabled={target.locked || target.saving} onclick={() => void saveDraft(target)}>Retry save</Button><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => void saveCopy()}>Save a copy</Button></div></div>{:else if target.notice}<p class="document-notice" role="status">{target.notice}</p>{/if}
-				<section class="document-notes" class:document-notes-empty={!notesEditing && !target.body.trim()} aria-label="Document notes">
-					{#if notesEditing}
+				{#if activeReportFilters.length}<div class="report-filter-bar" aria-label="Active report filters"><span>Filtered by</span>{#each activeReportFilters as item (`${item.scope}:${item.key}`)}<button class="report-filter-chip" aria-label={`Remove filter ${item.filter.field}: ${item.filter.value}`} onclick={() => removeSharedFilter(item.scope, item.key)}>{item.filter.field}<strong>{item.filter.value}</strong><Icon name="x" size={12} /></button>{/each}<button class="report-filter-clear" onclick={() => { for (const scope of new Set(activeReportFilters.map(item => item.scope))) removeSharedFilter(scope); }}>Reset</button></div>{/if}
+				{#if reportMode === 'design'}
+					<section class="design-assistant" aria-label="Describe a Report design change">
+						<div class="design-assistant-heading"><div><h2>Describe a change</h2><p>Fella will suggest a layout using saved results. Analysis changes go to Analyze.</p></div>{#if selectedPlacementId}<button class="design-target-clear" onclick={() => setDesignTarget(selectedPlacementId!)}>Clear target</button>{/if}</div>
+						{#if selectedPlacementId && target.placements.some(item => item.id === selectedPlacementId)}
+							<p class="design-target-note">Targeting <strong>{placementTitle(target, target.placements.find(item => item.id === selectedPlacementId)!)}</strong>. Fella will keep other outputs unchanged.</p>
+						{/if}
+						<form class="design-prompt" onsubmit={event => { event.preventDefault(); void proposeDesign(); }}>
+							<textarea aria-label="Describe a Report design change" rows="2" maxlength="2000" bind:value={designRequest} disabled={designBusy || target.locked} placeholder="For example, put the revenue trend beside the regional breakdown and give both clear titles."></textarea>
+							<Button size="sm" type="submit" disabled={!designRequest.trim() || designBusy || target.locked}>{designBusy ? 'Thinking…' : 'Suggest changes'}</Button>
+						</form>
+						{#if designError}<p class="design-error" role="alert">{designError}</p>{/if}
+						{#if designProposal}
+							<div class="design-proposal" aria-label="Report design proposal">
+								<strong>{designProposal.requires_analysis ? 'This request changes the analysis' : 'Review suggested changes'}</strong>
+								<p>{designProposal.message}</p>
+								{#if designProposal.requires_analysis}
+									<p class="design-proposal-note">Choose the saved output to revise. The current Report remains pinned until you adopt the new analytical revision.</p>
+									{#if !target.placements.length}<p class="design-proposal-note">Add a saved output before requesting an analytical revision.</p>{/if}
+									<ul class="analysis-handoff-list">{#each target.placements as placement (placement.id)}{@const artifact = resolved[resultKey(target.document.workspace, placement)]}<li><button disabled={!onrequestchange || !artifact || designBusy} onclick={() => void continueAnalysis(placement)}><span>{placementTitle(target, placement)}</span><Icon name="arrow-up-right" size={13} /></button></li>{/each}</ul>
+								{:else}
+									<ul>{#each proposalSummary(target, designProposal) as item, index (`${item}:${index}`)}<li>{item}</li>{/each}</ul>
+									<div class="design-proposal-actions"><Button size="sm" variant="ghost" onclick={discardDesignProposal}>Discard</Button><Button size="sm" disabled={!proposalHasChanges(target, designProposal) || target.locked} onclick={applyDesignProposal}>Apply layout</Button></div>
+								{/if}
+							</div>
+						{/if}
+					</section>
+				{/if}
+				<section class="document-notes" class:document-notes-empty={reportMode !== 'design' && !target.body.trim()} aria-label="Report notes">
+					{#if reportMode === 'design'}
 						<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label>
 					{:else if target.body.trim()}
 						<MarkdownContent text={target.body} />
@@ -501,18 +791,21 @@
 				<ol class="placements" aria-label="Report results">
 					{#each target.placements as placement, index (placement.id)}
 						{@const key = resultKey(target.document.workspace, placement)}
-						<li class="placement" data-placement-id={placement.id}>
-							{#if notesEditing}<div class="placement-controls"><span class="position-label">Output {index + 1}</span><div class="placement-buttons"><button class="studio-icon-button" aria-label={`Move output ${index + 1} up`} title="Move up" disabled={index === 0 || target.locked} onclick={() => move(target, placement.id, -1)}><Icon name="chevron-up" size={14} /></button><button class="studio-icon-button" aria-label={`Move output ${index + 1} down`} title="Move down" disabled={index === target.placements.length - 1 || target.locked} onclick={() => move(target, placement.id, 1)}><Icon name="chevron-down" size={14} /></button><button class="studio-icon-button" aria-label={`Remove output ${index + 1} from document`} title="Remove from document, keep saved output" disabled={target.locked} onclick={() => remove(target, placement.id)}><Icon name="x" size={14} /></button></div></div>{/if}
+						<li class="placement" class:half={placement.width === 'half'} data-placement-id={placement.id}>
+							{#if reportMode === 'design'}<div class="placement-controls"><label class="placement-label-control"><span>Output {index + 1}</span><input aria-label={`Title for output ${index + 1}`} maxlength="160" value={placement.label ?? ''} placeholder={resolved[key]?.artifact.title ?? 'Optional title'} disabled={target.locked} oninput={event => setPlacementLabel(target, placement.id, event.currentTarget.value)} /></label><div class="placement-layout-controls" role="group" aria-label={`Layout width for output ${index + 1}`}><button class:active={(placement.width ?? 'full') === 'full'} aria-pressed={(placement.width ?? 'full') === 'full'} title="Full width" onclick={() => setPlacementWidth(target, placement.id, 'full')}>Full</button><button class:active={placement.width === 'half'} aria-pressed={placement.width === 'half'} title="Half width" onclick={() => setPlacementWidth(target, placement.id, 'half')}>Half</button></div><div class="placement-buttons"><button class="placement-target" class:target-active={selectedPlacementId === placement.id} aria-pressed={selectedPlacementId === placement.id} title="Give this output to the Report design assistant as its target" disabled={designBusy} onclick={() => setDesignTarget(placement.id)}>{selectedPlacementId === placement.id ? 'Targeted' : 'Target'}</button><button class="studio-icon-button" aria-label={`Move output ${index + 1} up`} title="Move up" disabled={index === 0 || target.locked} onclick={() => move(target, placement.id, -1)}><Icon name="chevron-up" size={14} /></button><button class="studio-icon-button" aria-label={`Move output ${index + 1} down`} title="Move down" disabled={index === target.placements.length - 1 || target.locked} onclick={() => move(target, placement.id, 1)}><Icon name="chevron-down" size={14} /></button><button class="studio-icon-button" aria-label={`Remove output ${index + 1} from document`} title="Remove from document, keep saved output" disabled={target.locked} onclick={() => remove(target, placement.id)}><Icon name="x" size={14} /></button></div></div>{/if}
 							{#if resolved[key]}
-								{#key `${placement.id}:${placement.revision}`}<ArtifactView resolved={resolved[key]} viewState={placement.view_state} onstatechange={state => selectState(target, placement.id, state)} onrevisionchange={revision => pin(target, placement.id, revision)} {onrequestchange} />{/key}
+								{#key `${placement.id}:${placement.revision}`}<ArtifactView resolved={resolved[key]} displayTitle={placement.label} latestArtifact={artifacts.find(item => item.id === placement.artifact_id)} viewState={viewerStates[placement.id] ?? placement.view_state} showActiveFilters={false} onstatechange={state => selectState(target, placement.id, state)} onrevisionchange={revision => pin(target, placement.id, revision)} {onrequestchange} />{/key}
 							{:else if resolveErrors[key]}<div class="output-unavailable"><h2>Saved output unavailable</h2><p role="alert">{resolveErrors[key]}</p><p class="document-caption">{placement.artifact_id} · revision {placement.revision}. The placement is retained.</p><Button size="sm" variant="outline" onclick={() => void resolvePlacement(target.document.workspace, placement, true)}>Retry output</Button></div>
 							{:else}<p class="output-loading" role="status"><Spinner size={14} />Opening saved output…</p>{/if}
 						</li>
 					{/each}
 				</ol>
 				{#if !target.placements.length}<p class="document-caption output-empty">No saved analysis in this report yet.</p>{/if}
-				{#if notesEditing}<div class="add-output-row"><Button size="sm" variant="outline" disabled={target.locked} onclick={() => { pickerSearch = ''; listError = ''; pickerOpen = true; void refreshOutputs(target.document.workspace); }}><Icon name="plus" size={14} />Add saved output</Button></div>{/if}
-				{#if target.document.checkpoints.length}<details class="history"><summary>History · {target.document.checkpoints.length} {target.document.checkpoints.length === 1 ? 'checkpoint' : 'checkpoints'}</summary><ul>{#each [...target.document.checkpoints].reverse() as checkpoint (checkpoint.id)}<li><div><strong>{checkpoint.title}</strong><span>{new Date(checkpoint.created_at_ms).toLocaleString()}</span></div><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => restoreTarget = checkpoint}>Restore</Button></li>{/each}</ul></details>{/if}
+				{#if reportMode === 'design'}<div class="add-output-row"><Button size="sm" variant="outline" disabled={target.locked} onclick={() => { pickerSearch = ''; listError = ''; pickerOpen = true; void refreshOutputs(target.document.workspace); }}><Icon name="plus" size={14} />Add saved output</Button></div>{/if}
+				{#if historyError}<p class="document-caption" role="status">Report history is unavailable: {historyError}</p>{/if}
+				{#if documentHistory.length}<details class="history"><summary>Report history · {documentHistory.length} saved versions</summary><ol class="revision-list">{#each documentHistory as revision (revision.version)}<li class:current-revision={revision.version === target.document.version}><div class="revision-description"><div><strong>Version {revision.version}</strong><span class="revision-kind">{revisionKindLabel(revision.kind)}</span></div><p>{revision.summary}</p><small>{new Date(revision.created_at_ms).toLocaleString()}</small></div><div class="revision-actions"><Button size="sm" variant="ghost" onclick={() => comparedRevision = revision}>{comparedRevision?.version === revision.version ? 'Comparing' : 'Compare'}</Button>{#if revision.version !== target.document.version}<Button size="sm" variant="ghost" disabled={target.locked} onclick={() => void restoreHistoryRevision(revision)}>Restore</Button>{/if}</div></li>{/each}</ol></details>{/if}
+				{#if comparedRevision}<section class="history-comparison" aria-label={`Report revision ${comparedRevision.version} comparison`}><div><strong>Version {comparedRevision.version} compared with the open Report</strong><button class="design-target-clear" onclick={() => comparedRevision = null}>Close</button></div><ul>{#each compareReportRevision(comparedRevision, target) as difference, index (`${difference}:${index}`)}<li>{difference}</li>{/each}</ul><p>For exact analytical changes, open the saved output’s revision comparison.</p></section>{/if}
+				{#if target.document.checkpoints.length}<details class="history"><summary>Named checkpoints · {target.document.checkpoints.length}</summary><ul>{#each [...target.document.checkpoints].reverse() as checkpoint (checkpoint.id)}<li><div><strong>{checkpoint.title}</strong><span>{new Date(checkpoint.created_at_ms).toLocaleString()}</span></div><Button size="sm" variant="ghost" disabled={target.locked} onclick={() => restoreTarget = checkpoint}>Restore</Button></li>{/each}</ul></details>{/if}
 			</div>
 		{/if}
 	</div>
@@ -554,6 +847,10 @@
 	:global(.studio-document-menu) { max-width: min(380px, calc(100vw - 32px)); max-height: 350px; overflow: auto; }
 	:global(.studio-document-menu .fella-ui-menu-item) { gap: var(--space-2); justify-content: space-between; overflow-wrap: anywhere; }
 	.toolbar-actions { -webkit-app-region:no-drag; min-width:0; display: flex; align-items: center; gap: 6px; }
+	.mode-switch { display:inline-flex; flex:none; align-items:center; gap:2px; padding:3px; border:1px solid var(--border); border-radius:var(--radius-chip); background:var(--bg-inset); }
+	.mode-switch button { min-height:28px; padding:4px 10px; border:0; border-radius:var(--radius-chip); background:transparent; color:var(--text-faint); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+	.mode-switch button.active { background:var(--bg-raised-2); color:var(--text); box-shadow:0 1px 2px rgb(0 0 0 / .16); }
+	.mode-switch button:focus-visible, .report-filter-chip:focus-visible, .report-filter-clear:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
 	:global(.studio-action) { min-height:36px; gap:7px; padding-inline:12px; border-radius:999px; background:var(--bg-raised); color:var(--text); font-size:var(--fs-xs); }
 	:global(.studio-action:hover:not(:disabled)) { background:var(--bg-raised-2); }
 	.save-status { color: var(--text-faint); font-size: 11px; white-space: nowrap; padding-inline: var(--space-1); }
@@ -562,22 +859,59 @@
 	:global(.studio-icon-button:disabled) { opacity: .35; cursor: default; }
 	:global(.studio-icon-button:focus-visible), :global(.studio-document-trigger:focus-visible), .document-title:focus-visible, .notes-input:focus-visible, .history summary:focus-visible, .output-picker-list button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 	.studio-scroll { min-height:0; flex:1; overflow:auto; overscroll-behavior:contain; padding:0 24px 64px; }
-	.studio-document { box-sizing: border-box; width: 100%; max-width: 600px; margin: 0 auto; padding:48px 0 0; }
+	.studio-document { box-sizing: border-box; width: 100%; max-width: 1180px; margin: 0 auto; padding:48px 0 0; }
 	.document-heading { margin-bottom:40px; }
 	.document-title { display:block; box-sizing: border-box; width: 100%; min-width: 0; padding: 4px 0; margin: 0 0 5px; border: 0; background: transparent; color: var(--text); font:500 30px/38px var(--sans); letter-spacing:-.01em; text-overflow: ellipsis; }
 	p { margin: 0; }
 	.document-caption, .document-notice { color: var(--text-faint); font-size: var(--fs-xs); line-height: 1.6; overflow-wrap: anywhere; }
 	.document-notice { margin: 0 0 var(--space-4); }
+	.report-filter-bar { display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; margin:-18px 0 var(--space-4); }
+	.report-filter-bar > span { color:var(--text-faint); font-size:var(--fs-xs); }
+	.report-filter-chip { display:inline-flex; min-width:0; align-items:center; gap:6px; padding:4px 8px; border:1px solid var(--border); border-radius:var(--radius-chip); background:var(--bg-raised); color:var(--text-dim); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+	.report-filter-chip strong { max-width:180px; overflow:hidden; color:var(--text); font-weight:500; text-overflow:ellipsis; white-space:nowrap; }
+	.report-filter-clear { padding:4px 6px; border:0; background:transparent; color:var(--text-faint); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
 	.document-notes { min-width:0; margin-bottom:40px; font-size:15px; line-height:26px; }
 	.document-notes-empty { margin-bottom: 0; }
+	.design-assistant { display:grid; gap:var(--space-3); min-width:0; margin:0 0 var(--space-5); padding:var(--space-4); border:1px solid var(--border); border-radius:var(--radius-window); background:var(--bg-raised); }
+	.design-assistant-heading { display:flex; min-width:0; align-items:start; justify-content:space-between; gap:var(--space-3); }
+	.design-assistant-heading h2 { margin:0 0 3px; color:var(--text); font-size:var(--fs-sm); font-weight:600; }
+	.design-assistant-heading p, .design-target-note, .design-proposal-note { margin:0; color:var(--text-faint); font-size:var(--fs-xs); line-height:1.5; }
+	.design-target-note strong { color:var(--text-dim); font-weight:550; }
+	.design-target-clear { flex:none; padding:3px 6px; border:0; border-radius:var(--radius-sm); background:transparent; color:var(--text-faint); font:inherit; font-size:var(--fs-xs); cursor:pointer; }
+	.design-target-clear:hover { background:var(--bg-inset); color:var(--text); }
+	.design-prompt { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:var(--space-2); min-width:0; }
+	.design-prompt textarea { box-sizing:border-box; width:100%; min-width:0; min-height:62px; max-height:180px; resize:vertical; padding:9px 11px; border:1px solid var(--border); border-radius:var(--radius); background:var(--bg-inset); color:var(--text); font:var(--fs-sm)/1.5 var(--sans); }
+	.design-prompt textarea:focus-visible, .design-target-clear:focus-visible, .placement-target:focus-visible, .analysis-handoff-list button:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
+	.design-prompt textarea::placeholder { color:var(--text-faint); }
+	.design-error { margin:0; color:var(--err); font-size:var(--fs-xs); line-height:1.5; overflow-wrap:anywhere; }
+	.design-proposal { display:grid; gap:var(--space-2); min-width:0; padding:var(--space-3) 0 0; border-top:1px solid var(--border-subtle); color:var(--text-dim); font-size:var(--fs-xs); line-height:1.55; }
+	.design-proposal > strong { color:var(--text); font-size:var(--fs-sm); font-weight:600; }
+	.design-proposal > p { margin:0; overflow-wrap:anywhere; }
+	.design-proposal ul { display:grid; gap:4px; margin:0; padding-left:18px; }
+	.design-proposal-actions { display:flex; justify-content:flex-end; gap:var(--space-2); margin-top:var(--space-1); }
+	.analysis-handoff-list { max-height:180px; overflow:auto; list-style:none; padding:0 !important; }
+	.analysis-handoff-list li + li { border-top:1px solid var(--border-subtle); }
+	.analysis-handoff-list button { display:flex; width:100%; min-width:0; align-items:center; justify-content:space-between; gap:var(--space-2); padding:8px 4px; border:0; background:transparent; color:var(--text); text-align:left; font:inherit; cursor:pointer; }
+	.analysis-handoff-list button:hover:not(:disabled) { color:var(--brand); }
+	.analysis-handoff-list button:disabled { opacity:.48; cursor:default; }
+	.analysis-handoff-list button span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.notes-label { display: grid; gap: var(--space-2); color: var(--text-faint); font-size: var(--fs-xs); }
 	.notes-input { box-sizing: border-box; width: 100%; resize: vertical; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-inset); color: var(--text); font: var(--fs-sm)/1.65 var(--sans); }
-	.placements { list-style: none; margin: 0; padding: 0; }
-	.placement { min-width: 0; position: relative; margin-bottom: 32px; padding-top: 5px; }
-	.placement-controls { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-2); }
-	.position-label { color: var(--text-faint); font: 11px var(--mono); }
+	.placements { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); column-gap:24px; row-gap:28px; list-style: none; margin: 0; padding: 0; }
+	.placement { grid-column:1/-1; min-width: 0; position: relative; padding-top: 5px; }
+	.placement.half { grid-column:span 6; }
+	.placement-controls { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; margin-bottom: var(--space-2); }
+	.placement-label-control { display:grid; min-width:0; gap:3px; color:var(--text-faint); font-size:10px; }
+	.placement-label-control input { box-sizing:border-box; width:100%; min-width:0; padding:5px 7px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--bg-inset); color:var(--text); font:inherit; font-size:var(--fs-xs); }
+	.placement-layout-controls { display:inline-flex; align-items:center; gap:2px; padding:2px; border:1px solid var(--border); border-radius:var(--radius-chip); background:var(--bg-inset); }
+	.placement-layout-controls button { min-height:24px; padding:3px 7px; border:0; border-radius:var(--radius-chip); background:transparent; color:var(--text-faint); font:inherit; font-size:10px; cursor:pointer; }
+	.placement-layout-controls button.active { background:var(--bg-raised-2); color:var(--text); }
+	.placement-layout-controls button:focus-visible, .placement-label-control input:focus-visible { outline:2px solid var(--brand); outline-offset:2px; }
 	.placement-buttons { display: flex; gap: 2px; opacity:0; transition:opacity var(--dur-fast) var(--ease); }
 	.placement:hover .placement-buttons, .placement:focus-within .placement-buttons { opacity:1; }
+	.placement-target { align-self:center; padding:4px 7px; border:0; border-radius:var(--radius-chip); background:transparent; color:var(--text-faint); font:inherit; font-size:10px; cursor:pointer; }
+	.placement-target:hover:not(:disabled), .placement-target.target-active { background:var(--bg-raised-2); color:var(--text); }
+	.placement-target:disabled { opacity:.5; cursor:default; }
 	.output-unavailable { display: grid; gap: var(--space-3); padding: var(--space-4); border-radius: var(--radius-window); background: var(--bg-inset); }
 	.output-unavailable h2 { margin: 0; font-size: var(--fs-sm); font-weight: 600; }
 	.output-unavailable p[role='alert'] { color: var(--err); font-size: var(--fs-xs); overflow-wrap: anywhere; }
@@ -591,6 +925,20 @@
 	.history summary { cursor: pointer; }
 	.history ul { list-style: none; margin: var(--space-3) 0; padding: 0; }
 	.history li { display: flex; align-items: center; justify-content: space-between; padding: var(--space-2) 0; gap: var(--space-3); }
+	.revision-list { display:grid; max-height:360px; overflow:auto; margin:var(--space-2) 0 0; padding:0; list-style:none; }
+	.revision-list > li { display:flex; align-items:center; justify-content:space-between; min-width:0; gap:var(--space-3); padding:var(--space-3) 0; border-top:1px solid var(--border-subtle); }
+	.revision-description { display:grid; min-width:0; gap:3px; }
+	.revision-description > div { display:flex; align-items:center; flex-wrap:wrap; gap:var(--space-2); }
+	.revision-description p { margin:0; color:var(--text-dim); overflow-wrap:anywhere; }
+	.revision-description small { color:var(--text-faint); }
+	.revision-kind { padding:2px 6px; border-radius:var(--radius-chip); background:var(--bg-inset); color:var(--text-faint); font-size:10px; }
+	.current-revision .revision-kind { color:var(--brand); }
+	.revision-actions { display:flex; flex:none; gap:2px; }
+	.revision-list li > .revision-actions { display:flex; }
+	.history-comparison { display:grid; gap:var(--space-2); margin:var(--space-3) 0; padding:var(--space-3); border-left:2px solid var(--brand); background:var(--bg-inset); color:var(--text-dim); font-size:var(--fs-xs); line-height:1.5; }
+	.history-comparison > div { display:flex; justify-content:space-between; gap:var(--space-2); color:var(--text); }
+	.history-comparison ul { margin:0; padding-left:18px; }
+	.history-comparison p { margin:0; color:var(--text-faint); }
 	.history li > div { min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
 	.history strong { font-weight: 500; color: var(--text-dim); }
 	.save-error { display: grid; gap: var(--space-2); margin-bottom: var(--space-4); font-size: var(--fs-xs); }
@@ -632,6 +980,8 @@
 	.studio.embedded .studio-breadcrumb { flex:1; overflow:hidden; }
 	.studio.embedded :global(.studio-document-trigger) { width:100%; max-width:100%; min-height:32px; padding:4px 8px; border-radius:var(--radius-chip); background:var(--bg-raised); }
 	.studio.embedded .toolbar-actions { flex:none; gap:2px; }
+	.studio.embedded .mode-switch { padding:2px; }
+	.studio.embedded .mode-switch button { min-height:26px; padding-inline:8px; }
 	.studio.embedded :global(.studio-action) { box-sizing:border-box; width:30px; min-width:30px; min-height:30px; justify-content:center; gap:0; padding:0; border-radius:var(--radius-chip); }
 	.studio.embedded .save-status { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
 	.studio.embedded .studio-scroll { min-width:0; overflow-x:hidden; padding:0 16px 36px; }
@@ -639,7 +989,8 @@
 	.studio.embedded .document-heading { margin-bottom:18px; }
 	.studio.embedded .document-title { font-size:20px; line-height:1.35; overflow-wrap:anywhere; }
 	.studio.embedded .document-notes { margin-bottom:24px; font-size:14px; line-height:1.65; }
-	.studio.embedded .placement { margin-bottom:24px; }
+	.studio.embedded .placement { margin-bottom:0; }
 	.studio.embedded :global(.artifact), .studio.embedded :global(.artifact-presentation) { min-width:0; max-width:100%; }
-	@container (max-width: 480px) { .save-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .studio-toolbar { padding-inline: 10px; } .studio-document { padding-top: var(--space-4); } :global(.studio-document-trigger) { max-width:34vw; } :global(.studio-action) { gap:4px; padding-inline:8px; } }
+	@container (max-width: 820px) { .placement, .placement.half { grid-column:1/-1; } }
+	@container (max-width: 480px) { .save-status { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); } .studio-toolbar { padding-inline: 10px; flex-wrap:wrap; } .studio-document { padding-top: var(--space-4); } :global(.studio-document-trigger) { max-width:34vw; } :global(.studio-action) { gap:4px; padding-inline:8px; } .toolbar-actions { gap:3px; } .mode-switch button { padding-inline:7px; } .placement-controls { grid-template-columns:minmax(0,1fr) auto; } .placement-buttons { grid-column:1/-1; justify-content:end; } .design-assistant { padding:var(--space-3); } .design-prompt { grid-template-columns:minmax(0,1fr); } .design-prompt :global(button) { justify-self:end; } }
 </style>

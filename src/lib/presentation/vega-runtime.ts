@@ -7,6 +7,8 @@ export interface ChartView {
 	resize(): ChartView;
 	runAsync(): Promise<unknown>;
 	toSVG(): Promise<string>;
+	addEventListener(type: string, handler: (event: unknown, item?: { datum?: unknown } | null) => void): ChartView;
+	removeEventListener(type: string, handler: (event: unknown, item?: { datum?: unknown } | null) => void): ChartView;
 }
 
 /** Fella-styled, text-only tooltip handler for Vega's declarative tooltip channel. */

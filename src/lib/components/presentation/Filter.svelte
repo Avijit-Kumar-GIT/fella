@@ -1,21 +1,40 @@
 <script lang="ts">
 	import type { BaseComponentProps } from '@json-render/svelte';
-	import { exactValue, requireResult, type FilterSelection } from '../../presentation/results';
+	import { exactValue, requireResult, resultFilterStateKey, type FilterSelection } from '../../presentation/results';
 	import { usePresentation } from './context';
-	let { props }: BaseComponentProps<{ resultId: string; field: string; name: string; title?: string }> = $props();
+	let { props }: BaseComponentProps<{ resultId: string; field: string; name: string; title?: string; interactionGroup?: string }> = $props();
 	const context = usePresentation();
 	let menu: HTMLDetailsElement;
 	let result = $derived(requireResult(context.results, props.resultId));
-	let options = $derived([...new Set(result.rows.map((_, row) => exactValue(result, row, props.field)))]);
-	let selected = $derived((context.state[`filter:${props.name}`] as FilterSelection | undefined)?.value ?? null);
-	function select(value: string | null) { context.update(`filter:${props.name}`, { resultId: props.resultId, field: props.field, value }); if (menu) menu.open = false; }
+	let options = $derived([...new Map(result.rows.map((_, row) => {
+		const column = result.columns.indexOf(props.field);
+		const raw = result.rows[row][column];
+		const value = exactValue(result, row, props.field);
+		return [`${raw === null ? 'null' : typeof raw}\u0000${value}`, { value, label: raw === null ? '(empty)' : value, type: raw === null ? 'null' : typeof raw }];
+	})).values()]);
+	let stateKey = $derived(resultFilterStateKey(props.name, props.interactionGroup));
+	let currentFilter = $derived(context.state[stateKey] as FilterSelection | undefined);
+	let selected = $derived(currentFilter?.value ?? null);
+	let selectedLabel = $derived(selected === null ? 'All saved values' : options.find(option => option.value === selected)?.label ?? selected);
+	let selectedType = $derived(currentFilter?.valueType);
+	function select(value: string | null, valueType?: string) {
+		const column = result.columns.indexOf(props.field);
+		const row = value === null ? -1 : result.rows.findIndex((_, rowIndex) => {
+			const raw = result.rows[rowIndex][column];
+			return exactValue(result, rowIndex, props.field) === value && (raw === null ? 'null' : typeof raw) === valueType;
+		});
+		const raw = row < 0 ? null : result.rows[row][column];
+		const selectedType = raw === null ? 'null' : typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean' ? typeof raw : undefined;
+		context.update(stateKey, { resultId: props.resultId, field: props.field, value, ...(props.interactionGroup ? { interactionGroup: props.interactionGroup } : {}), ...(context.interactionScope ? { interactionScope: context.interactionScope } : {}), ...(selectedType ? { valueType: selectedType } : {}) });
+		if (menu) menu.open = false;
+	}
 </script>
 <div class="filter presentation-filter">
 	<span class="label">{props.title ?? props.field}</span>
-	<details bind:this={menu}><summary>{selected ?? 'All saved values'}<span aria-hidden="true">⌄</span></summary>
+	<details bind:this={menu}><summary>{selectedLabel}<span aria-hidden="true">⌄</span></summary>
 		<div class="options presentation-filter-options" role="group" aria-label={props.title ?? props.field}>
 			<button aria-pressed={selected === null} onclick={() => select(null)}>All saved values</button>
-			{#each options as value}<button aria-pressed={selected === value} onclick={() => select(value)}>{value}</button>{/each}
+			{#each options as option}<button aria-pressed={selected === option.value && selectedType === option.type} onclick={() => select(option.value, option.type)}>{option.label}</button>{/each}
 		</div>
 	</details>
 	{#if !result.complete}<span class="scope">Filters saved rows only, not the full dataset.</span>{/if}

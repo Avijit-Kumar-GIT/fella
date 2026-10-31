@@ -3,6 +3,7 @@ import { PRESENTATION_LIMITS as limits } from './types';
 
 const label = z.string().min(1).max(240);
 const resultId = z.string().min(1).max(240);
+const interactionGroup = z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,79}$/);
 const content = z.string().min(1).max(limits.text);
 const selectOptions = z.array(z.object({ value: z.string().max(240), label: z.string().max(240) }).strict()).min(1).max(200);
 const columnFormat = z.object({ label: label.optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), unit: z.string().max(40).optional(), decimals: z.number().int().min(0).max(8).optional() }).strict();
@@ -99,11 +100,15 @@ export const componentDefinitions = {
 	},
 	Table: {
 		description: 'A result-bound table for exact records, lookups, and detailed comparisons. Do not choose it by default when a chart better explains a pattern.',
-		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional(), title: label.optional(), columnFormats: z.record(label, columnFormat).optional() }).strict(), slots: [] as const
+		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional(), title: label.optional(), columnFormats: z.record(label, columnFormat).optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional() }).strict().superRefine((props, context) => {
+			if (props.linkBy && !props.interactionGroup) context.addIssue({ code: 'custom', message: 'Table linkBy requires an interactionGroup.' });
+		}), slots: [] as const
 	},
 	Chart: {
-		description: 'A flexible, responsive result-bound Vega-Lite visualization. Select a useful form for the task (for example, line or area for a time trend, bar for category comparisons, arc for a small part-to-whole view, or points for relationships), and compose, facet, layer, or add a legend and result-bound tooltip when they clarify the answer. Keep axes, labels, units, and number of series readable. The spec describes presentation only and cannot supply data or executable transforms.',
-		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.optional() }).strict(), slots: [] as const
+		description: 'A flexible, responsive result-bound Vega-Lite visualization. Select a useful form for the task (for example, line or area for a time trend, bar for category comparisons, arc for a small part-to-whole view, or points for relationships), and compose, facet, layer, or add a legend and result-bound tooltip when they clarify the answer. Keep axes, labels, units, and number of series readable. For chart-click filtering, list the displayed categorical fields in linkBy; use the same interactionGroup on compatible charts, tables, and filters. The spec describes presentation only and cannot supply data or executable transforms.',
+		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional() }).strict().superRefine((props, context) => {
+			if (props.linkBy && !props.interactionGroup) context.addIssue({ code: 'custom', message: 'Chart linkBy requires an interactionGroup.' });
+		}), slots: [] as const
 	},
 	Progress: {
 		description: 'A compact indicator for an exact saved numeric value bound to a result row.',
@@ -118,8 +123,8 @@ export const componentDefinitions = {
 		props: z.object({ name: label, index: z.number().int().min(0).max(11) }).strict(), slots: ['default'] as const
 	},
 	ResultFilter: {
-		description: 'A local exact-match selector over rows in a saved result; it never reruns analysis or changes source scope.',
-		props: z.object({ resultId, field: label, name: label, title: label.optional() }).strict(), slots: [] as const
+		description: 'A local exact-match selector over rows in a saved result; it never reruns analysis or changes source scope. Set an interactionGroup to share this filter with components that declare the same group and field in linkBy.',
+		props: z.object({ resultId, field: label, name: label, title: label.optional(), interactionGroup: interactionGroup.optional() }).strict(), slots: [] as const
 	},
 	FollowUp: {
 		description: 'An explicit user-pressed follow-up request to Fella.',

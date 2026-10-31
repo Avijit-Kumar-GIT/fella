@@ -6,7 +6,7 @@ import type { PresentationSpec } from './presentation/types';
 export type StudioReportArtifacts = Record<string, ResolvedArtifact | null | undefined>;
 export interface StudioReportOptions {
 	/** An optional deterministic adapter; never a model/provider callback. */
-	presentation?: (input: { spec: PresentationSpec; results: BoundResult[]; state: Record<string, unknown> }) => {
+	presentation?: (input: { spec: PresentationSpec; results: BoundResult[]; state: Record<string, unknown>; interactionScope?: string }) => {
 		markdown: string;
 		disclosures?: string[];
 	};
@@ -99,7 +99,7 @@ export function buildStudioReport(document: StudioDocument, artifacts: StudioRep
 			lines.push(`## Saved output ${cell(placement.artifact_id)}`, '', 'Saved output does not match the pinned artifact, revision, or source run. Its content has not been exported.', '');
 			continue;
 		}
-		lines.push(`## ${line(resolved.artifact.title) || 'Untitled output'}`, '', `Artifact ${cell(placement.artifact_id)} · revision ${placement.revision}`, '', `Source folder: ${cell(resolved.artifact.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || 'Mounted folder')}`, '', `Source revision: ${cell(artifactSourceRevision(resolved))}`, '', `Original question: ${line(resolved.run.question)}`, '');
+		lines.push(`## ${line(placement.label?.trim() || resolved.artifact.title) || 'Untitled output'}`, '', `Artifact ${cell(placement.artifact_id)} · revision ${placement.revision}`, '', `Layout: ${placement.width === 'half' ? 'half width' : 'full width'}`, '', `Source folder: ${cell(resolved.artifact.workspace.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || 'Mounted folder')}`, '', `Source revision: ${cell(artifactSourceRevision(resolved))}`, '', `Original question: ${line(resolved.run.question)}`, '');
 		if (resolved.revision.change_note) lines.push(`Revision note: ${line(resolved.revision.change_note)}`, '');
 		lines.push('### Saved answer', '', resolved.run.result.text || 'No narrative answer was recorded.', '');
 		const caveats = artifactCaveats(resolved);
@@ -109,7 +109,7 @@ export function buildStudioReport(document: StudioDocument, artifacts: StudioRep
 			let converted = false;
 			if (options.presentation) {
 				try {
-					const presentation = options.presentation({ spec: resolved.revision.spec, results: resolved.results, state: placement.view_state ?? {} });
+					const presentation = options.presentation({ spec: resolved.revision.spec, results: resolved.results, state: placement.view_state ?? {}, interactionScope: resolved.artifact.workspace });
 					if (presentation.markdown.trim()) {
 						lines.push('### Presentation snapshot', '', presentation.markdown, '', ...(presentation.disclosures ?? []).map(disclosure => `- Export note: ${cell(disclosure)}`), '');
 						converted = true;

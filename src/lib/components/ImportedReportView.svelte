@@ -18,10 +18,10 @@
 	<ol class="report-outputs" aria-label="Report outputs">
 		{#each report.document.placements as placement (placement.id)}
 			{@const resolved = runFor(placement.artifact_id)}
-			<li>
+			<li class:half={placement.width === 'half'}>
 				{#if resolved?.run}
 					<article class="report-output">
-						<h3>{resolved.artifact.title}</h3>
+						<h3>{placement.label?.trim() || resolved.artifact.title}</h3>
 						<p class="question">{resolved.run.original_question}</p>
 						{#if resolved.run.answer}<MarkdownContent text={resolved.run.answer} />{/if}
 						{#each resolved.run.results as result (result.id)}
@@ -50,11 +50,13 @@
 </article>
 
 <style>
-	.imported-report { display:grid; gap:var(--space-5); min-width:0; color:var(--text-primary); }
+	.imported-report { display:grid; gap:var(--space-5); min-width:0; color:var(--text-primary); container-type:inline-size; }
 	header h2 { margin:2px 0 4px; font-size:var(--fs-xl); font-weight:600; letter-spacing:-.02em; }
 	.eyebrow,.report-scope,.result-scope { margin:0; color:var(--text-faint); font-size:var(--fs-xs); }
 	.report-notes { padding-bottom:var(--space-4); border-bottom:1px solid var(--border-subtle); }
-	.report-outputs { margin:0; padding:0; list-style:none; }
+	.report-outputs { display:grid; grid-template-columns:repeat(12,minmax(0,1fr)); gap:24px; margin:0; padding:0; list-style:none; }
+	.report-outputs > li { grid-column:1/-1; min-width:0; }
+	.report-outputs > li.half { grid-column:span 6; }
 	.report-outputs > li + li { border-top:1px solid var(--border-subtle); }
 	.report-output { display:grid; gap:var(--space-3); padding:var(--space-5) 0; }
 	.report-output h3,.saved-result h4 { margin:0; font-size:var(--fs-md); font-weight:600; }
@@ -68,4 +70,5 @@
 	.provenance summary { cursor:pointer; color:var(--text-primary); }
 	.provenance pre { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
 	.warning { margin:0; padding:var(--space-3); border-radius:var(--radius); background:var(--bg-muted); color:var(--text-dim); font-size:var(--fs-xs); line-height:1.55; }
+	@container (max-width:760px) { .report-outputs > li.half { grid-column:1/-1; } }
 </style>
