@@ -113,9 +113,9 @@ function isNorthstarSample(catalog: Catalog): boolean {
 }
 
 async function seedNorthstarSampleReport(catalog: Catalog): Promise<void> {
-	if (!isNorthstarSample(catalog)) return;
+	if (!isNorthstarSample(catalog) || !catalog.workspace) return;
 	try {
-		await ipc.studioSeedNorthstarSample();
+		await ipc.studioSeedNorthstarSample(catalog.workspace);
 		session.reportsVersion++;
 	} catch (error) {
 		console.warn('Could not create the Northstar sample Report:', error);

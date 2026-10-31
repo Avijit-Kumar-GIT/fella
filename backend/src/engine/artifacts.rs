@@ -27,6 +27,9 @@ pub const SCHEMA_VERSION: &str = "fella-json-render-v1";
 pub const APP_WORKSPACE_ID: &str = "fella-app-workspace";
 const STUDIO_OWNER_MIGRATION: &str = "reports-app-workspace-v1";
 const NORTHSTAR_SAMPLE_REPORT_ID: &str = "studio_northstar_sample_revenue_v1";
+const NORTHSTAR_SAMPLE_ARTIFACT_PREFIX: &str = "artifact_northstar_sample_revenue_";
+const NORTHSTAR_SAMPLE_REPORT_SEED_VERSION: &str = "northstar-saved-analysis-v2";
+const NORTHSTAR_SAMPLE_REPORT_LEGACY_BODY: &str = "**Status: In progress**\n\n## Objective\nExplain how Northstar Outfitters’ net merchandise revenue changed between Q3 and Q4 2025.\n\n## Work plan\n- Confirm the current finance metric policy, source coverage, and date basis.\n- Compare revenue, order volume, and average order value across both quarters.\n- Identify the product, refund, or source-quality factors that explain the change.\n\n## Evidence to add\nNo findings are attached yet. Add verified analysis from Chat as the investigation progresses. Check `docs/metric_policy_current.md` before accepting a revenue definition; archived exports may use older rules.";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_SPEC_BYTES: usize = 256 * 1024;
@@ -1703,12 +1706,73 @@ pub fn studio_create(
     Ok(document)
 }
 
-/// Return the one stable starter Report for the Northstar analyst sample.
-/// It belongs to the app workspace and contains no invented analytical output.
-pub fn studio_seed_northstar_sample_report(data_dir: &Path) -> EngineResult<StudioDocument> {
+/// Avoid repeating the sample queries once its saved Report seed is complete.
+pub fn studio_northstar_sample_seeded(data_dir: &Path) -> EngineResult<Option<StudioDocument>> {
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
     let db = store_unlocked(data_dir)?;
-    let exists = db
+    let version = db
+        .query_row(
+            "SELECT value FROM artifact_metadata WHERE key='northstar_sample_report_seed'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if version.as_deref() == Some(NORTHSTAR_SAMPLE_REPORT_SEED_VERSION) {
+        return load_studio_unlocked(&db, APP_WORKSPACE_ID, NORTHSTAR_SAMPLE_REPORT_ID).map(Some);
+    }
+    Ok(None)
+}
+
+/// Create or upgrade the starter Report using a canonical, query-backed run.
+/// Existing Report edits are preserved; this only adds the sample placement.
+pub fn studio_seed_northstar_sample_report(
+    data_dir: &Path,
+    run: &AnalysisTurn,
+) -> EngineResult<StudioDocument> {
+    let workspace = run
+        .workspace
+        .as_deref()
+        .ok_or_else(|| EngineError::msg("Northstar sample analysis has no mounted workspace"))?;
+    let revision = run
+        .workspace_revision
+        .as_deref()
+        .ok_or_else(|| EngineError::msg("Northstar sample analysis has no source revision"))?;
+    let spec = run
+        .result
+        .presentation_spec
+        .as_ref()
+        .ok_or_else(|| EngineError::msg("Northstar sample analysis has no Report layout"))?;
+    validate_spec(spec)?;
+    eligible_results(run)?;
+
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let mut db = store_unlocked(data_dir)?;
+    let seed_version = db
+        .query_row(
+            "SELECT value FROM artifact_metadata WHERE key='northstar_sample_report_seed'",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    if seed_version.as_deref() == Some(NORTHSTAR_SAMPLE_REPORT_SEED_VERSION) {
+        return load_studio_unlocked(&db, APP_WORKSPACE_ID, NORTHSTAR_SAMPLE_REPORT_ID);
+    }
+
+    if analysis_store::exists(data_dir, &run.id) {
+        let existing = analysis_store::load(data_dir, &run.id)?;
+        if existing.workspace.as_deref() != Some(workspace)
+            || existing.workspace_revision.as_deref() != Some(revision)
+        {
+            return Err(EngineError::msg(
+                "Northstar sample analysis identity conflicts with a different source revision",
+            ));
+        }
+    } else {
+        analysis_store::create_unlocked(data_dir, run)?;
+    }
+
+    let tx = db.transaction()?;
+    let document_exists = tx
         .query_row(
             "SELECT 1 FROM studio_documents WHERE id=?1 AND workspace=?2",
             params![NORTHSTAR_SAMPLE_REPORT_ID, APP_WORKSPACE_ID],
@@ -1716,32 +1780,330 @@ pub fn studio_seed_northstar_sample_report(data_dir: &Path) -> EngineResult<Stud
         )
         .optional()?
         .is_some();
-    if exists {
-        return load_studio_unlocked(&db, APP_WORKSPACE_ID, NORTHSTAR_SAMPLE_REPORT_ID);
+
+    let suffix: String = revision
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .take(32)
+        .collect();
+    if suffix.is_empty() {
+        return Err(EngineError::msg("Northstar source revision is invalid"));
     }
+    let artifact_id = format!("{NORTHSTAR_SAMPLE_ARTIFACT_PREFIX}{suffix}");
+    let artifact_exists = tx
+        .query_row(
+            "SELECT 1 FROM artifacts WHERE id=?1",
+            [&artifact_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let artifact = if artifact_exists {
+        let mut artifact = load_artifact_by_id_unlocked(&tx, &artifact_id)?;
+        if artifact.workspace != workspace {
+            return Err(EngineError::msg(
+                "Northstar sample artifact belongs to a different mounted workspace",
+            ));
+        }
+        if !artifact
+            .revisions
+            .iter()
+            .any(|revision| revision.run_id == run.id)
+        {
+            return Err(EngineError::msg(
+                "Northstar sample artifact is already bound to another analysis run",
+            ));
+        }
+        artifact.saved = true;
+        artifact.updated_at_ms = now_ms();
+        put_artifact_unlocked(&tx, &artifact)?;
+        artifact
+    } else {
+        let now = now_ms();
+        let artifact = ArtifactRecord {
+            id: artifact_id.clone(),
+            workspace: workspace.to_owned(),
+            title: "Northstar revenue explorer".to_owned(),
+            current_revision: 1,
+            saved: true,
+            revisions: vec![ArtifactRevision {
+                revision: 1,
+                parent_revision: None,
+                run_id: run.id.clone(),
+                spec: spec.clone(),
+                schema_version: SCHEMA_VERSION.to_owned(),
+                change_note: "Seeded interactive sample Report from read-only Northstar analysis."
+                    .to_owned(),
+                created_at_ms: now,
+            }],
+            created_at_ms: now,
+            updated_at_ms: now,
+        };
+        put_artifact_unlocked(&tx, &artifact)?;
+        artifact
+    };
 
     let now = now_ms();
-    let document = StudioDocument {
-        id: NORTHSTAR_SAMPLE_REPORT_ID.to_owned(),
-        workspace: APP_WORKSPACE_ID.to_owned(),
-        title: "Northstar Outfitters — Revenue review".to_owned(),
-        version: 1,
-        body: "**Status: In progress**\n\n## Objective\nExplain how Northstar Outfitters’ net merchandise revenue changed between Q3 and Q4 2025.\n\n## Work plan\n- Confirm the current finance metric policy, source coverage, and date basis.\n- Compare revenue, order volume, and average order value across both quarters.\n- Identify the product, refund, or source-quality factors that explain the change.\n\n## Evidence to add\nNo findings are attached yet. Add verified analysis from Chat as the investigation progresses. Check `docs/metric_policy_current.md` before accepting a revenue definition; archived exports may use older rules.".to_owned(),
-        placements: Vec::new(),
-        checkpoints: Vec::new(),
-        created_at_ms: now,
-        updated_at_ms: now,
+    let mut document = if document_exists {
+        load_studio_unlocked(&tx, APP_WORKSPACE_ID, NORTHSTAR_SAMPLE_REPORT_ID)?
+    } else {
+        StudioDocument {
+            id: NORTHSTAR_SAMPLE_REPORT_ID.to_owned(),
+            workspace: APP_WORKSPACE_ID.to_owned(),
+            title: "Northstar Outfitters — Revenue review".to_owned(),
+            version: 1,
+            body: String::new(),
+            placements: Vec::new(),
+            checkpoints: Vec::new(),
+            created_at_ms: now,
+            updated_at_ms: now,
+        }
     };
-    let tx = db.unchecked_transaction()?;
+
+    let placement_id = "placement_northstar_revenue_explorer";
+    if !document
+        .placements
+        .iter()
+        .any(|placement| placement.artifact_id == artifact.id)
+    {
+        document.placements.push(StudioPlacement {
+            id: placement_id.to_owned(),
+            artifact_id: artifact.id,
+            revision: artifact.current_revision,
+            label: "Revenue explorer".to_owned(),
+            width: StudioPlacementWidth::Full,
+            view_state: serde_json::json!({}),
+        });
+    }
+
+    let sample_intro = "**Status: In progress**\n\nA working Northstar revenue analysis, seeded with saved results so you can explore the charts, filters, and linked tables. Change a selector or click a chart category to filter the related view.";
+    let methodology = "## Metric notes\n\n- Monthly net merchandise revenue uses merchandise sales after line discounts, grouped by order month, less refunds posted in each refund month.\n- The Q3/Q4 comparison uses order-date merchandise sales less refunds posted in each quarter. AOV is discounted merchandise sales divided by non-cancelled orders.\n- Category sales are shown before refunds because the refund source has no product-category attribution.\n- Only USD orders and posted refunds are included. Pending refunds, cancelled orders, tax, and shipping are excluded; values are not currency-converted. See `docs/metric_policy_current.md` for the current policy.";
+    if document.body == NORTHSTAR_SAMPLE_REPORT_LEGACY_BODY || document.body.trim().is_empty() {
+        document.body = format!("{sample_intro}\n\n{methodology}");
+    } else if !document.body.contains("working Northstar revenue analysis") {
+        document.body = format!(
+            "{}\n\n---\n\n{sample_intro}\n\n{methodology}",
+            document.body.trim()
+        );
+    }
+
+    if document_exists {
+        let base_version = document.version;
+        next_version(&mut document, base_version)?;
+    }
     put_studio_unlocked(&tx, &document)?;
     store_studio_revision_unlocked(
         &tx,
         &document,
-        StudioRevisionKind::Created,
-        "In-progress starter Report created for the Northstar sample workspace.",
+        if document_exists {
+            StudioRevisionKind::Presentation
+        } else {
+            StudioRevisionKind::Created
+        },
+        "Added a saved, interactive Northstar sample analysis to the starter Report.",
+    )?;
+    tx.execute(
+        "INSERT INTO artifact_metadata(key,value) VALUES('northstar_sample_report_seed',?1)
+         ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        [NORTHSTAR_SAMPLE_REPORT_SEED_VERSION],
     )?;
     tx.commit()?;
     Ok(document)
+}
+
+/// The starter Report uses the same json-render components and saved-result
+/// bindings as model-generated analytical presentations.
+pub fn northstar_sample_report_spec() -> Json {
+    let mut elements = serde_json::Map::new();
+    let mut add = |key: &str, kind: &str, props: Json, children: Vec<&str>| {
+        elements.insert(
+            key.to_owned(),
+            serde_json::json!({"type":kind,"props":props,"children":children}),
+        );
+    };
+
+    add(
+        "report",
+        "Document",
+        serde_json::json!({}),
+        vec![
+            "headline",
+            "intro",
+            "metric_grid",
+            "quarter_detail_section",
+            "trend_section",
+            "category_section",
+            "refund_section",
+            "notes",
+        ],
+    );
+    add(
+        "headline",
+        "Title",
+        serde_json::json!({"content":"Northstar revenue, made explorable","level":1}),
+        vec![],
+    );
+    add(
+        "intro",
+        "Text",
+        serde_json::json!({"content":"A seeded working analysis of 2023–2025 merchandise revenue, with quarter comparisons and source caveats. Use the controls to explore the saved results."}),
+        vec![],
+    );
+    add(
+        "metric_grid",
+        "Grid",
+        serde_json::json!({"columns":4}),
+        vec!["q3_net", "q4_net", "net_change", "net_change_pct"],
+    );
+    add(
+        "q3_net",
+        "Metric",
+        serde_json::json!({"resultId":"northstar_quarters_v2","field":"net_merchandise_revenue","row":0,"title":"Q3 2025 net revenue","unit":"USD","format":"currency","detail":"Order-date sales less refunds posted in Q3."}),
+        vec![],
+    );
+    add(
+        "q4_net",
+        "Metric",
+        serde_json::json!({"resultId":"northstar_quarters_v2","field":"net_merchandise_revenue","row":1,"title":"Q4 2025 net revenue","unit":"USD","format":"currency","detail":"Same period basis as Q3."}),
+        vec![],
+    );
+    add(
+        "net_change",
+        "Metric",
+        serde_json::json!({"resultId":"northstar_quarters_v2","field":"net_change","row":1,"title":"Quarter-over-quarter change","unit":"USD","format":"currency","detail":"Q4 less Q3."}),
+        vec![],
+    );
+    add(
+        "net_change_pct",
+        "Metric",
+        serde_json::json!({"resultId":"northstar_quarters_v2","field":"net_change_percent","row":1,"title":"Change from Q3","format":"percent","detail":"Relative to Q3 net merchandise revenue."}),
+        vec![],
+    );
+
+    add(
+        "quarter_detail_section",
+        "Section",
+        serde_json::json!({"title":"Quarterly detail · Q3 vs Q4 2025"}),
+        vec!["quarter_detail_table"],
+    );
+    add(
+        "quarter_detail_table",
+        "Table",
+        serde_json::json!({"resultId":"northstar_quarters_v2","title":"Sales, refunds, and order value","fields":["quarter","merchandise_sales","posted_refunds","net_merchandise_revenue","order_count","merchandise_aov"],"columnFormats":{"merchandise_sales":{"label":"Sales before refunds","format":"currency","unit":"USD","decimals":2},"posted_refunds":{"label":"Refunds posted","format":"currency","unit":"USD","decimals":2},"net_merchandise_revenue":{"label":"Net merchandise revenue","format":"currency","unit":"USD","decimals":2},"order_count":{"label":"Non-cancelled orders","format":"number","decimals":0},"merchandise_aov":{"label":"Avg. discounted value per order","format":"currency","unit":"USD","decimals":2}}}),
+        vec![],
+    );
+
+    add(
+        "trend_section",
+        "Section",
+        serde_json::json!({"title":"Monthly net merchandise revenue"}),
+        vec!["trend_caption", "year_filter", "trend_chart", "trend_table"],
+    );
+    add(
+        "trend_caption",
+        "Caption",
+        serde_json::json!({"content":"Sales are grouped by order month; posted refunds are grouped by refund month, in line with the current finance policy."}),
+        vec![],
+    );
+    add(
+        "year_filter",
+        "ResultFilter",
+        serde_json::json!({"resultId":"northstar_months_v2","field":"year","name":"Trend year","title":"Year","interactionGroup":"northstar_trend"}),
+        vec![],
+    );
+    add(
+        "trend_chart",
+        "Chart",
+        serde_json::json!({"resultId":"northstar_months_v2","title":"Revenue by month","interactionGroup":"northstar_trend","linkBy":["year"],"spec":{"mark":{"type":"line","point":true},"encoding":{"x":{"field":"month_start","type":"temporal","title":"Month","axis":{"format":"%b %y","labelAngle":-35}},"y":{"field":"net_merchandise_revenue","type":"quantitative","title":"Net merchandise revenue (USD)","axis":{"format":"$,.0f"}},"color":{"field":"year","type":"nominal","title":"Year"},"tooltip":[{"field":"month_label","type":"nominal","title":"Month"},{"field":"net_merchandise_revenue","type":"quantitative","title":"Net revenue","format":"$,.2f"},{"field":"posted_refunds","type":"quantitative","title":"Posted refunds","format":"$,.2f"}]}}}),
+        vec![],
+    );
+    add(
+        "trend_table",
+        "Table",
+        serde_json::json!({"resultId":"northstar_months_v2","title":"Monthly values","fields":["month_label","year","net_merchandise_revenue","posted_refunds","order_count"],"columnFormats":{"net_merchandise_revenue":{"label":"Net revenue","format":"currency","unit":"USD","decimals":2},"posted_refunds":{"label":"Posted refunds","format":"currency","unit":"USD","decimals":2},"order_count":{"label":"Orders","format":"number","decimals":0}},"interactionGroup":"northstar_trend","linkBy":["year"]}),
+        vec![],
+    );
+
+    add(
+        "category_section",
+        "Section",
+        serde_json::json!({"title":"Product category comparison · Q3 vs Q4 2025"}),
+        vec![
+            "category_caption",
+            "quarter_filter",
+            "category_chart",
+            "category_table",
+        ],
+    );
+    add(
+        "category_caption",
+        "Caption",
+        serde_json::json!({"content":"Merchandise sales after line discounts, before refunds. Refunds cannot be attributed to product categories from the available source data."}),
+        vec![],
+    );
+    add(
+        "quarter_filter",
+        "ResultFilter",
+        serde_json::json!({"resultId":"northstar_categories_v2","field":"quarter","name":"Category quarter","title":"Quarter","interactionGroup":"northstar_categories"}),
+        vec![],
+    );
+    add(
+        "category_chart",
+        "Chart",
+        serde_json::json!({"resultId":"northstar_categories_v2","title":"Sales by category","interactionGroup":"northstar_categories","linkBy":["category","quarter"],"spec":{"mark":"bar","encoding":{"x":{"field":"category","type":"nominal","title":"Product category","axis":{"labelAngle":-25}},"xOffset":{"field":"quarter","type":"nominal"},"y":{"field":"merchandise_sales","type":"quantitative","title":"Sales before refunds (USD)","axis":{"format":"$,.0f"}},"color":{"field":"quarter","type":"nominal","title":"Quarter"},"tooltip":[{"field":"category","type":"nominal"},{"field":"quarter","type":"nominal"},{"field":"merchandise_sales","type":"quantitative","title":"Merchandise sales","format":"$,.2f"}]}}}),
+        vec![],
+    );
+    add(
+        "category_table",
+        "Table",
+        serde_json::json!({"resultId":"northstar_categories_v2","title":"Category values","fields":["category","quarter","merchandise_sales"],"columnFormats":{"merchandise_sales":{"label":"Sales before refunds","format":"currency","unit":"USD","decimals":2}},"interactionGroup":"northstar_categories","linkBy":["category","quarter"]}),
+        vec![],
+    );
+
+    add(
+        "refund_section",
+        "Section",
+        serde_json::json!({"title":"Posted refunds by reason"}),
+        vec![
+            "refund_caption",
+            "refund_quarter_filter",
+            "refund_chart",
+            "refund_table",
+        ],
+    );
+    add(
+        "refund_caption",
+        "Caption",
+        serde_json::json!({"content":"Refunds are grouped by the date they were posted, not by the original order date. Pending refunds are excluded."}),
+        vec![],
+    );
+    add(
+        "refund_quarter_filter",
+        "ResultFilter",
+        serde_json::json!({"resultId":"northstar_refunds_v2","field":"quarter","name":"Refund quarter","title":"Quarter","interactionGroup":"northstar_refunds"}),
+        vec![],
+    );
+    add(
+        "refund_chart",
+        "Chart",
+        serde_json::json!({"resultId":"northstar_refunds_v2","title":"Posted refund amount by reason","interactionGroup":"northstar_refunds","linkBy":["reason","quarter"],"spec":{"mark":"bar","encoding":{"x":{"field":"reason","type":"nominal","title":"Refund reason","axis":{"labelAngle":-30}},"xOffset":{"field":"quarter","type":"nominal"},"y":{"field":"posted_refunds","type":"quantitative","title":"Posted refunds (USD)","axis":{"format":"$,.0f"}},"color":{"field":"quarter","type":"nominal","title":"Quarter"},"tooltip":[{"field":"reason","type":"nominal"},{"field":"quarter","type":"nominal"},{"field":"posted_refunds","type":"quantitative","title":"Posted refunds","format":"$,.2f"}]}}}),
+        vec![],
+    );
+    add(
+        "refund_table",
+        "Table",
+        serde_json::json!({"resultId":"northstar_refunds_v2","title":"Refund values","fields":["reason","quarter","posted_refunds"],"columnFormats":{"posted_refunds":{"format":"currency","unit":"USD","decimals":2}},"interactionGroup":"northstar_refunds","linkBy":["reason","quarter"]}),
+        vec![],
+    );
+
+    add(
+        "notes",
+        "Callout",
+        serde_json::json!({"title":"Scope and data notes","tone":"caution","content":"This is a starter analysis, not a finished business conclusion. USD orders and posted refunds are included; cancelled orders, tax, shipping, and pending refunds are excluded. Values are not currency-converted. Monthly and quarterly net values pair order-period merchandise sales with refunds posted during that period. Product category values are before refunds because refund rows do not identify a product category. Review the current finance metric policy and source revisions before using these figures externally."}),
+        vec![],
+    );
+
+    serde_json::json!({"root":"report","elements":elements})
 }
 
 pub fn studio_list(data_dir: &Path, workspace: &str) -> EngineResult<Vec<StudioDocument>> {

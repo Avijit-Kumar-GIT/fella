@@ -111,7 +111,8 @@ export const ipc = {
 		invoke<{ run: AnalysisTurn; results: BoundResult[] }>('presentation_results', { workspaceId, turnId }),
 	studioList: (workspaceId: string) => invoke<StudioDocument[]>('studio_list', { workspaceId }),
 	studioCreate: (workspaceId: string, title: string) => invoke<StudioDocument>('studio_create', { workspaceId, title }),
-	studioSeedNorthstarSample: () => invoke<StudioDocument>('studio_seed_northstar_sample', {}),
+	studioSeedNorthstarSample: (workspacePath: string) =>
+		invoke<StudioDocument>('studio_seed_northstar_sample', { workspacePath }),
 	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),
 	studioSave: (workspaceId: string, documentId: string, baseVersion: number, update: { title: string; body: string; placements: StudioPlacement[] }) =>
 		invoke<StudioDocument>('studio_save', { workspaceId, documentId, baseVersion, update }),

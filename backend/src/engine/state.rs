@@ -1815,6 +1815,25 @@ mod conversation_context_tests {
     }
 }
 
+fn normalize_sample_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .to_ascii_lowercase()
+}
+
+fn normalized_workspace_path(path: &Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .replace('\\', "/")
+        .trim_end_matches('/')
+        .to_ascii_lowercase()
+}
+
+fn quote_sql_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
 #[derive(Debug, Serialize)]
 pub struct QueryResult {
     pub columns: Vec<String>,
@@ -5702,8 +5721,445 @@ exactly, character for character, from the list below.";
     /// Idempotently create the starter Report when the Northstar sample is open.
     pub fn studio_seed_northstar_sample_report(
         &self,
+        expected_workspace: &str,
     ) -> EngineResult<crate::engine::artifacts::StudioDocument> {
-        crate::engine::artifacts::studio_seed_northstar_sample_report(self.analytical_data_dir())
+        let data_dir = self.analytical_data_dir();
+        if let Some(document) = crate::engine::artifacts::studio_northstar_sample_seeded(data_dir)?
+        {
+            return Ok(document);
+        }
+
+        let _workspace_read_permit = self.workspace_gate.read();
+        let workspace = self
+            .workspace
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let root = workspace
+            .workspace
+            .as_deref()
+            .ok_or(EngineError::NoWorkspace)?;
+        if normalized_workspace_path(root)
+            != normalized_workspace_path(Path::new(expected_workspace))
+        {
+            return Err(EngineError::msg(
+                "The Northstar sample Report can only be seeded from the currently mounted workspace.",
+            ));
+        }
+
+        const REQUIRED_PATHS: &[&str] = &[
+            "catalog/products.csv",
+            "commerce/order_lines.csv",
+            "commerce/orders/orders_2023.csv",
+            "commerce/orders/orders_2024.csv",
+            "commerce/orders/orders_2025.csv",
+            "docs/metric_policy_current.md",
+            "finance/refund_transactions.csv",
+        ];
+        let mut sources = HashMap::<String, &SourceInfo>::new();
+        for source in &workspace.sources {
+            let relative = catalog::workspace_relative_path(root, Path::new(&source.path));
+            sources.insert(normalize_sample_path(&relative), source);
+        }
+        if REQUIRED_PATHS
+            .iter()
+            .any(|path| !sources.contains_key(*path))
+        {
+            return Err(EngineError::msg(
+                "The mounted folder is missing one or more required Northstar sample sources.",
+            ));
+        }
+        let view = |path: &str| -> EngineResult<String> {
+            let source = sources.get(path).ok_or_else(|| {
+                EngineError::msg(format!("Northstar source {path} is unavailable"))
+            })?;
+            let view = source.view.as_deref().ok_or_else(|| {
+                EngineError::msg(format!("Northstar source {path} is not queryable"))
+            })?;
+            Ok(quote_sql_identifier(view))
+        };
+        let orders_2023 = view("commerce/orders/orders_2023.csv")?;
+        let orders_2024 = view("commerce/orders/orders_2024.csv")?;
+        let orders_2025 = view("commerce/orders/orders_2025.csv")?;
+        let order_lines = view("commerce/order_lines.csv")?;
+        let products = view("catalog/products.csv")?;
+        let refunds = view("finance/refund_transactions.csv")?;
+        let policy_source = sources
+            .get("docs/metric_policy_current.md")
+            .ok_or_else(|| EngineError::msg("Northstar's current metric policy is unavailable"))?;
+        if policy_source.size_bytes > 64 * 1024 {
+            return Err(EngineError::msg(
+                "Northstar's current metric policy is larger than the sample Report limit.",
+            ));
+        }
+        let policy_started = Instant::now();
+        let policy_text = std::fs::read_to_string(&policy_source.path)
+            .map_err(|error| EngineError::io("read the Northstar metric policy", error))?;
+        let revision = workspace
+            .revision
+            .clone()
+            .ok_or_else(|| EngineError::msg("The mounted Northstar workspace has no revision."))?;
+        let workspace_path = root.display().to_string();
+        let source_refs = |paths: &[&str]| -> Vec<serde_json::Value> {
+            paths
+                .iter()
+                .filter_map(|path| sources.get(*path).map(|source| (path, *source)))
+                .map(|(path, source)| {
+                    serde_json::json!({"source":path,"table":source.view,"note":null})
+                })
+                .collect()
+        };
+
+        let orders_union = format!(
+            r#"
+                SELECT order_id, order_date, currency, lower(trim(status)) AS status FROM {orders_2023}
+                UNION ALL
+                SELECT order_id, order_date, currency, lower(trim(status)) AS status FROM {orders_2024}
+                UNION ALL
+                SELECT order_id, order_date, currency, lower(trim(status)) AS status FROM {orders_2025}
+            "#
+        );
+        let monthly_sql = format!(
+            r#"
+                WITH orders AS ({orders_union}),
+                order_sales AS (
+                    SELECT o.order_id, substr(o.order_date, 1, 7) AS month,
+                           SUM(CAST(ROUND((CAST(l.quantity AS REAL) * CAST(l.unit_price_usd AS REAL)
+                               - CAST(l.line_discount_usd AS REAL)) * 100, 0) AS INTEGER))
+                               AS merchandise_sales_cents
+                    FROM orders o
+                    JOIN {order_lines} l ON l.order_id = o.order_id
+                    WHERE o.status NOT IN ('cancelled', 'canceled')
+                      AND upper(trim(o.currency)) = 'USD'
+                      AND substr(o.order_date, 1, 4) BETWEEN '2023' AND '2025'
+                    GROUP BY o.order_id, substr(o.order_date, 1, 7)
+                ),
+                monthly_sales AS (
+                    SELECT month, SUM(merchandise_sales_cents) AS merchandise_sales_cents,
+                           COUNT(*) AS order_count
+                    FROM order_sales GROUP BY month
+                ),
+                posted_refunds AS (
+                    SELECT substr(refund_date, 1, 7) AS month,
+                           SUM(CAST(ROUND(CAST(amount_usd AS REAL) * 100, 0) AS INTEGER))
+                               AS posted_refunds_cents
+                    FROM {refunds}
+                    WHERE lower(trim(status)) = 'posted'
+                      AND substr(refund_date, 1, 4) BETWEEN '2023' AND '2025'
+                    GROUP BY substr(refund_date, 1, 7)
+                ),
+                month_keys AS (
+                    SELECT month FROM monthly_sales
+                    UNION SELECT month FROM posted_refunds
+                )
+                SELECT k.month AS month_label, k.month || '-01' AS month_start,
+                       CAST(substr(k.month, 1, 4) AS INTEGER) AS year,
+                       COALESCE(s.merchandise_sales_cents, 0) / 100.0 AS merchandise_sales,
+                       COALESCE(r.posted_refunds_cents, 0) / 100.0 AS posted_refunds,
+                       (COALESCE(s.merchandise_sales_cents, 0)
+                           - COALESCE(r.posted_refunds_cents, 0)) / 100.0
+                           AS net_merchandise_revenue,
+                       COALESCE(s.order_count, 0) AS order_count
+                FROM month_keys k
+                LEFT JOIN monthly_sales s ON s.month = k.month
+                LEFT JOIN posted_refunds r ON r.month = k.month
+                ORDER BY k.month
+            "#
+        );
+        let quarter_sql = format!(
+            r#"
+                WITH orders AS (
+                    SELECT order_id, order_date, currency, lower(trim(status)) AS status
+                    FROM {orders_2025}
+                ),
+                order_sales AS (
+                    SELECT o.order_id, o.order_date,
+                           SUM(CAST(ROUND((CAST(l.quantity AS REAL) * CAST(l.unit_price_usd AS REAL)
+                               - CAST(l.line_discount_usd AS REAL)) * 100, 0) AS INTEGER))
+                               AS merchandise_sales_cents
+                    FROM orders o
+                    JOIN {order_lines} l ON l.order_id = o.order_id
+                    WHERE o.status NOT IN ('cancelled', 'canceled')
+                      AND upper(trim(o.currency)) = 'USD'
+                    GROUP BY o.order_id, o.order_date
+                ),
+                sales AS (
+                    SELECT 'Q' || CAST((CAST(substr(order_date, 6, 2) AS INTEGER) - 1) / 3 + 1 AS INTEGER) AS quarter,
+                           SUM(merchandise_sales_cents) AS merchandise_sales_cents,
+                           COUNT(*) AS order_count
+                    FROM order_sales
+                    WHERE substr(order_date, 1, 4) = '2025'
+                    GROUP BY 1
+                ),
+                refunds AS (
+                    SELECT 'Q' || CAST((CAST(substr(refund_date, 6, 2) AS INTEGER) - 1) / 3 + 1 AS INTEGER) AS quarter,
+                           SUM(CAST(ROUND(CAST(amount_usd AS REAL) * 100, 0) AS INTEGER))
+                               AS posted_refunds_cents
+                    FROM {refunds}
+                    WHERE lower(trim(status)) = 'posted' AND substr(refund_date, 1, 4) = '2025'
+                    GROUP BY 1
+                ),
+                periods AS (SELECT 'Q3' AS quarter UNION ALL SELECT 'Q4'),
+                totals AS (
+                    SELECT p.quarter,
+                           COALESCE(s.merchandise_sales_cents, 0) AS merchandise_sales_cents,
+                           COALESCE(r.posted_refunds_cents, 0) AS posted_refunds_cents,
+                           COALESCE(s.order_count, 0) AS order_count,
+                           COALESCE(s.merchandise_sales_cents, 0)
+                               - COALESCE(r.posted_refunds_cents, 0) AS net_merchandise_revenue_cents
+                    FROM periods p
+                    LEFT JOIN sales s ON s.quarter = p.quarter
+                    LEFT JOIN refunds r ON r.quarter = p.quarter
+                )
+                SELECT period_totals.quarter,
+                       period_totals.merchandise_sales_cents / 100.0 AS merchandise_sales,
+                       period_totals.posted_refunds_cents / 100.0 AS posted_refunds,
+                       period_totals.net_merchandise_revenue_cents / 100.0 AS net_merchandise_revenue,
+                       period_totals.order_count,
+                       CASE WHEN period_totals.order_count = 0 THEN NULL
+                            ELSE period_totals.merchandise_sales_cents / 100.0 / period_totals.order_count
+                       END AS merchandise_aov,
+                       CASE WHEN period_totals.quarter = 'Q4'
+                            THEN (period_totals.net_merchandise_revenue_cents - q3.net_merchandise_revenue_cents) / 100.0
+                            ELSE NULL END AS net_change,
+                       CASE WHEN period_totals.quarter = 'Q4' AND q3.net_merchandise_revenue_cents <> 0
+                            THEN 1.0 * (period_totals.net_merchandise_revenue_cents - q3.net_merchandise_revenue_cents)
+                                 / q3.net_merchandise_revenue_cents
+                            ELSE NULL END AS net_change_percent
+                FROM totals AS period_totals
+                CROSS JOIN (
+                    SELECT net_merchandise_revenue_cents FROM totals WHERE quarter = 'Q3'
+                ) AS q3
+                ORDER BY CASE period_totals.quarter WHEN 'Q3' THEN 0 ELSE 1 END
+            "#
+        );
+        let category_sql = format!(
+            r#"
+                WITH orders AS (
+                    SELECT order_id, order_date, currency, lower(trim(status)) AS status
+                    FROM {orders_2025}
+                )
+                SELECT p.category,
+                       'Q' || CAST((CAST(substr(o.order_date, 6, 2) AS INTEGER) - 1) / 3 + 1 AS INTEGER) AS quarter,
+                       SUM(CAST(ROUND((CAST(l.quantity AS REAL) * CAST(l.unit_price_usd AS REAL)
+                           - CAST(l.line_discount_usd AS REAL)) * 100, 0) AS INTEGER)) / 100.0
+                           AS merchandise_sales
+                FROM orders o
+                JOIN {order_lines} l ON l.order_id = o.order_id
+                JOIN {products} p ON p.product_id = l.product_id
+                WHERE o.status NOT IN ('cancelled', 'canceled')
+                  AND upper(trim(o.currency)) = 'USD'
+                  AND substr(o.order_date, 1, 4) = '2025'
+                  AND CAST(substr(o.order_date, 6, 2) AS INTEGER) BETWEEN 7 AND 12
+                GROUP BY p.category, quarter
+                ORDER BY p.category, quarter
+            "#
+        );
+        let refund_sql = format!(
+            r#"
+                SELECT reason,
+                       'Q' || CAST((CAST(substr(refund_date, 6, 2) AS INTEGER) - 1) / 3 + 1 AS INTEGER) AS quarter,
+                       SUM(CAST(ROUND(CAST(amount_usd AS REAL) * 100, 0) AS INTEGER)) / 100.0
+                           AS posted_refunds
+                FROM {refunds}
+                WHERE lower(trim(status)) = 'posted' AND substr(refund_date, 1, 4) = '2025'
+                  AND CAST(substr(refund_date, 6, 2) AS INTEGER) BETWEEN 7 AND 12
+                GROUP BY reason, quarter
+                ORDER BY reason, quarter
+            "#
+        );
+
+        let query_specs = [
+            (
+                "northstar_months_v2",
+                "Monthly merchandise sales, posted refunds, net revenue, and order counts for 2023–2025.",
+                monthly_sql,
+                vec![
+                    "commerce/order_lines.csv",
+                    "commerce/orders/orders_2023.csv",
+                    "commerce/orders/orders_2024.csv",
+                    "commerce/orders/orders_2025.csv",
+                    "finance/refund_transactions.csv",
+                ],
+            ),
+            (
+                "northstar_quarters_v2",
+                "Q3/Q4 2025 discounted merchandise sales, posted refunds, net revenue, order counts, and AOV.",
+                quarter_sql,
+                vec![
+                    "commerce/order_lines.csv",
+                    "commerce/orders/orders_2025.csv",
+                    "finance/refund_transactions.csv",
+                ],
+            ),
+            (
+                "northstar_categories_v2",
+                "Q3/Q4 2025 product category merchandise sales after line discounts and before refunds.",
+                category_sql,
+                vec![
+                    "catalog/products.csv",
+                    "commerce/order_lines.csv",
+                    "commerce/orders/orders_2025.csv",
+                ],
+            ),
+            (
+                "northstar_refunds_v2",
+                "Q3/Q4 2025 posted refund amounts by reason and refund date.",
+                refund_sql,
+                vec!["finance/refund_transactions.csv"],
+            ),
+        ];
+        let query_started = Instant::now();
+        let mut evidence = Vec::with_capacity(query_specs.len());
+        let mut trace_steps = Vec::with_capacity(query_specs.len());
+        let mut used_sources = Vec::new();
+        for (id, note, sql, paths) in query_specs {
+            let result = query_workspace(&*workspace.data, &sql, 2_000)?;
+            if result.truncated {
+                return Err(EngineError::msg(format!(
+                    "The Northstar sample result {id} exceeded the saved-row limit."
+                )));
+            }
+            for path in &paths {
+                if let Some(source) = sources.get(*path) {
+                    used_sources.push(crate::engine::runtime::AnalysisSourceReference {
+                        source: (*path).to_owned(),
+                        table: source.view.clone(),
+                        evidence_ids: vec![id.to_owned()],
+                    });
+                }
+            }
+            let result_summary = format!("{} rows returned from read-only SQL.", result.row_count);
+            let source_refs = source_refs(&paths);
+            trace_steps.push(crate::engine::runtime::TraceStep {
+                id: format!("step_{id}"),
+                operation: "run_sql".to_owned(),
+                duration_ms: result.ms,
+                success: true,
+                summary: Some(result_summary.clone()),
+                sources: paths.iter().map(|path| (*path).to_owned()).collect(),
+            });
+            evidence.push(serde_json::json!({
+                "id":id,
+                "tool":"run_sql",
+                "sources":source_refs,
+                "args":{"max_rows":2000},
+                "note":note,
+                "sql":sql,
+                "result_summary":result_summary,
+                "columns":result.columns,
+                "rows":result.rows,
+                "row_count":result.row_count,
+                "ms":result.ms,
+                "truncated":false
+            }));
+        }
+        let policy_result_id = "northstar_policy_v2";
+        used_sources.push(crate::engine::runtime::AnalysisSourceReference {
+            source: "docs/metric_policy_current.md".to_owned(),
+            table: None,
+            evidence_ids: vec![policy_result_id.to_owned()],
+        });
+        trace_steps.push(crate::engine::runtime::TraceStep {
+            id: format!("step_{policy_result_id}"),
+            operation: "read_file".to_owned(),
+            duration_ms: policy_started.elapsed().as_millis() as u64,
+            success: true,
+            summary: Some("Read the current Northstar finance metric policy.".to_owned()),
+            sources: vec!["docs/metric_policy_current.md".to_owned()],
+        });
+        evidence.push(serde_json::json!({
+            "id":policy_result_id,
+            "tool":"read_file",
+            "args":{"name":"docs/metric_policy_current.md"},
+            "note":"Read the current finance metric definition and reporting date rules.",
+            "result_summary":"Current finance policy text saved as source evidence.",
+            "output":policy_text,
+            "ms":policy_started.elapsed().as_millis() as u64
+        }));
+        let spec = crate::engine::artifacts::northstar_sample_report_spec();
+        let turn_id = format!(
+            "turn_northstar_sample_{}",
+            revision
+                .chars()
+                .filter(|character| character.is_ascii_alphanumeric())
+                .take(32)
+                .collect::<String>()
+        );
+        let trace_id = format!("trace_{turn_id}");
+        let checks = vec![
+            VerificationCheck {
+                label: "Queries ran against the mounted Northstar source revision".to_owned(),
+                ok: true,
+                outcome: Some(crate::engine::evidence::VerificationOutcome::Passed),
+                detail: Some(format!("Source revision {revision}; all four queries were read-only and complete.")),
+                finding: None,
+            },
+            VerificationCheck {
+                label: "Metric date basis and category refund limitation are disclosed".to_owned(),
+                ok: true,
+                outcome: Some(crate::engine::evidence::VerificationOutcome::Passed),
+                detail: Some("Refunds use posted date; category values remain before refunds because refund rows have no product-category key.".to_owned()),
+                finding: None,
+            },
+        ];
+        let run = AnalysisTurn {
+            id: turn_id.clone(),
+            conversation_id: "northstar_sample_report_seed".to_owned(),
+            question: "Explain Northstar Outfitters’ merchandise revenue trend and compare Q3 with Q4 2025.".to_owned(),
+            context_refs: Vec::new(),
+            prior_turn_refs: Vec::new(),
+            clarification_of: None,
+            clarification_response: None,
+            workspace: Some(workspace_path),
+            workspace_revision: Some(revision.clone()),
+            workspace_snapshot: None,
+            source_scope: Some(AnalysisSourceScope {
+                used_sources,
+                skipped_sources: workspace
+                    .skipped
+                    .iter()
+                    .map(|source| format!("{}: {}", source.name, source.reason))
+                    .collect(),
+            }),
+            investigation_context: None,
+            context_audit: None,
+            provenance: None,
+            rerun_of: None,
+            state: TurnState::Accepted,
+            contract: None,
+            plan: LogicalPlan {
+                strategy: PlanStrategy::DirectTools,
+                steps: vec![
+                    "Read the current finance metric policy and its refund date basis.".to_owned(),
+                    "Aggregate discounted merchandise sales by order period.".to_owned(),
+                    "Subtract only posted refunds by refund transaction period.".to_owned(),
+                    "Compare categories before refunds because refunds are not category-attributed.".to_owned(),
+                ],
+            },
+            trace: crate::engine::runtime::ExecutionTrace {
+                id: trace_id,
+                turn_id: turn_id.clone(),
+                workspace_revision: Some(revision),
+                mode: Some(crate::engine::runtime::InteractionMode::WorkspaceAsk),
+                model: None,
+                model_calls: Vec::new(),
+                elapsed_ms: Some(query_started.elapsed().as_millis() as u64),
+                steps: trace_steps,
+            },
+            verification: Some(VerificationReport {
+                status: VerificationStatus::Verified,
+                checks: checks.clone(),
+            }),
+            result: AnalysisResult {
+                text: "Interactive sample results are ready. These saved queries are scoped to the mounted Northstar source revision; review the metric notes and source caveats in the Report before relying on them.".to_owned(),
+                presentation_spec: Some(spec),
+                status: VerificationStatus::Verified,
+                usage: None,
+                verification: checks,
+                evidence,
+            },
+        };
+        crate::engine::artifacts::studio_seed_northstar_sample_report(data_dir, &run)
     }
 
     /// Ask the metadata-only Report Design runtime for a preview. The response

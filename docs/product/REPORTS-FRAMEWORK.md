@@ -180,8 +180,11 @@ end-to-end acceptance slice has been exercised in the desktop app.
   referenced analytical record and pinned revision independently of its
   originating conversation.
 - Opening the Northstar analyst sample idempotently creates one in-progress
-  Report with its objective and analysis outline. It starts without findings or
-  fabricated results; verified outputs can be added as the user investigates.
+  Report with saved, read-only results: a 2023–2025 monthly trend, Q3/Q4
+  revenue metrics, product-category and refund-reason comparisons, and linked
+  tables. Selectors and chart selections filter those saved results. The Report
+  states the posted-refund date basis and that category values are before
+  refunds; it does not claim those refunds can be allocated to products.
 - Placements support labels and full/half widths. Layouts collapse to one
   column in narrower panes. Markdown and portable Report export retain the
   layout metadata.

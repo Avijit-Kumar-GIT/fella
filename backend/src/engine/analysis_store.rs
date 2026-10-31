@@ -58,6 +58,13 @@ fn turn_path(data_dir: &Path, turn_id: &str) -> EngineResult<PathBuf> {
 /// so duplicate IDs fail atomically instead of silently erasing history.
 pub fn create(data_dir: &Path, turn: &AnalysisTurn) -> EngineResult<String> {
     let _lifecycle = lifecycle_lock(data_dir)?;
+    create_unlocked(data_dir, turn)
+}
+
+/// Persist a canonical run while the caller already owns the lifecycle lock.
+/// Artifact/Report transactions use this to keep run creation and references
+/// serialized with deletion and retention changes.
+pub(crate) fn create_unlocked(data_dir: &Path, turn: &AnalysisTurn) -> EngineResult<String> {
     let path = turn_path(data_dir, &turn.id)?;
     let parent = path
         .parent()
