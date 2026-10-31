@@ -27,6 +27,27 @@ export default defineConfig({
 
 	// Electron development uses the same stable Vite port in electron/dev.mjs.
 	clearScreen: false,
+	// These dependencies are reached through lazy Svelte panes and renderers.
+	// Pre-bundling the known set together avoids several successive optimizer
+	// passes (and renderer reloads) during the first Electron dev launch.
+	optimizeDeps: {
+		include: [
+			'@json-render/svelte',
+			'@json-render/svelte/schema',
+			'@lucide/svelte',
+			'bits-ui',
+			'd3-scale',
+			'd3-shape',
+			'html-to-image',
+			'marked',
+			'tailwind-merge',
+			'tailwind-variants',
+			'vega-interpreter',
+			'vega-lite',
+			'vega',
+			'zod/v4'
+		]
+	},
 	server: {
 		host: '127.0.0.1',
 		port: 1420,

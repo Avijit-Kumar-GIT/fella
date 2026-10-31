@@ -10,6 +10,7 @@ import { checkAndApply } from './update.mjs';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 let engine;
+let isQuitting = false;
 app.setName('Fella');
 
 protocol.registerSchemesAsPrivileged([
@@ -75,6 +76,17 @@ function dataDirectory() {
 		return join(dataHome, 'dev.fella.app');
 	}
 	return join(app.getPath('appData'), 'dev.fella.app');
+}
+
+function requestEngine(method, params, onEvent) {
+	if (isQuitting) return Promise.resolve(null);
+	if (!engine) return Promise.reject(new Error('Fella engine is unavailable.'));
+	return engine.request(method, params, (item) => {
+		if (!isQuitting) onEvent?.(item);
+	}).catch((error) => {
+		if (isQuitting) return null;
+		throw error;
+	});
 }
 
 const DARK_WINDOW = '#0e0e10';
@@ -329,10 +341,10 @@ app.whenReady().then(() => {
 
 		ipcMain.handle('fella:invoke', (_event, request) => {
 			if (request.command === 'update') return checkAndApply(app);
-			return engine.request(request.command, request.args ?? {});
+			return requestEngine(request.command, request.args ?? {});
 		});
 		ipcMain.handle('fella:open-workspace', (event, request) =>
-			engine.request('open_workspace', { path: request.path }, (item) => {
+			requestEngine('open_workspace', { path: request.path }, (item) => {
 				if (!event.sender.isDestroyed()) {
 					event.sender.send('fella:workspace-progress', {
 						requestId: request.requestId,
@@ -355,14 +367,14 @@ app.whenReady().then(() => {
 			return true;
 		});
 		ipcMain.handle('fella:ask', (event, request) =>
-			engine.request('ask', request.params ?? {}, (item) => {
+			requestEngine('ask', request.params ?? {}, (item) => {
 				if (!event.sender.isDestroyed()) {
 					event.sender.send('fella:ask-event', { requestId: request.requestId, event: item });
 				}
 			})
 		);
 		ipcMain.handle('fella:analysis-turn-rerun', (event, request) =>
-			engine.request('analysis_turn_rerun', request.params ?? {}, (item) => {
+			requestEngine('analysis_turn_rerun', request.params ?? {}, (item) => {
 				if (!event.sender.isDestroyed()) {
 					event.sender.send('fella:ask-event', { requestId: request.requestId, event: item });
 				}
@@ -402,5 +414,6 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+	isQuitting = true;
 	engine?.dispose();
 });
