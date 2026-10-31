@@ -606,6 +606,27 @@ async fn dispatch(
                     update,
                 ))
             }
+            "studio_design_propose" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let document_id: String = required(&request.params, "documentId")?;
+                let base: u64 = required(&request.params, "baseVersion")?;
+                let target_placement_id = request
+                    .params
+                    .get("targetPlacementId")
+                    .and_then(Value::as_str);
+                let prompt: String = required(&request.params, "request")?;
+                value_result(
+                    engine
+                        .studio_design_propose(
+                            &workspace,
+                            &document_id,
+                            base,
+                            target_placement_id,
+                            &prompt,
+                        )
+                        .await,
+                )
+            }
             "studio_checkpoint" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
                 let document_id: String = required(&request.params, "documentId")?;
@@ -617,6 +638,28 @@ async fn dispatch(
                     &document_id,
                     base,
                     &title,
+                ))
+            }
+            "studio_history" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let document_id: String = required(&request.params, "documentId")?;
+                value_result(crate::engine::artifacts::studio_history(
+                    engine.analytical_data_dir(),
+                    &workspace,
+                    &document_id,
+                ))
+            }
+            "studio_restore_revision" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let document_id: String = required(&request.params, "documentId")?;
+                let base: u64 = required(&request.params, "baseVersion")?;
+                let revision: u64 = required(&request.params, "revisionVersion")?;
+                value_result(crate::engine::artifacts::studio_restore_revision(
+                    engine.analytical_data_dir(),
+                    &workspace,
+                    &document_id,
+                    base,
+                    revision,
                 ))
             }
             "studio_restore" => {

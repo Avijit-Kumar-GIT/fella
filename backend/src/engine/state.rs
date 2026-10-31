@@ -5699,6 +5699,56 @@ exactly, character for character, from the list below.";
         Ok(resp.content)
     }
 
+    /// Ask the metadata-only Report Design runtime for a preview. The response
+    /// cannot execute analysis or persist changes; callers apply the returned
+    /// optimistic-versioned update only after user confirmation.
+    pub async fn studio_design_propose(
+        &self,
+        workspace: &str,
+        document_id: &str,
+        base_version: u64,
+        target_placement_id: Option<&str>,
+        request: &str,
+    ) -> EngineResult<crate::engine::report_design::StudioDesignProposal> {
+        if workspace != crate::engine::artifacts::APP_WORKSPACE_ID {
+            return Err(EngineError::msg(
+                "Reports belong to the Fella app workspace",
+            ));
+        }
+        let document = crate::engine::artifacts::studio_load(
+            self.analytical_data_dir(),
+            workspace,
+            document_id,
+        )?;
+        if document.version != base_version {
+            return Err(EngineError::msg(
+                "This Report changed while the design request was being prepared. Refresh it and try again.",
+            ));
+        }
+        let available = crate::engine::artifacts::list_for_reports(self.analytical_data_dir())?;
+        let user = crate::engine::report_design::user_prompt(
+            &document,
+            &available,
+            target_placement_id,
+            request,
+        )?;
+        let messages = [
+            crate::engine::llm::ChatMessage::System(
+                crate::engine::report_design::system_prompt().to_string(),
+            ),
+            crate::engine::llm::ChatMessage::User(user),
+        ];
+        let noop = |_: &str| {};
+        let response = self.llm().chat_json(&messages, &noop, &noop).await?;
+        crate::engine::report_design::propose(
+            &document,
+            &available,
+            target_placement_id,
+            request,
+            &response.content,
+        )
+    }
+
     /// Like [`ask_once`](Self::ask_once) but also returns token usage. The eval
     /// harness's no-harness baseline needs the token count to compare
     /// efficiency against a full run. Not on any product path.

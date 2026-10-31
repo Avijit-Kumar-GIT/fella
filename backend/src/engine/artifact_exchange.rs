@@ -12,7 +12,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as Json;
 
-use super::artifacts::{self, BoundResult, ResolvedArtifact, StudioDocument};
+use super::artifacts::{self, BoundResult, ResolvedArtifact, StudioDocument, StudioPlacementWidth};
 use super::error::{EngineError, EngineResult};
 use super::evidence::{VerificationCheck, VerificationStatus};
 use super::runtime::{AnalysisContract, AnalysisTurn, ContractMeasure, ContractTime, TurnState};
@@ -895,7 +895,15 @@ pub struct PackageManifest {
 pub struct PackagePlacement {
     pub id: String,
     pub artifact_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "is_full_package_width")]
+    pub width: StudioPlacementWidth,
     pub view_state: Json,
+}
+
+fn is_full_package_width(width: &StudioPlacementWidth) -> bool {
+    *width == StudioPlacementWidth::Full
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1179,6 +1187,8 @@ pub fn export_snapshot(
             .map(|(i, p)| PackagePlacement {
                 id: format!("placement_{i:04}"),
                 artifact_id: pins[&(p.artifact_id.clone(), p.revision)].clone(),
+                label: p.label.clone(),
+                width: p.width,
                 view_state: p.view_state.clone(),
             })
             .collect(),
@@ -1441,6 +1451,7 @@ pub fn package_validate(json: &str) -> EngineResult<ReportPackage> {
                 "report placement identities or artifact references are invalid",
             ));
         }
+        bounded_text(&placement.label, 160)?;
         if !placement.view_state.is_object() || canonical(&placement.view_state)?.len() > 16 * 1024
         {
             return Err(err("report view state is invalid or too large"));
@@ -1611,7 +1622,8 @@ pub fn package_list(data_dir: &Path) -> EngineResult<Vec<ImportedReportSummary>>
 #[cfg(test)]
 mod tests {
     use super::super::artifacts::{
-        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioUpdate, SCHEMA_VERSION,
+        ArtifactRecord, ArtifactRevision, StudioPlacement, StudioPlacementWidth, StudioUpdate,
+        SCHEMA_VERSION,
     };
     use super::*;
     use serde_json::json;
@@ -1684,7 +1696,7 @@ mod tests {
     fn document(values: &[ResolvedArtifact]) -> StudioDocument {
         StudioDocument {
             id:"studio-original".into(),workspace:WORKSPACE.into(),title:"Quarterly review".into(),version:7,body:"# Saved investigation\n\nOriginal narrative.".into(),
-            placements:values.iter().enumerate().map(|(i,value)|StudioPlacement { id:format!("placement-{i}"),artifact_id:value.artifact.id.clone(),revision:value.revision.revision,view_state:json!({"filter:region":{"resultId":"result-1","field":"region","value":"East"}}) }).collect(),
+            placements:values.iter().enumerate().map(|(i,value)|StudioPlacement { id:format!("placement-{i}"),artifact_id:value.artifact.id.clone(),revision:value.revision.revision,label:String::new(),width:StudioPlacementWidth::Full,view_state:json!({"filter:region":{"resultId":"result-1","field":"region","value":"East"}}) }).collect(),
             checkpoints:vec![],created_at_ms:10,updated_at_ms:100,
         }
     }
@@ -1862,6 +1874,8 @@ mod tests {
                     id: "baseline-placement".into(),
                     artifact_id: record.id.clone(),
                     revision: 1,
+                    label: String::new(),
+                    width: StudioPlacementWidth::Full,
                     view_state: json!({}),
                 }],
             },
@@ -2246,6 +2260,8 @@ mod tests {
                     id: "p-1".into(),
                     artifact_id: artifact.id.clone(),
                     revision: 1,
+                    label: String::new(),
+                    width: StudioPlacementWidth::Full,
                     view_state: json!({}),
                 }],
             },

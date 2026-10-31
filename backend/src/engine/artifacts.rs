@@ -32,6 +32,8 @@ const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REVISIONS: usize = 256;
 const MAX_PLACEMENTS: usize = 256;
 const MAX_CHECKPOINTS: usize = 64;
+const MAX_STUDIO_HISTORY: usize = 100;
+const MAX_STUDIO_HISTORY_BYTES: i64 = 8 * 1024 * 1024;
 const MAX_RESULTS: usize = 256;
 const MAX_RESULT_ROWS: usize = 100_000;
 
@@ -79,11 +81,32 @@ pub struct ResolvedArtifact {
     pub results: Vec<BoundResult>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StudioPlacementWidth {
+    Full,
+    Half,
+}
+
+impl Default for StudioPlacementWidth {
+    fn default() -> Self {
+        Self::Full
+    }
+}
+
+fn is_full_width(width: &StudioPlacementWidth) -> bool {
+    *width == StudioPlacementWidth::Full
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StudioPlacement {
     pub id: String,
     pub artifact_id: String,
     pub revision: u64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    #[serde(default, skip_serializing_if = "is_full_width")]
+    pub width: StudioPlacementWidth,
     pub view_state: Json,
 }
 
@@ -93,6 +116,32 @@ pub struct StudioCheckpoint {
     pub title: String,
     pub body: String,
     pub placements: Vec<StudioPlacement>,
+    pub created_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StudioRevisionKind {
+    Created,
+    Presentation,
+    Analytical,
+    Checkpoint,
+    Restored,
+    Imported,
+}
+
+/// Compact Report snapshot. Placements retain artifact/revision references;
+/// result data and source files are never copied into Report history.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StudioRevision {
+    pub document_id: String,
+    pub workspace: String,
+    pub version: u64,
+    pub title: String,
+    pub body: String,
+    pub placements: Vec<StudioPlacement>,
+    pub kind: StudioRevisionKind,
+    pub summary: String,
     pub created_at_ms: u64,
 }
 
@@ -469,6 +518,9 @@ fn store_unlocked(data_dir: &Path) -> EngineResult<Connection> {
          CREATE TABLE IF NOT EXISTS studio_documents (
            id TEXT PRIMARY KEY, workspace TEXT NOT NULL, body TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS studio_workspace ON studio_documents(workspace);
+         CREATE TABLE IF NOT EXISTS studio_revisions (
+           document_id TEXT NOT NULL, version INTEGER NOT NULL, body TEXT NOT NULL,
+           PRIMARY KEY(document_id, version));
          CREATE TABLE IF NOT EXISTS artifact_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
     )?;
     let version = db
@@ -1163,11 +1215,145 @@ fn validate_placement_shapes(placements: &[StudioPlacement]) -> EngineResult<()>
         validate_id(&placement.artifact_id)?;
         if !ids.insert(&placement.id)
             || placement.revision == 0
+            || placement.label.chars().count() > 160
+            || placement.label.contains('\0')
             || !placement.view_state.is_object()
             || serde_json::to_vec(&placement.view_state)?.len() > 16 * 1024
         {
             return Err(EngineError::msg("invalid Studio placement or view state"));
         }
+    }
+    Ok(())
+}
+
+fn studio_revision(
+    document: &StudioDocument,
+    kind: StudioRevisionKind,
+    summary: &str,
+) -> StudioRevision {
+    StudioRevision {
+        document_id: document.id.clone(),
+        workspace: document.workspace.clone(),
+        version: document.version,
+        title: document.title.clone(),
+        body: document.body.clone(),
+        placements: document.placements.clone(),
+        kind,
+        summary: summary.chars().take(240).collect(),
+        created_at_ms: document.updated_at_ms,
+    }
+}
+
+fn classify_studio_change(
+    before: &StudioDocument,
+    after: &StudioDocument,
+) -> (StudioRevisionKind, String) {
+    let adopted = before.placements.iter().any(|old| {
+        after.placements.iter().any(|new| {
+            old.id == new.id && old.artifact_id == new.artifact_id && old.revision != new.revision
+        })
+    });
+    let mut changes = Vec::new();
+    if before.title != after.title {
+        changes.push("report title changed");
+    }
+    if before.body != after.body {
+        changes.push("report notes changed");
+    }
+    if before.placements.len() != after.placements.len() {
+        changes.push("saved outputs added or removed");
+    } else if before
+        .placements
+        .iter()
+        .map(|placement| &placement.id)
+        .ne(after.placements.iter().map(|placement| &placement.id))
+    {
+        changes.push("saved outputs rearranged");
+    }
+    if before.placements.iter().any(|old| {
+        after.placements.iter().any(|new| {
+            old.id == new.id
+                && old.artifact_id == new.artifact_id
+                && old.revision == new.revision
+                && (old.label != new.label || old.width != new.width)
+        })
+    }) {
+        changes.push("output layout changed");
+    }
+    let kind = if adopted {
+        StudioRevisionKind::Analytical
+    } else {
+        StudioRevisionKind::Presentation
+    };
+    let summary = if adopted {
+        "A new analytical revision was pinned to this Report."
+    } else if changes.is_empty() {
+        "Report saved."
+    } else {
+        return (
+            kind,
+            format!("{}.", changes.join("; ")).replace("report", "Report"),
+        );
+    };
+    (kind, summary.into())
+}
+
+fn store_studio_revision_unlocked(
+    db: &Connection,
+    document: &StudioDocument,
+    kind: StudioRevisionKind,
+    summary: &str,
+) -> EngineResult<()> {
+    let revision = studio_revision(document, kind, summary);
+    let version = i64::try_from(revision.version)
+        .map_err(|_| EngineError::msg("Report revision exceeds the storage range"))?;
+    db.execute(
+        "INSERT OR IGNORE INTO studio_revisions(document_id,version,body) VALUES(?1,?2,?3)",
+        params![revision.document_id, version, encode(&revision)?],
+    )?;
+    db.execute(
+        "DELETE FROM studio_revisions WHERE document_id=?1 AND version NOT IN
+         (SELECT version FROM studio_revisions WHERE document_id=?1 ORDER BY version DESC LIMIT ?2)",
+        params![revision.document_id, MAX_STUDIO_HISTORY as i64],
+    )?;
+    loop {
+        let bytes: i64 = db.query_row(
+            "SELECT COALESCE(SUM(length(body)),0) FROM studio_revisions WHERE document_id=?1",
+            [&revision.document_id],
+            |row| row.get(0),
+        )?;
+        if bytes <= MAX_STUDIO_HISTORY_BYTES {
+            break;
+        }
+        let oldest: Option<i64> = db.query_row(
+            "SELECT MIN(version) FROM studio_revisions WHERE document_id=?1",
+            [&revision.document_id],
+            |row| row.get(0),
+        )?;
+        let Some(oldest) = oldest else { break };
+        if oldest == version {
+            break;
+        }
+        db.execute(
+            "DELETE FROM studio_revisions WHERE document_id=?1 AND version=?2",
+            params![revision.document_id, oldest],
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_studio_revision(revision: &StudioRevision, document_id: &str) -> EngineResult<()> {
+    validate_id(&revision.document_id)?;
+    validate_workspace(&revision.workspace)?;
+    validate_title(&revision.title)?;
+    validate_placement_shapes(&revision.placements)?;
+    if revision.document_id != document_id
+        || revision.version == 0
+        || revision.body.len() > MAX_BODY_BYTES
+        || revision.body.contains('\0')
+        || revision.summary.chars().count() > 240
+    {
+        return Err(EngineError::msg("Report revision is invalid"));
     }
     Ok(())
 }
@@ -1216,7 +1402,16 @@ pub fn studio_create(
         created_at_ms: now,
         updated_at_ms: now,
     };
-    put_studio_unlocked(&store_unlocked(data_dir)?, &document)?;
+    let db = store_unlocked(data_dir)?;
+    let tx = db.unchecked_transaction()?;
+    put_studio_unlocked(&tx, &document)?;
+    store_studio_revision_unlocked(
+        &tx,
+        &document,
+        StudioRevisionKind::Created,
+        "Report created.",
+    )?;
+    tx.commit()?;
     Ok(document)
 }
 
@@ -1291,6 +1486,7 @@ pub fn studio_save(
     let mut db = store_unlocked(data_dir)?;
     let tx = db.transaction()?;
     let mut document = load_studio_unlocked(&tx, workspace, document_id)?;
+    let before = document.clone();
     next_version(&mut document, base_version)?;
     document.title = validate_title(&update.title)?;
     document.body = update.body;
@@ -1318,6 +1514,8 @@ pub fn studio_save(
         put_artifact_unlocked(&tx, &artifact)?;
     }
     put_studio_unlocked(&tx, &document)?;
+    let (kind, summary) = classify_studio_change(&before, &document);
+    store_studio_revision_unlocked(&tx, &document, kind, &summary)?;
     tx.commit()?;
     Ok(document)
 }
@@ -1332,8 +1530,9 @@ pub fn studio_checkpoint(
     validate_workspace(workspace)?;
     let title = validate_title(title)?;
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
-    let db = store_unlocked(data_dir)?;
-    let mut document = load_studio_unlocked(&db, workspace, document_id)?;
+    let mut db = store_unlocked(data_dir)?;
+    let tx = db.transaction()?;
+    let mut document = load_studio_unlocked(&tx, workspace, document_id)?;
     next_version(&mut document, base_version)?;
     document.checkpoints.push(StudioCheckpoint {
         id: new_id("checkpoint")?,
@@ -1342,7 +1541,14 @@ pub fn studio_checkpoint(
         placements: document.placements.clone(),
         created_at_ms: now_ms(),
     });
-    put_studio_unlocked(&db, &document)?;
+    put_studio_unlocked(&tx, &document)?;
+    store_studio_revision_unlocked(
+        &tx,
+        &document,
+        StudioRevisionKind::Checkpoint,
+        "Named Report checkpoint saved.",
+    )?;
+    tx.commit()?;
     Ok(document)
 }
 
@@ -1356,8 +1562,9 @@ pub fn studio_restore(
     validate_workspace(workspace)?;
     validate_id(checkpoint_id)?;
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
-    let db = store_unlocked(data_dir)?;
-    let mut document = load_studio_unlocked(&db, workspace, document_id)?;
+    let mut db = store_unlocked(data_dir)?;
+    let tx = db.transaction()?;
+    let mut document = load_studio_unlocked(&tx, workspace, document_id)?;
     next_version(&mut document, base_version)?;
     let checkpoint = document
         .checkpoints
@@ -1368,7 +1575,7 @@ pub fn studio_restore(
     for placement in &checkpoint.placements {
         resolve_saved_unlocked(
             data_dir,
-            &db,
+            &tx,
             &placement.artifact_id,
             Some(placement.revision),
         )?;
@@ -1377,7 +1584,128 @@ pub fn studio_restore(
     // revisions, recompute analysis, or erase the available checkpoint history.
     document.body = checkpoint.body;
     document.placements = checkpoint.placements;
-    put_studio_unlocked(&db, &document)?;
+    put_studio_unlocked(&tx, &document)?;
+    store_studio_revision_unlocked(
+        &tx,
+        &document,
+        StudioRevisionKind::Restored,
+        "Report restored from a named checkpoint.",
+    )?;
+    tx.commit()?;
+    Ok(document)
+}
+
+pub fn studio_history(
+    data_dir: &Path,
+    workspace: &str,
+    document_id: &str,
+) -> EngineResult<Vec<StudioRevision>> {
+    validate_workspace(workspace)?;
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let mut db = store_unlocked(data_dir)?;
+    let tx = db.transaction()?;
+    let document = load_studio_unlocked(&tx, workspace, document_id)?;
+    let history_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM studio_revisions WHERE document_id=?1",
+        [document_id],
+        |row| row.get(0),
+    )?;
+    if history_count == 0 {
+        let (kind, summary) = if document.version == 1 {
+            (StudioRevisionKind::Created, "Report created.")
+        } else {
+            (
+                StudioRevisionKind::Imported,
+                "Current Report version retained when history tracking was added.",
+            )
+        };
+        store_studio_revision_unlocked(&tx, &document, kind, summary)?;
+    }
+    tx.commit()?;
+    let mut query = db.prepare(
+        "SELECT body FROM studio_revisions WHERE document_id=?1 ORDER BY version DESC LIMIT ?2",
+    )?;
+    let bodies = query
+        .query_map(params![document_id, MAX_STUDIO_HISTORY as i64], |row| {
+            row.get::<_, String>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    bodies
+        .iter()
+        .map(|body| {
+            let revision: StudioRevision = decode(body)?;
+            validate_studio_revision(&revision, document_id)?;
+            if revision.workspace != workspace {
+                return Err(EngineError::msg("Report history owner is inconsistent"));
+            }
+            Ok(revision)
+        })
+        .collect()
+}
+
+pub fn studio_restore_revision(
+    data_dir: &Path,
+    workspace: &str,
+    document_id: &str,
+    base_version: u64,
+    revision_version: u64,
+) -> EngineResult<StudioDocument> {
+    validate_workspace(workspace)?;
+    validate_id(document_id)?;
+    let revision_number = i64::try_from(revision_version)
+        .map_err(|_| EngineError::msg("Report revision exceeds the storage range"))?;
+    let _guard = analysis_store::lifecycle_lock(data_dir)?;
+    let mut db = store_unlocked(data_dir)?;
+    let tx = db.transaction()?;
+    let mut document = load_studio_unlocked(&tx, workspace, document_id)?;
+    if document.version == revision_version {
+        return Err(EngineError::msg("That Report revision is already current"));
+    }
+    let body: String = tx
+        .query_row(
+            "SELECT body FROM studio_revisions WHERE document_id=?1 AND version=?2",
+            params![document_id, revision_number],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| EngineError::msg("That Report revision is no longer available"))?;
+    let prior: StudioRevision = decode(&body)?;
+    validate_studio_revision(&prior, document_id)?;
+    if prior.workspace != workspace {
+        return Err(EngineError::msg("Report history owner is inconsistent"));
+    }
+    next_version(&mut document, base_version)?;
+    document.title = validate_title(&prior.title)?;
+    document.body = prior.body;
+    document.placements = prior.placements;
+    validate_studio(&document)?;
+    let mut artifact_ids = HashSet::new();
+    for placement in &document.placements {
+        resolve_saved_unlocked(
+            data_dir,
+            &tx,
+            &placement.artifact_id,
+            Some(placement.revision),
+        )?;
+        artifact_ids.insert(placement.artifact_id.clone());
+    }
+    for id in artifact_ids {
+        let mut artifact = load_artifact_by_id_unlocked(&tx, &id)?;
+        for revision in &artifact.revisions {
+            load_run(data_dir, &artifact.workspace, &revision.run_id)?;
+        }
+        artifact.saved = true;
+        artifact.updated_at_ms = now_ms();
+        put_artifact_unlocked(&tx, &artifact)?;
+    }
+    put_studio_unlocked(&tx, &document)?;
+    store_studio_revision_unlocked(
+        &tx,
+        &document,
+        StudioRevisionKind::Restored,
+        &format!("Restored Report revision {revision_version}; newer history remains available."),
+    )?;
+    tx.commit()?;
     Ok(document)
 }
 
@@ -1484,6 +1812,8 @@ mod tests {
             id: "old-pin".into(),
             artifact_id: "old-format-artifact".into(),
             revision: 1,
+            label: String::new(),
+            width: StudioPlacementWidth::Full,
             view_state: Json::Object(Default::default()),
         };
         let document = StudioDocument {
@@ -1534,6 +1864,8 @@ mod tests {
             id: id.into(),
             artifact_id: artifact.id.clone(),
             revision: rev,
+            label: String::new(),
+            width: StudioPlacementWidth::Full,
             view_state: json!({"filter":"Q4"}),
         }
     }

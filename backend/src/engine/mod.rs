@@ -20,6 +20,7 @@ pub mod llm;
 pub mod memory;
 pub mod planner;
 pub mod provider;
+pub mod report_design;
 pub mod risk;
 pub mod runtime;
 pub mod secrets;

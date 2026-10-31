@@ -35,7 +35,7 @@ import type {
 	UpdateStatus,
 	WorkspaceProgress
 } from './types';
-import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDocument, StudioPlacement, BoundResult } from './analytics-artifacts';
+import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDesignProposal, StudioDocument, StudioPlacement, StudioRevision, BoundResult } from './analytics-artifacts';
 
 export function isElectron(): boolean {
 	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
@@ -112,8 +112,14 @@ export const ipc = {
 	studioLoad: (workspaceId: string, documentId: string) => invoke<StudioDocument>('studio_load', { workspaceId, documentId }),
 	studioSave: (workspaceId: string, documentId: string, baseVersion: number, update: { title: string; body: string; placements: StudioPlacement[] }) =>
 		invoke<StudioDocument>('studio_save', { workspaceId, documentId, baseVersion, update }),
+	studioDesignPropose: (workspaceId: string, documentId: string, baseVersion: number, request: string, targetPlacementId?: string | null) =>
+		invoke<StudioDesignProposal>('studio_design_propose', { workspaceId, documentId, baseVersion, request, targetPlacementId }),
 	studioCheckpoint: (workspaceId: string, documentId: string, baseVersion: number, title: string) =>
 		invoke<StudioDocument>('studio_checkpoint', { workspaceId, documentId, baseVersion, title }),
+	studioHistory: (workspaceId: string, documentId: string) =>
+		invoke<StudioRevision[]>('studio_history', { workspaceId, documentId }),
+	studioRestoreRevision: (workspaceId: string, documentId: string, baseVersion: number, revisionVersion: number) =>
+		invoke<StudioDocument>('studio_restore_revision', { workspaceId, documentId, baseVersion, revisionVersion }),
 	studioRestore: (workspaceId: string, documentId: string, baseVersion: number, checkpointId: string) =>
 		invoke<StudioDocument>('studio_restore', { workspaceId, documentId, baseVersion, checkpointId }),
 	studioExportPackage: (workspaceId: string, documentId: string) =>

@@ -100,10 +100,13 @@ export interface AnalyticalDiff {
 		limitations: string[];
 	};
 }
+export type StudioPlacementWidth = 'full' | 'half';
 export interface StudioPlacement {
 	id: string;
 	artifact_id: string;
 	revision: number;
+	label?: string;
+	width?: StudioPlacementWidth;
 	view_state: Record<string, unknown>;
 }
 export interface StudioCheckpoint {
@@ -111,6 +114,18 @@ export interface StudioCheckpoint {
 	title: string;
 	body: string;
 	placements: StudioPlacement[];
+	created_at_ms: number;
+}
+export type StudioRevisionKind = 'created' | 'presentation' | 'analytical' | 'checkpoint' | 'restored' | 'imported';
+export interface StudioRevision {
+	document_id: string;
+	workspace: string;
+	version: number;
+	title: string;
+	body: string;
+	placements: StudioPlacement[];
+	kind: StudioRevisionKind;
+	summary: string;
 	created_at_ms: number;
 }
 export interface StudioDocument {
@@ -125,6 +140,19 @@ export interface StudioDocument {
 	updated_at_ms: number;
 }
 
+export interface StudioUpdate {
+	title: string;
+	body: string;
+	placements: StudioPlacement[];
+}
+
+export interface StudioDesignProposal {
+	base_version: number;
+	message: string;
+	requires_analysis: boolean;
+	update: StudioUpdate | null;
+}
+
 export interface ReportPackageSummary {
 	id: string;
 	title: string;
@@ -136,7 +164,7 @@ export interface ImportedReportPackage {
 	format: 'fella-report';
 	version: number;
 	manifest: { generator: string; origin_workspace_fingerprint: string; snapshot_at_ms: number; artifact_count: number; run_count: number; content_sha256: string; exclusions: string[] };
-	document: { origin_document_id: string; origin_version: number; title: string; body: string; placements: Array<{ id: string; artifact_id: string; view_state: Record<string, unknown> }> };
+	document: { origin_document_id: string; origin_version: number; title: string; body: string; placements: Array<{ id: string; artifact_id: string; label?: string; width?: StudioPlacementWidth; view_state: Record<string, unknown> }> };
 	artifacts: Array<{ id: string; origin_artifact_id: string; origin_revision: number; title: string; run_id: string; spec: PresentationSpec; schema_version: string; change_note: string }>;
 	runs: Array<{ id: string; origin_run_id: string; original_question: string; answer: string; state: string; result_status: string; verification_status: string | null; checks: unknown[]; result_checks: unknown[]; source_revision: string | null; semantics: unknown; definitions: string[]; source_labels: string[]; methods: Array<{ evidence_id: string; tool: string; sql: string | null }>; results: BoundResult[] }>;
 }
