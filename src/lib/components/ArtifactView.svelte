@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
-	import type { ArtifactComparison, ArtifactRecord, BoundResult, ResolvedArtifact } from '$lib/analytics-artifacts';
+	import type { ArtifactComparison, ArtifactRecord, BoundResult, ReportFilterValue, ResolvedArtifact } from '$lib/analytics-artifacts';
 	import type { EvidenceItem } from '$lib/types';
 	import { artifactCaveats, artifactSourceRevision } from '$lib/studio-report';
 	import { Button } from '$lib/components/ui/button';
@@ -98,6 +98,16 @@
 			viewState = next;
 			onstatechange?.(next);
 		} catch (cause) { actionError = cause instanceof Error ? cause.message : 'Display selections could not be saved.'; }
+	}
+
+	function requeryResult(resultId: string, filters: ReportFilterValue[]): Promise<BoundResult> {
+		return ipc.artifactFilterResult(
+			displayed.artifact.workspace,
+			displayed.artifact.id,
+			displayed.revision.revision,
+			resultId,
+			filters
+		);
 	}
 
 	async function chooseRevision(value: string): Promise<void> {
@@ -263,7 +273,7 @@
 		{#if displayed.revision.spec && Presentation && !rendererError}
 			{#key `${displayed.artifact.id}:${displayed.revision.revision}`}
 				<svelte:boundary>
-					<Presentation spec={displayed.revision.spec} results={displayed.results} {initialState} interactionScope={displayed.artifact.workspace} {showActiveFilters} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
+					<Presentation spec={displayed.revision.spec} results={displayed.results} {initialState} interactionScope={displayed.artifact.workspace} sourceArtifactId={displayed.artifact.id} sourceRevision={displayed.revision.revision} onrequery={requeryResult} {showActiveFilters} onstatechange={updateState} onaction={onrequestchange ? action => { if (action.type === 'continue') void requestChange(action.message); } : undefined} />
 					{#snippet failed()}
 						<p class="quiet-note" role="status">The interactive presentation is unavailable. The saved answer and exact values are unchanged.</p>
 						<MarkdownContent text={displayed.run.result.text} />

@@ -3,7 +3,7 @@
 	import { exactValue } from '../../presentation/results';
 	import { formatPresentationValue, presentationColumnLabel, type PresentationFormatOptions } from '../../presentation/format';
 	import Icon from '../Icon.svelte';
-	let { result, fields = result.columns, indices = result.rows.map((_, row) => row), columnFormats = {}, exactValueLabel = 'Exact saved value', caption = `Exact values from saved result ${result.id}`, filterFields = fields, onrowfilter }: { result: BoundResult; fields?: string[]; indices?: number[]; columnFormats?: Record<string, PresentationFormatOptions>; exactValueLabel?: string; caption?: string; filterFields?: string[]; onrowfilter?: (row: number) => void } = $props();
+	let { result, fields = result.columns, indices = result.rows.map((_, row) => row), columnFormats = {}, exactValueLabel = 'Exact saved value', caption = `Exact values from saved result ${result.id}`, filterFields = fields, rowSourceLabel = 'saved', onrowfilter }: { result: BoundResult; fields?: string[]; indices?: number[]; columnFormats?: Record<string, PresentationFormatOptions>; exactValueLabel?: string; caption?: string; filterFields?: string[]; rowSourceLabel?: string; onrowfilter?: (row: number) => void } = $props();
 	let numericFields = $derived(new Set(result.columns.filter((field, column) => result.rows.some(row => typeof row[column] === 'number') && result.rows.every(row => row[column] === null || typeof row[column] === 'number'))));
 	let page = $state(0);
 	const pageSize = 50;
@@ -37,7 +37,7 @@
 			</tbody>
 		</table>
 	</div>
-	{#if !result.complete || pages > 1}<p class="extent">{indices.length} saved {indices.length === 1 ? 'row' : 'rows'}{#if !result.complete} · Incomplete result ({result.row_count} total rows); this is not the full dataset.{/if}</p>{/if}
+	{#if !result.complete || pages > 1}<p class="extent">{indices.length} {rowSourceLabel} {indices.length === 1 ? 'row' : 'rows'}{#if !result.complete} · Incomplete result ({result.row_count} matching rows); this is not the full filtered result.{/if}</p>{/if}
 	{#if pages > 1}<nav class="presentation-result-nav" aria-label="Result pages"><button disabled={current === 0} onclick={() => page = current - 1}>Previous</button><span>{current + 1} / {pages}</span><button disabled={current >= pages - 1} onclick={() => page = current + 1}>Next</button></nav>{/if}
 </div>
 <style>

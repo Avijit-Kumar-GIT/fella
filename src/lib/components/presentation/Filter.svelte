@@ -5,7 +5,7 @@
 	let { props }: BaseComponentProps<{ resultId: string; field: string; name: string; title?: string; interactionGroup?: string }> = $props();
 	const context = usePresentation();
 	let menu: HTMLDetailsElement;
-	let result = $derived(requireResult(context.results, props.resultId));
+	let result = $derived(requireResult(context.sourceResults, props.resultId));
 	let options = $derived([...new Map(result.rows.map((_, row) => {
 		const column = result.columns.indexOf(props.field);
 		const raw = result.rows[row][column];
@@ -24,8 +24,8 @@
 			return exactValue(result, rowIndex, props.field) === value && (raw === null ? 'null' : typeof raw) === valueType;
 		});
 		const raw = row < 0 ? null : result.rows[row][column];
-		const selectedType = raw === null ? 'null' : typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean' ? typeof raw : undefined;
-		context.update(stateKey, { resultId: props.resultId, field: props.field, value, ...(props.interactionGroup ? { interactionGroup: props.interactionGroup } : {}), ...(context.interactionScope ? { interactionScope: context.interactionScope } : {}), ...(selectedType ? { valueType: selectedType } : {}) });
+		const selectedType: FilterSelection['valueType'] = raw === null ? 'null' : typeof raw === 'string' ? 'string' : typeof raw === 'number' ? 'number' : typeof raw === 'boolean' ? 'boolean' : undefined;
+		context.setFilter(stateKey, { resultId: props.resultId, field: props.field, value, ...(props.interactionGroup ? { interactionGroup: props.interactionGroup } : {}), ...(context.interactionScope ? { interactionScope: context.interactionScope } : {}), ...(selectedType ? { valueType: selectedType } : {}) });
 		if (menu) menu.open = false;
 	}
 </script>
@@ -37,7 +37,7 @@
 			{#each options as option}<button aria-pressed={selected === option.value && selectedType === option.type} onclick={() => select(option.value, option.type)}>{option.label}</button>{/each}
 		</div>
 	</details>
-	{#if !result.complete}<span class="scope">Filters saved rows only, not the full dataset.</span>{/if}
+	{#if !result.complete}<span class="scope">Choices come from the saved result sample. Compatible SQL outputs replay the selected value against the same source revision.</span>{/if}
 </div>
 <style>
 	.filter { display: flex; min-width: 0; max-width: 100%; align-items: center; flex-wrap: wrap; gap: var(--space-2); font-size: var(--fs-sm); }

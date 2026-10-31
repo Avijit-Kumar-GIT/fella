@@ -12,6 +12,15 @@ export interface BoundResult {
 	row_count: number;
 	complete: boolean;
 }
+export interface ReportFilterValue {
+	sourceArtifactId: string;
+	sourceRevision: number;
+	resultId: string;
+	field: string;
+	interactionGroup: string;
+	value: string;
+	valueType: 'string' | 'number' | 'boolean' | 'null';
+}
 export interface ArtifactRevision {
 	revision: number;
 	parent_revision?: number | null;

@@ -5749,6 +5749,128 @@ exactly, character for character, from the list below.";
         )
     }
 
+    /// Recompute one saved SQL output with exact, source-scoped Report filters.
+    /// The query runs only in the already-mounted engine for the saved source
+    /// folder and revision; it never asks a model or opens a different folder.
+    pub fn artifact_filter_result(
+        &self,
+        artifact_id: &str,
+        revision: u64,
+        result_id: &str,
+        filters: &[crate::engine::artifacts::ReportFilterValue],
+    ) -> EngineResult<crate::engine::artifacts::BoundResult> {
+        require_capability(
+            self.settings().capabilities.table_analysis,
+            "Table analysis",
+        )?;
+        let binding = crate::engine::artifacts::report_filter_binding(
+            self.analytical_data_dir(),
+            artifact_id,
+            revision,
+            result_id,
+            filters,
+        )?;
+        let workspace = self.workspace.lock().unwrap_or_else(|e| e.into_inner());
+        if workspace
+            .workspace
+            .as_deref()
+            .map(|path| path.display().to_string())
+            != Some(binding.workspace.as_str().to_owned())
+        {
+            return Err(EngineError::msg(
+                "Mount the source folder for this saved output before filtering it",
+            ));
+        }
+        if workspace.revision.as_deref() != Some(binding.workspace_revision.as_str()) {
+            return Err(EngineError::msg(
+                "The mounted source has changed since this analysis. Review or rerun it before filtering",
+            ));
+        }
+
+        let allowed = if binding.source_selection.is_all_sources() {
+            None
+        } else {
+            let Some(root) = workspace.workspace.as_deref() else {
+                return Err(EngineError::NoWorkspace);
+            };
+            Some(
+                workspace
+                    .sources
+                    .iter()
+                    .filter(|source| {
+                        source.view.is_some()
+                            && binding.source_selection.includes_path(
+                                &catalog::workspace_relative_path(root, Path::new(&source.path)),
+                            )
+                    })
+                    .flat_map(|source| [Some(source.name.as_str()), source.view.as_deref()])
+                    .flatten()
+                    .map(str::to_ascii_lowercase)
+                    .collect::<HashSet<String>>(),
+            )
+        };
+        let run_report_query = |sql: &str, max_rows: usize| match &allowed {
+            Some(tables) => query_workspace_scoped(&*workspace.data, sql, max_rows, tables),
+            None => query_workspace(&*workspace.data, sql, max_rows),
+        };
+        for check in &binding.source_checks {
+            let verified = run_report_query(&check.sql, 1)?.rows.iter().any(|row| {
+                let Some(value) = row.first() else {
+                    return false;
+                };
+                let value_type = if value.is_null() {
+                    "null"
+                } else if value.is_string() {
+                    "string"
+                } else if value.is_number() {
+                    "number"
+                } else if value.is_boolean() {
+                    "boolean"
+                } else {
+                    ""
+                };
+                let exact = match value {
+                    serde_json::Value::String(value) => value.clone(),
+                    value => value.to_string(),
+                };
+                value_type == check.value_type && exact == check.expected_value
+            });
+            if !verified {
+                return Err(EngineError::msg(
+                    "A linked filter value could not be confirmed by its saved source query",
+                ));
+            }
+        }
+        let max_rows = crate::engine::analytics::chart::MAX_SOURCE_ROWS;
+        let query = run_report_query(&binding.sql, max_rows)?;
+        if query.columns != binding.columns {
+            return Err(EngineError::msg(
+                "The replayed output fields do not match the saved result; saved values remain available",
+            ));
+        }
+        let exact_rows = query
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| match value {
+                        serde_json::Value::String(value) => value.clone(),
+                        value => value.to_string(),
+                    })
+                    .collect()
+            })
+            .collect();
+        let complete = !query.truncated && query.row_count == query.rows.len();
+        Ok(crate::engine::artifacts::BoundResult {
+            id: result_id.to_owned(),
+            columns: query.columns,
+            rows: query.rows,
+            exact_rows,
+            row_count: query.row_count,
+            complete,
+        })
+    }
+
     /// Like [`ask_once`](Self::ask_once) but also returns token usage. The eval
     /// harness's no-harness baseline needs the token count to compare
     /// efficiency against a full run. Not on any product path.

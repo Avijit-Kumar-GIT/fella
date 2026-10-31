@@ -16,6 +16,7 @@ use serde_json::Value as Json;
 
 use super::analysis_store;
 use super::error::{EngineError, EngineResult};
+use super::investigation::InvestigationSourceSelection;
 use super::runtime::AnalysisTurn;
 
 /// Schema attached to new JSON-render artifacts. Legacy expression-based
@@ -47,6 +48,35 @@ pub struct BoundResult {
     pub exact_rows: Vec<Vec<String>>,
     pub row_count: usize,
     pub complete: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReportFilterValue {
+    pub source_artifact_id: String,
+    pub source_revision: u64,
+    pub result_id: String,
+    pub field: String,
+    pub interaction_group: String,
+    pub value: String,
+    pub value_type: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportFilterBinding {
+    pub workspace: String,
+    pub workspace_revision: String,
+    pub sql: String,
+    pub columns: Vec<String>,
+    pub source_selection: InvestigationSourceSelection,
+    pub source_checks: Vec<ReportFilterSourceCheck>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReportFilterSourceCheck {
+    pub sql: String,
+    pub expected_value: String,
+    pub value_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,17 +111,12 @@ pub struct ResolvedArtifact {
     pub results: Vec<BoundResult>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StudioPlacementWidth {
+    #[default]
     Full,
     Half,
-}
-
-impl Default for StudioPlacementWidth {
-    fn default() -> Self {
-        Self::Full
-    }
 }
 
 fn is_full_width(width: &StudioPlacementWidth) -> bool {
@@ -948,7 +973,7 @@ pub fn list_for_reports(data_dir: &Path) -> EngineResult<Vec<ArtifactRecord>> {
         .iter()
         .map(|id| load_artifact_by_id_unlocked(&db, id))
         .collect::<EngineResult<Vec<_>>>()?;
-    records.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+    records.sort_by_key(|record| std::cmp::Reverse(record.updated_at_ms));
     Ok(records)
 }
 
@@ -1011,6 +1036,268 @@ pub fn resolve_saved(
 ) -> EngineResult<ResolvedArtifact> {
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
     resolve_saved_unlocked(data_dir, &store_unlocked(data_dir)?, artifact_id, number)
+}
+
+fn declares_interaction_field(spec: &Json, result_id: &str, group: &str, field: &str) -> bool {
+    spec.get("elements")
+        .and_then(Json::as_object)
+        .is_some_and(|elements| {
+            elements.values().any(|element| {
+                let Some(props) = element.get("props") else {
+                    return false;
+                };
+                if props.get("resultId").and_then(Json::as_str) != Some(result_id)
+                    || props.get("interactionGroup").and_then(Json::as_str) != Some(group)
+                {
+                    return false;
+                }
+                if element.get("type").and_then(Json::as_str) == Some("ResultFilter") {
+                    return props.get("field").and_then(Json::as_str) == Some(field);
+                }
+                props
+                    .get("linkBy")
+                    .and_then(Json::as_array)
+                    .is_some_and(|fields| {
+                        fields
+                            .iter()
+                            .any(|candidate| candidate.as_str() == Some(field))
+                    })
+            })
+        })
+}
+
+fn filter_literal(value: &str, value_type: &str) -> EngineResult<String> {
+    match value_type {
+        "string" => Ok(format!("'{}'", value.replace('\'', "''"))),
+        "number" => {
+            let parsed: serde_json::Number = serde_json::from_str(value)
+                .map_err(|_| EngineError::msg("A numeric Report filter value is invalid"))?;
+            let canonical = parsed.to_string();
+            if canonical != value {
+                return Err(EngineError::msg(
+                    "A numeric Report filter value is not in canonical form",
+                ));
+            }
+            Ok(canonical)
+        }
+        "boolean" if value == "true" => Ok("TRUE".into()),
+        "boolean" if value == "false" => Ok("FALSE".into()),
+        "null" if value == "null" => Ok("NULL".into()),
+        _ => Err(EngineError::msg("A Report filter type is invalid")),
+    }
+}
+
+/// Build a read-only replay of a saved SQL result with exact filters selected
+/// from saved Results in the same source snapshot and Investigation boundary.
+/// The caller executes this only against the already-mounted source engine.
+pub fn report_filter_binding(
+    data_dir: &Path,
+    artifact_id: &str,
+    revision: u64,
+    result_id: &str,
+    filters: &[ReportFilterValue],
+) -> EngineResult<ReportFilterBinding> {
+    if filters.is_empty() || filters.len() > 8 {
+        return Err(EngineError::msg(
+            "A Report filter query needs 1–8 active filters",
+        ));
+    }
+    validate_id(artifact_id)?;
+    validate_id(result_id)?;
+    let target = resolve_saved(data_dir, artifact_id, Some(revision))?;
+    let target_result = target
+        .results
+        .iter()
+        .find(|result| result.id == result_id)
+        .ok_or_else(|| EngineError::msg("The saved result is unavailable for filtering"))?;
+    let evidence = target
+        .run
+        .result
+        .evidence
+        .iter()
+        .find(|item| item.get("id").and_then(Json::as_str) == Some(result_id))
+        .ok_or_else(|| EngineError::msg("The saved result has no replayable evidence"))?;
+    if evidence.get("tool").and_then(Json::as_str) != Some("run_sql") {
+        return Err(EngineError::msg(
+            "This saved result was not produced by a replayable SQL query",
+        ));
+    }
+    let query = evidence
+        .get("sql")
+        .and_then(Json::as_str)
+        .filter(|query| !query.trim().is_empty())
+        .ok_or_else(|| EngineError::msg("The saved SQL query is unavailable"))?;
+    super::analytics::data::ensure_read_only(query)?;
+
+    let workspace_revision = target
+        .run
+        .workspace_revision
+        .clone()
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| EngineError::msg("This result has no recorded source revision"))?;
+    let target_selection = target
+        .run
+        .investigation_context
+        .as_ref()
+        .map(|context| context.source_selection.clone())
+        .unwrap_or_default();
+    let mut predicates = Vec::with_capacity(filters.len());
+    let mut source_checks = Vec::new();
+    for filter in filters {
+        validate_id(&filter.source_artifact_id)?;
+        validate_id(&filter.result_id)?;
+        if filter.source_revision == 0
+            || filter.field.is_empty()
+            || filter.field.chars().count() > 240
+            || filter.value.len() > 16_000
+            || filter.interaction_group.is_empty()
+            || filter.interaction_group.len() > 80
+            || !filter
+                .interaction_group
+                .chars()
+                .enumerate()
+                .all(|(index, ch)| {
+                    if index == 0 {
+                        ch.is_ascii_alphabetic()
+                    } else {
+                        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '-')
+                    }
+                })
+        {
+            return Err(EngineError::msg("A Report filter value is invalid"));
+        }
+        let source = resolve_saved(
+            data_dir,
+            &filter.source_artifact_id,
+            Some(filter.source_revision),
+        )?;
+        if source.artifact.workspace != target.artifact.workspace
+            || source.run.workspace_revision.as_deref() != Some(&workspace_revision)
+        {
+            return Err(EngineError::msg(
+                "Linked Report outputs must use the same mounted source revision",
+            ));
+        }
+        let source_selection = source
+            .run
+            .investigation_context
+            .as_ref()
+            .map(|context| context.source_selection.clone())
+            .unwrap_or_default();
+        if source_selection != target_selection {
+            return Err(EngineError::msg(
+                "Linked Report outputs must use the same source selection",
+            ));
+        }
+        let source_result = source
+            .results
+            .iter()
+            .find(|result| result.id == filter.result_id)
+            .ok_or_else(|| EngineError::msg("A linked filter's source result is unavailable"))?;
+        if !declares_interaction_field(
+            &source.revision.spec,
+            &source_result.id,
+            &filter.interaction_group,
+            &filter.field,
+        ) || !declares_interaction_field(
+            &target.revision.spec,
+            &target_result.id,
+            &filter.interaction_group,
+            &filter.field,
+        ) {
+            return Err(EngineError::msg(
+                "A saved presentation does not declare this linked filter field",
+            ));
+        }
+        let identifier = format!("\"{}\"", filter.field.replace('"', "\"\""));
+        let literal = filter_literal(&filter.value, &filter.value_type)?;
+        let source_column = source_result
+            .columns
+            .iter()
+            .position(|column| column == &filter.field)
+            .ok_or_else(|| EngineError::msg("A linked filter field is unavailable"))?;
+        let exact_value_is_valid = source_result.rows.iter().enumerate().any(|(row, values)| {
+            let Some(raw) = values.get(source_column) else {
+                return false;
+            };
+            let kind = if raw.is_null() {
+                "null"
+            } else if raw.is_string() {
+                "string"
+            } else if raw.is_number() {
+                "number"
+            } else if raw.is_boolean() {
+                "boolean"
+            } else {
+                ""
+            };
+            kind == filter.value_type
+                && source_result
+                    .exact_rows
+                    .get(row)
+                    .and_then(|values| values.get(source_column))
+                    .is_some_and(|value| value == &filter.value)
+        });
+        if !exact_value_is_valid {
+            let source_evidence = source
+                .run
+                .result
+                .evidence
+                .iter()
+                .find(|item| item.get("id").and_then(Json::as_str) == Some(&filter.result_id))
+                .filter(|item| item.get("tool").and_then(Json::as_str) == Some("run_sql"))
+                .and_then(|item| item.get("sql").and_then(Json::as_str))
+                .filter(|query| !query.trim().is_empty())
+                .ok_or_else(|| {
+                    EngineError::msg(
+                        "A Report filter must use an exact typed value from its saved result",
+                    )
+                })?;
+            super::analytics::data::ensure_read_only(source_evidence)?;
+            let source_query = source_evidence.trim().trim_end_matches(';').trim();
+            let source_predicate = if filter.value_type == "null" {
+                format!("{identifier} IS NULL")
+            } else {
+                format!("{identifier} = {literal}")
+            };
+            let check_sql = format!("SELECT {identifier} AS \"fella_filter_value\" FROM ({source_query}) AS \"fella_filter_source\" WHERE {source_predicate} LIMIT 1");
+            super::analytics::data::ensure_read_only(&check_sql)?;
+            source_checks.push(ReportFilterSourceCheck {
+                sql: check_sql,
+                expected_value: filter.value.clone(),
+                value_type: filter.value_type.clone(),
+            });
+        }
+        if !target_result
+            .columns
+            .iter()
+            .any(|column| column == &filter.field)
+        {
+            return Err(EngineError::msg(
+                "This saved output does not contain a field required by its linked filter",
+            ));
+        }
+        let predicate = match filter.value_type.as_str() {
+            "null" if filter.value == "null" => format!("{identifier} IS NULL"),
+            _ => format!("{identifier} = {literal}"),
+        };
+        predicates.push(predicate);
+    }
+
+    let query = query.trim().trim_end_matches(';').trim();
+    let sql = format!(
+        "SELECT * FROM ({query}) AS \"fella_report_result\" WHERE {}",
+        predicates.join(" AND ")
+    );
+    super::analytics::data::ensure_read_only(&sql)?;
+    Ok(ReportFilterBinding {
+        workspace: target.artifact.workspace,
+        workspace_revision,
+        sql,
+        columns: target_result.columns.clone(),
+        source_selection: target_selection,
+        source_checks,
+    })
 }
 
 pub fn resolve(
@@ -1439,7 +1726,7 @@ pub fn studio_list_all(data_dir: &Path) -> EngineResult<Vec<StudioDocument>> {
         .iter()
         .map(|id| load_studio_by_id_unlocked(&db, id))
         .collect::<EngineResult<Vec<_>>>()?;
-    documents.sort_by(|left, right| right.updated_at_ms.cmp(&left.updated_at_ms));
+    documents.sort_by_key(|document| std::cmp::Reverse(document.updated_at_ms));
     Ok(documents)
 }
 

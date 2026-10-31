@@ -189,8 +189,10 @@ end-to-end acceptance slice has been exercised in the desktop app.
   the existing conversation analysis flow.
 - Saved-result presentations can declare interaction groups and linked fields.
   Chart selections, accessible table actions, and result filters share exact
-  saved-row values across placements from the same mounted source scope.
-  Viewer selections are temporary; Design can explicitly save them as defaults.
+  typed values across placements from the same source scope. When a result has
+  saved SQL evidence, the Rust runtime can replay that read-only query with the
+  selected value against the already-mounted matching source revision. Viewer
+  selections are temporary; Design can explicitly save them as defaults.
 - Presentation failures stay inside the affected output and preserve its
   answer and exact values. Reports show when the currently mounted source
   catalog revision differs from the revision recorded by a saved output.
@@ -201,11 +203,15 @@ end-to-end acceptance slice has been exercised in the desktop app.
 
 ### Implemented with limits
 
-- Cross-filtering runs deterministically over the rows already saved with each
-  analytical result. It does not rerun SQL or Python and cannot calculate
-  combinations that are absent from those rows. Incomplete saved results are
-  identified, and incompatible fields are surfaced. A durable metric/query
-  contract for interactive re-query is still needed for general dashboard use.
+- SQL-backed cross-filtering replays the recorded query inside its existing
+  mounted workspace, with exact typed values and source-selection checks. It is
+  limited to eight linked results per presentation and 10,000 returned rows
+  per replay. Dropdown choices come from the saved result rows; chart marks
+  exposed by a replay can also be selected after Rust confirms the value against
+  the saved source query. Python-derived results and unsupported queries fall
+  back to saved rows with an explanation. Replay filters only the columns
+  projected by the saved query; a structured metric/query contract is still
+  needed to expose new dimensions and recompute aggregates from the full source.
 - Model-directed Design supports Report naming, output labels, placement,
   order, and size. It does not author arbitrary new chart internals, visual
   encodings, or unrestricted component programs.
@@ -225,14 +231,13 @@ end-to-end acceptance slice has been exercised in the desktop app.
 The implementation covers the ownership and multi-Report foundation, saved
 result composition, bounded viewer interactions, Design previews, and Report
 history. The full acceptance slice above is **not yet verified end to end**.
-In particular, interactive re-query from durable metric definitions, the
+In particular, interactive re-query from structured metric definitions, the
 Report-level analytical review/adoption experience, deletion-retention behavior
 across the full desktop flow, and compact-window/accessibility behavior need
 dedicated product validation.
 
-The next architectural slice should introduce an explicit, Rust-owned metric
-and query binding for interactive dimensions, then execute filter combinations
-through the existing bounded analytical runtime. That avoids presenting
-filtered saved rows as if they were a complete dashboard query. The next UX
-slice should make proposed analytical revisions and their Report impact
-reviewable before changing any Report pin.
+The next architectural slice should introduce a structured, Rust-owned metric
+and query binding that can enumerate dimensions from a full source and
+recompute aggregates, rather than filtering only the columns projected by a
+saved SQL result. The next UX slice should make proposed analytical revisions
+and their Report impact reviewable before changing any Report pin.

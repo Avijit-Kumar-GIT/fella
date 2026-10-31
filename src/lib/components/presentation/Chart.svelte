@@ -7,6 +7,7 @@
 	let { props }: BaseComponentProps<{ resultId: string; spec: Record<string, unknown>; title?: string; interactionGroup?: string; linkBy?: string[] }> = $props();
 	const context = usePresentation();
 	let result = $derived(requireResult(context.results, props.resultId));
+	let replayed = $derived(context.replayedResultIds.has(result.id));
 	let chartData = $derived(result);
 	let linkBy = $derived(props.linkBy ?? []);
 	let indices = $derived(filteredRows(result, context.state, props.interactionGroup, linkBy, context.interactionScope));
@@ -64,10 +65,10 @@
 	<div class="chart-scroll" aria-label={props.title ?? 'Visualization of saved results'} role="img"><div class="chart-target presentation-chart-target" bind:this={container}></div></div>
 	{#if status}<p class="status" role="status">{status}</p>{/if}
 	{#if incompatibleFilters.length}<p class="filter-limitation" role="status">This output is unchanged by {incompatibleFilters.map(filter => filter.field).join(', ')} because those fields are not available here.</p>{/if}
-	{#if !result.complete}<p class="scope">This visualization uses {result.rows.length} saved rows, not the full dataset ({result.row_count} rows).</p>{/if}
-	<p class="scope">The visualization uses saved result rows. Exact source values remain available below.</p>
+	{#if !result.complete}<p class="scope">{#if replayed}The filtered query matched {result.row_count} rows; {result.rows.length} are shown.{:else}This visualization uses {result.rows.length} saved rows, not the full saved result ({result.row_count} rows).{/if}</p>{/if}
+	<p class="scope">{#if replayed}Replayed the saved read-only query against its recorded source revision. Exact values remain available below.{:else}The visualization uses saved result rows. Exact source values remain available below.{/if}</p>
 	{#if props.interactionGroup && linkBy.length}<p class="scope keyboard-hint">To filter by keyboard, open exact saved values and choose a row.</p>{/if}
-	<details open={failed}><summary>Exact saved values</summary><ResultTable {result} {indices} filterFields={linkBy} onrowfilter={props.interactionGroup && linkBy.length ? row => context.selectRows(result.id, props.interactionGroup, exactRowFilterValuesFromRow(result, row, linkBy)) : undefined} /></details>
+	<details open={failed}><summary>{replayed ? 'Exact filtered values' : 'Exact saved values'}</summary><ResultTable {result} {indices} filterFields={linkBy} rowSourceLabel={replayed ? 'replayed' : 'saved'} exactValueLabel={replayed ? 'Exact replayed value' : 'Exact saved value'} caption={`${replayed ? 'Exact values from replayed source query' : 'Exact values from saved result'} ${result.id}`} onrowfilter={props.interactionGroup && linkBy.length ? row => context.selectRows(result.id, props.interactionGroup, exactRowFilterValuesFromRow(result, row, linkBy)) : undefined} /></details>
 </figure>
 <style>
 	figure { margin: 0; }

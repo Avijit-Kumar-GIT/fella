@@ -35,7 +35,7 @@ import type {
 	UpdateStatus,
 	WorkspaceProgress
 } from './types';
-import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDesignProposal, StudioDocument, StudioPlacement, StudioRevision, BoundResult } from './analytics-artifacts';
+import type { ArtifactComparison, ArtifactRecord, ImportedReport, ReportFilterValue, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioDesignProposal, StudioDocument, StudioPlacement, StudioRevision, BoundResult } from './analytics-artifacts';
 
 export function isElectron(): boolean {
 	return typeof window !== 'undefined' && typeof window.fella?.invoke === 'function';
@@ -99,6 +99,8 @@ export const ipc = {
 		invoke<ResolvedArtifact>('artifact_resolve', { workspaceId, artifactId, revision }),
 	artifactResolveSaved: (artifactId: string, revision?: number) =>
 		invoke<ResolvedArtifact>('artifact_resolve_saved', { artifactId, revision }),
+	artifactFilterResult: (workspaceId: string, artifactId: string, revision: number, resultId: string, filters: ReportFilterValue[]) =>
+		invoke<BoundResult>('artifact_filter_result', { workspaceId, artifactId, revision, resultId, filters }),
 	artifactRevise: (workspaceId: string, artifactId: string, baseRevision: number, update: { run_id?: string; spec?: unknown; change_note: string }) =>
 		invoke<ResolvedArtifact>('artifact_revise', { workspaceId, artifactId, baseRevision, runId: update.run_id, spec: update.spec, changeNote: update.change_note }),
 	artifactAdopt: (workspaceId: string, artifactId: string, baseRevision: number, revision: number) =>

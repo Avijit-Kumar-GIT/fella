@@ -301,6 +301,7 @@ async fn dispatch(
                 | "analysis_turn_replay_status"
                 | "analysis_turn_rerun"
                 | "artifact_compare"
+                | "artifact_filter_result"
                 | "studio_export_package"
                 | "ask"
         );
@@ -502,6 +503,19 @@ async fn dispatch(
                     engine.analytical_data_dir(),
                     &artifact_id,
                     request.params.get("revision").and_then(Value::as_u64),
+                ))
+            }
+            "artifact_filter_result" => {
+                let artifact_id: String = required(&request.params, "artifactId")?;
+                let revision: u64 = required(&request.params, "revision")?;
+                let result_id: String = required(&request.params, "resultId")?;
+                let filters: Vec<crate::engine::artifacts::ReportFilterValue> =
+                    required(&request.params, "filters")?;
+                value_result(engine.artifact_filter_result(
+                    &artifact_id,
+                    revision,
+                    &result_id,
+                    &filters,
                 ))
             }
             "artifact_revise" => {

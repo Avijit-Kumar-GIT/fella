@@ -47,6 +47,8 @@ export interface FilterSelection {
 	interactionGroup?: string;
 	interactionScope?: string;
 	valueType?: 'string' | 'number' | 'boolean' | 'null';
+	sourceArtifactId?: string;
+	sourceRevision?: number;
 }
 export interface RowFilterValue { field: string; value: string; valueType: 'string' | 'number' | 'boolean' | 'null' }
 
@@ -140,7 +142,7 @@ export function sanitizeState(state: PresentationState = {}): PresentationState 
 		if (key.startsWith('control:') && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(key.slice(8)) && (value === null || typeof value === 'string' && value.length <= 256 || typeof value === 'boolean' || typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1e12)) clean[key] = value;
 		if (key.startsWith('filter:') && value && typeof value === 'object') {
 			const filter = value as FilterSelection;
-			if (typeof filter.resultId === 'string' && filter.resultId.length <= 240 && typeof filter.field === 'string' && filter.field.length <= 240 && (filter.interactionGroup === undefined || typeof filter.interactionGroup === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(filter.interactionGroup)) && (filter.interactionScope === undefined || typeof filter.interactionScope === 'string' && filter.interactionScope.length <= 240) && (filter.valueType === undefined || ['string', 'number', 'boolean', 'null'].includes(filter.valueType)) && (typeof filter.value === 'string' && filter.value.length <= limits.text || filter.value === null)) clean[key] = { resultId: filter.resultId, field: filter.field, value: filter.value, ...(filter.interactionGroup ? { interactionGroup: filter.interactionGroup } : {}), ...(filter.interactionScope ? { interactionScope: filter.interactionScope } : {}), ...(filter.valueType ? { valueType: filter.valueType } : {}) };
+			if (typeof filter.resultId === 'string' && filter.resultId.length <= 240 && typeof filter.field === 'string' && filter.field.length <= 240 && (filter.interactionGroup === undefined || typeof filter.interactionGroup === 'string' && /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/.test(filter.interactionGroup)) && (filter.interactionScope === undefined || typeof filter.interactionScope === 'string' && filter.interactionScope.length <= 240) && (filter.valueType === undefined || ['string', 'number', 'boolean', 'null'].includes(filter.valueType)) && (filter.sourceArtifactId === undefined || typeof filter.sourceArtifactId === 'string' && filter.sourceArtifactId.length <= 240) && (filter.sourceRevision === undefined || Number.isSafeInteger(filter.sourceRevision) && filter.sourceRevision > 0) && (typeof filter.value === 'string' && filter.value.length <= limits.text || filter.value === null)) clean[key] = { resultId: filter.resultId, field: filter.field, value: filter.value, ...(filter.interactionGroup ? { interactionGroup: filter.interactionGroup } : {}), ...(filter.interactionScope ? { interactionScope: filter.interactionScope } : {}), ...(filter.valueType ? { valueType: filter.valueType } : {}), ...(filter.sourceArtifactId ? { sourceArtifactId: filter.sourceArtifactId } : {}), ...(filter.sourceRevision ? { sourceRevision: filter.sourceRevision } : {}) };
 		}
 	}
 	return clean;
@@ -150,6 +152,30 @@ export function sanitizeState(state: PresentationState = {}): PresentationState 
 export function resolvePresentationState(spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown> }> }, state: PresentationState, results: BoundResult[], interactionScope?: string): PresentationState {
 	const clean = sanitizeState(state);
 	const resolved: PresentationState = Object.create(null);
+	for (const [key, raw] of Object.entries(clean)) {
+		if (!key.startsWith('filter:selection:') || !raw || typeof raw !== 'object') continue;
+		const filter = raw as FilterSelection;
+		if (filter.value === null) continue;
+		const source = results.find(result => result.id === filter.resultId);
+		const sourceColumn = source?.columns.indexOf(filter.field) ?? -1;
+		const localValueExists = !!source && sourceColumn >= 0 && source.rows.some((row, index) =>
+			source.exact_rows[index][sourceColumn] === filter.value
+				&& (!filter.valueType || typeOfResultValue(row[sourceColumn]) === filter.valueType)
+		);
+		const declaredForTarget = !!filter.interactionGroup
+			&& filter.interactionScope === interactionScope
+			&& !!filter.sourceArtifactId
+			&& !!filter.sourceRevision
+			&& Object.values(spec.elements).some(element => {
+				const props = element.props;
+				if (props.interactionGroup !== filter.interactionGroup) return false;
+				const fields = element.type === 'ResultFilter'
+					? [props.field]
+					: Array.isArray(props.linkBy) ? props.linkBy : [];
+				return fields.includes(filter.field);
+			});
+		if (localValueExists || declaredForTarget) resolved[key] = filter;
+	}
 	for (const element of Object.values(spec.elements)) {
 		const props = element.props;
 		if (element.type === 'Tabs') {
