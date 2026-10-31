@@ -165,13 +165,74 @@ Scheduled refresh, external sharing, and multi-page Report navigation are
 follow-on product decisions; this framework does not require them for the
 initial slice.
 
-## Starting-point implementation notes
+## Implementation status
 
-At the `origin/main` baseline recorded for this work, Fella already has saved
-analytical artifacts, result revisions, Studio document checkpoints, Markdown
-and portable snapshot export, and a JSON-render component library. The current
-Studio document's `workspace` field is also used as its mounted-folder key;
-placements assume their artifact belongs to that same folder. Report-level
-query bindings and linked-dashboard filter execution are not yet a durable
-contract. These are the main ownership and interaction gaps this framework
-must close.
+This section describes the implementation on the `feat/reports-workspace`
+branch. “Implemented” means the code path exists; it does not mean the full
+end-to-end acceptance slice has been exercised in the desktop app.
+
+### Implemented in this slice
+
+- Reports are owned by the app workspace, and the picker can add saved results
+  produced from any mounted folder. A Report's owner is distinct from each
+  result's source scope. Legacy folder-owned Reports are migrated when loaded.
+- Multiple Reports can be created and reopened. Saving a placement retains the
+  referenced analytical record and pinned revision independently of its
+  originating conversation.
+- Placements support labels and full/half widths. Layouts collapse to one
+  column in narrower panes. Markdown and portable Report export retain the
+  layout metadata.
+- Analyze and Design are separate Report modes. The model-assisted Design
+  endpoint receives Report structure and saved-output metadata only. It can
+  propose a bounded set of layout operations; proposals are previews and only
+  persist after the user applies them. Requests requiring analysis hand off to
+  the existing conversation analysis flow.
+- Saved-result presentations can declare interaction groups and linked fields.
+  Chart selections, accessible table actions, and result filters share exact
+  saved-row values across placements from the same mounted source scope.
+  Viewer selections are temporary; Design can explicitly save them as defaults.
+- Presentation failures stay inside the affected output and preserve its
+  answer and exact values. Reports show when the currently mounted source
+  catalog revision differs from the revision recorded by a saved output.
+- Report history stores compact snapshots of Report structure and references
+  to analytical artifact revisions; it does not duplicate result datasets.
+  History supports comparison and restoring an older Report version as a new
+  version. Existing named checkpoints remain available.
+
+### Implemented with limits
+
+- Cross-filtering runs deterministically over the rows already saved with each
+  analytical result. It does not rerun SQL or Python and cannot calculate
+  combinations that are absent from those rows. Incomplete saved results are
+  identified, and incompatible fields are surfaced. A durable metric/query
+  contract for interactive re-query is still needed for general dashboard use.
+- Model-directed Design supports Report naming, output labels, placement,
+  order, and size. It does not author arbitrary new chart internals, visual
+  encodings, or unrestricted component programs.
+- Analytical changes continue through the existing conversation and artifact
+  revision system. The Report stays pinned until the user selects and saves a
+  newer artifact revision. Artifact comparison is available, but a single
+  Report-level dependency diff that summarizes every affected output is not
+  implemented.
+- Source staleness can be compared with the catalog currently mounted in the
+  app. There is no background refresh service or automatic recomputation.
+- Report history is bounded to 100 snapshots and 8 MiB per Report. Restoring a
+  snapshot reuses its artifact references and does not restore deleted source
+  files or rerun analysis.
+
+### Acceptance status and remaining work
+
+The implementation covers the ownership and multi-Report foundation, saved
+result composition, bounded viewer interactions, Design previews, and Report
+history. The full acceptance slice above is **not yet verified end to end**.
+In particular, interactive re-query from durable metric definitions, the
+Report-level analytical review/adoption experience, deletion-retention behavior
+across the full desktop flow, and compact-window/accessibility behavior need
+dedicated product validation.
+
+The next architectural slice should introduce an explicit, Rust-owned metric
+and query binding for interactive dimensions, then execute filter combinations
+through the existing bounded analytical runtime. That avoids presenting
+filtered saved rows as if they were a complete dashboard query. The next UX
+slice should make proposed analytical revisions and their Report impact
+reviewable before changing any Report pin.
