@@ -203,12 +203,23 @@ function setWindowAppearance(win, dark) {
 	}
 }
 
+function devIdentityUrl(url) {
+	const identity = new URL(url);
+	identity.pathname = '/__fella_dev_identity';
+	identity.search = '';
+	identity.hash = '';
+	return identity.toString();
+}
+
 async function waitForDevServer(url, timeoutMs = 15000) {
 	const deadline = Date.now() + timeoutMs;
 	let lastError;
 	while (Date.now() < deadline) {
 		try {
-			const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(1000) });
+			const response = await fetch(devIdentityUrl(url), {
+				method: 'HEAD',
+				signal: AbortSignal.timeout(1000)
+			});
 			const expectedRoot = process.env.FELLA_DEV_ROOT_KEY;
 			if ((response.ok || response.status < 500)
 				&& (!expectedRoot || response.headers.get('x-fella-dev-root') === expectedRoot)) return;

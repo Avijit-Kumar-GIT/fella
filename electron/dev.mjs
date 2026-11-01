@@ -25,9 +25,17 @@ const pnpmOptions = (env) => ({
 	...(windows ? { shell: true } : {})
 });
 
+function identityUrl(url) {
+	const identity = new URL(url);
+	identity.pathname = '/__fella_dev_identity';
+	identity.search = '';
+	identity.hash = '';
+	return identity.toString();
+}
+
 async function isOurViteServer(url) {
 	try {
-		const response = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(700) });
+		const response = await fetch(identityUrl(url), { method: 'HEAD', signal: AbortSignal.timeout(700) });
 		return response.headers.get('x-fella-dev-root') === rootKey;
 	} catch {
 		return false;
@@ -99,7 +107,10 @@ async function waitForVite(url, timeoutMs = 30000) {
 			throw new Error(`Vite exited before becoming ready (code ${vite.exitCode ?? 'unknown'})`);
 		}
 		try {
-			const response = await fetch(url, { method: 'HEAD' });
+			const response = await fetch(identityUrl(url), {
+				method: 'HEAD',
+				signal: AbortSignal.timeout(1000)
+			});
 			if (response.headers.get('x-fella-dev-root') === rootKey) return;
 			lastError = new Error('the response is not from this Fella checkout');
 		} catch (error) {
