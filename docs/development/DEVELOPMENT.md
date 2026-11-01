@@ -7,6 +7,9 @@ pnpm, or Rust; packaged apps include the Electron runtime and Rust sidecar.
 
 - Node.js 22 or newer and pnpm 11.
 - Stable Rust 1.93 or newer.
+- The `wasm32-unknown-unknown` Rust target for the shared UI contract. The
+  development/build/check hooks install it through rustup on first use;
+  alternatively run `rustup target add wasm32-unknown-unknown` beforehand.
 - Platform libraries required by Electron. Optional DuckDB builds may require
   additional native build tools. The standard app no longer depends on
   `node-pty` and does not require Visual Studio C++ Build Tools.
@@ -32,6 +35,14 @@ The Rust backend can be tested without opening the UI:
 ```sh
 cargo test --locked --manifest-path backend/Cargo.toml
 ```
+
+Presentation contract sources live in `crates/presentation-contract/`. Their
+native build and browser WASM build run identical validation and compilation.
+After changing catalog props, authoring, chart grammar, or acceptance code, run
+`pnpm generate:presentation-catalog` and `pnpm build:presentation-contract`.
+Normal `pnpm dev`, `pnpm build`, and `pnpm check` run these hooks automatically.
+The catalog and compact engine contract are generated, tracked resources; the
+platform-independent `.wasm` asset is generated locally and bundled by Vite.
 
 ## Providers and local state
 

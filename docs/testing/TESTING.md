@@ -33,6 +33,25 @@ the normal release or CI gate.
 
 ## Desktop journeys
 
+For the intelligent UI contract, use the frozen cases and focused checks:
+
+```sh
+pnpm generate:presentation-catalog
+pnpm build:presentation-contract
+cargo build --manifest-path backend/Cargo.toml --locked -p fella-presentation-contract --example contract_accept
+pnpm test:intelligent-ui
+pnpm exec playwright install chromium
+pnpm test:e2e:intelligent-ui
+```
+
+The optional `pnpm test:intelligent-ui:live` calls Gemma and Luna using the app's
+credential store. It keeps complete candidate/error reports in the system temp
+directory and grades acceptance separately from its limited suitability rubric.
+The runner never changes fixtures or builds the validator; build both artifacts
+above first. Read [the contract and validation record](../product/INTELLIGENT-UI-CONTRACT.md)
+before comparing scores, particularly the approved browser v1.1 correction and
+unresolved monthly-bar heuristic. A valid presentation is not a verified answer.
+
 The Playwright configs and shared Electron harness live beside the suites in
 [`tests/e2e/`](../../tests/e2e/). The tests use disposable app profiles. For
 example:

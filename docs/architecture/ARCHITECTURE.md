@@ -72,6 +72,23 @@ rewrite the old run.
 
 ## Generated answer presentations
 
+The [foundational UI contract](../product/INTELLIGENT-UI-CONTRACT.md) adds nested
+`fella-ui-1` authoring over the existing json-render registry. The harness derives
+IDs, child references, control defaults, and tab bookkeeping, then persists the
+usual flat program. Canonical answers and result datasets retain their existing
+independent storage. Typed viewer state and explicit filter/visibility bindings
+remain presentation state; display capability never grants query or IPC access.
+Explicit follow-ups use the existing user-request path. Hypothetical computation
+is deliberately outside this contract.
+
+The catalog generates both the author schema and safe chart grammar. A small
+Rust crate implements compilation and acceptance, compiled natively for the
+engine and to WebAssembly for renderer preflight and exports. It has no host
+imports. Shared field, reference, capability, and resource checks run before
+generation is accepted and when artifacts are persisted/reopened. Existing flat
+programs retain identity and legacy local-control behavior; adding new contract
+metadata opts into typed state and consumer enforcement.
+
 The analytical answer and its presentation are separate records of
 responsibility. The model can return a declarative **json-render** component
 tree to arrange the supported answer as narrative, metrics, tables, charts,
