@@ -4,6 +4,7 @@
 	import { ipc, isDesktop } from '$lib/ipc';
 	import { focusInvestigationConversation } from '$lib/investigation-navigation';
 	import { session } from '$lib/session.svelte';
+	import { parseLegacyMemory } from '$lib/workspace-memory';
 	import type { Investigation, SemanticFact } from '$lib/types';
 	import { Button } from '$lib/components/ui/button';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -42,31 +43,6 @@
 			.map((item) => ({ ...item, workspaceDefinitions: (item.definitions ?? []).filter((definition) => definition.status === 'active') }))
 			.filter((item) => item.workspaceDefinitions.length > 0)
 	);
-
-	function parseLegacyMemory(markdown: string | null): { title: string; entries: string[] }[] {
-		if (!markdown) return [];
-		const sections: { title: string; entries: string[] }[] = [];
-		let current: { title: string; entries: string[] } | null = null;
-		let inComment = false;
-		for (const raw of markdown.split(/\r?\n/)) {
-			const line = raw.trim();
-			if (line.includes('<!--')) inComment = true;
-			if (!inComment && line.startsWith('## ')) {
-				if (line.slice(3).trim().toLowerCase() === 'semantic facts') break;
-				current = { title: line.slice(3).trim(), entries: [] };
-				sections.push(current);
-				continue;
-			}
-			if (inComment) {
-				if (line.includes('-->')) inComment = false;
-				continue;
-			}
-			if (!current || !line || line.startsWith('#')) continue;
-			const entry = line.replace(/^-\s+/, '').trim();
-			if (entry) current.entries.push(entry);
-		}
-		return sections.filter((section) => section.entries.length > 0);
-	}
 
 	function authorityLabel(authority: SemanticFact['authority']): string {
 		return ({ user: 'Edited by you', observed: 'Verified analysis', model_suggestion: 'Suggested by Fella', confirmed: 'Confirmed by you' })[authority];
