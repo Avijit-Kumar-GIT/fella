@@ -591,7 +591,8 @@ async fn dispatch(
             }
             "studio_seed_northstar_sample" => {
                 let workspace_path: String = required(&request.params, "workspacePath")?;
-                value_result(engine.studio_seed_northstar_sample_report(&workspace_path))
+                let mounted = workspaces.engine(&workspace_path)?;
+                value_result(mounted.studio_seed_northstar_sample_report(&workspace_path))
             }
             "studio_create" => {
                 let workspace: String = required(&request.params, "workspaceId")?;

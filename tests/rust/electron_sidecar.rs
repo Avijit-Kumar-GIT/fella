@@ -1,6 +1,79 @@
 //! Exercises the JSON-lines process boundary Electron uses to reach the Rust
 //! engine, independently of any GUI shell.
 
+#[test]
+fn sample_report_seeds_from_the_mounted_engine_over_stdio() {
+    let scratch = Scratch::new();
+    let folder = scratch.0.join("Northstar sample with spaces");
+    let files = [
+        ("catalog/products.csv", "product_id,category\np1,Packs\n"),
+        ("commerce/orders/orders_2023.csv", "order_id,order_date,currency,status\na,2023-07-01,USD,paid\n"),
+        ("commerce/orders/orders_2024.csv", "order_id,order_date,currency,status\nb,2024-07-01,USD,paid\n"),
+        ("commerce/orders/orders_2025.csv", "order_id,order_date,currency,status\nc,2025-07-01,USD,paid\nd,2025-10-01,USD,paid\n"),
+        ("commerce/order_lines.csv", "order_id,product_id,quantity,unit_price_usd,line_discount_usd\na,p1,1,10,0\nb,p1,1,20,0\nc,p1,1,30,0\nd,p1,1,40,0\n"),
+        ("finance/refund_transactions.csv", "refund_date,amount_usd,status,reason\n2025-10-02,5,posted,return\n"),
+        ("docs/metric_policy_current.md", "Merchandise sales minus posted refunds.\n"),
+    ];
+    for (relative, body) in files {
+        let path = folder.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+    let mut child = Sidecar(
+        Command::new(env!("CARGO_BIN_EXE_fella"))
+            .args(["--engine-stdio", "--data-dir"])
+            .arg(scratch.0.join("data"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut stdin = child.0.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.0.stdout.take().unwrap());
+    let catalog = request(
+        &mut stdin,
+        &mut stdout,
+        1,
+        "open_workspace",
+        json!({"path": folder}),
+    );
+    let params = json!({"workspacePath": catalog["workspace"]});
+    let report = request(
+        &mut stdin,
+        &mut stdout,
+        2,
+        "studio_seed_northstar_sample",
+        params.clone(),
+    );
+    assert!(!report["placements"].as_array().unwrap().is_empty());
+    let placement = &report["placements"][0];
+    let resolved = request(
+        &mut stdin,
+        &mut stdout,
+        3,
+        "artifact_resolve_saved",
+        json!({"artifactId": placement["artifact_id"], "revision": placement["revision"]}),
+    );
+    assert_eq!(resolved["run"]["workspace"], catalog["workspace"]);
+    assert_eq!(resolved["results"].as_array().unwrap().len(), 4);
+    for result in resolved["results"].as_array().unwrap() {
+        assert!(!result["rows"].as_array().unwrap().is_empty());
+    }
+    assert_eq!(
+        request(
+            &mut stdin,
+            &mut stdout,
+            4,
+            "studio_seed_northstar_sample",
+            params
+        )["id"],
+        report["id"]
+    );
+    // Seeding must not mount a folder into the independent General engine.
+    assert!(request(&mut stdin, &mut stdout, 5, "get_catalog", json!({}))["workspace"].is_null());
+}
+
 use serde_json::{json, Value};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
