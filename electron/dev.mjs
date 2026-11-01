@@ -99,8 +99,10 @@ function waitForSpawn(child) {
 	});
 }
 
-async function waitForVite(url, timeoutMs = 30000) {
+async function waitForVite(url, timeoutMs = 120000) {
+	const started = Date.now();
 	const deadline = Date.now() + timeoutMs;
+	let nextProgress = started + 10000;
 	let lastError;
 	while (Date.now() < deadline) {
 		if (vite.exitCode !== null) {
@@ -116,9 +118,13 @@ async function waitForVite(url, timeoutMs = 30000) {
 		} catch (error) {
 			lastError = error;
 		}
+		if (Date.now() >= nextProgress) {
+			console.info(`Waiting for Vite at ${url} (${Math.round((Date.now() - started) / 1000)}s; cold dependency optimization may take longer on first launch)`);
+			nextProgress = Date.now() + 10000;
+		}
 		await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
 	}
-	throw new Error(`Vite did not become ready at ${url}: ${lastError ?? 'timed out'}`);
+	throw new Error(`Vite did not become ready at ${url} within ${timeoutMs / 1000}s: ${lastError ?? 'timed out'}`);
 }
 
 async function main() {
@@ -131,7 +137,9 @@ async function main() {
 			FELLA_VITE_PORT: String(endpoint.port)
 		};
 		if (endpoint.owned) {
-			vite = spawn(pnpm, ['dev'], pnpmOptions(env));
+			// electron:dev already built the frontend, contract and engine. Calling
+			// pnpm dev repeats predev inside the readiness deadline on Windows.
+			vite = spawn(pnpm, ['exec', 'vite', 'dev'], pnpmOptions(env));
 			ownsVite = true;
 			await waitForSpawn(vite);
 			await waitForVite(endpoint.url);

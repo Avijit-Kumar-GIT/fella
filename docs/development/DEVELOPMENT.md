@@ -30,6 +30,11 @@ Electron. It is a single-terminal workflow on Windows, macOS, and Linux. For a
 renderer-only development server, run `pnpm dev` and launch Electron in a
 second terminal with `FELLA_ELECTRON_URL=http://127.0.0.1:1420` set.
 
+The Electron launcher starts Vite directly after that build, avoiding a second
+contract-generation/build hook. It allows up to two minutes for cold dependency
+optimization and reports progress every ten seconds while waiting. An early
+Vite exit or a server belonging to another checkout still fails explicitly.
+
 The Rust backend can be tested without opening the UI:
 
 ```sh
