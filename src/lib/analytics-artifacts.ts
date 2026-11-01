@@ -160,6 +160,8 @@ export interface StudioDesignProposal {
 	message: string;
 	requires_analysis: boolean;
 	update: StudioUpdate | null;
+	presentation_edits?: { placement_id: string; spec: PresentationSpec }[];
+	analysis_targets?: string[];
 }
 
 export interface ReportPackageSummary {

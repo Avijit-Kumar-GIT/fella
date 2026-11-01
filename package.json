@@ -38,6 +38,7 @@
 		"test:json-render": "node tests/unit/javascript/test-json-render.mjs",
 		"test:presentation-format": "node --experimental-strip-types tests/unit/javascript/test-presentation-format.mjs",
 		"test:studio-report": "node tests/unit/javascript/test-studio-report.mjs",
+		"test:report-design": "node tests/unit/javascript/test-report-design.mjs",
 		"test:e2e:generative": "playwright test --config=tests/e2e/playwright.generative.config.mjs",
 		"test:e2e:studio-artifacts": "playwright test --config=tests/e2e/playwright.studio-artifacts.config.mjs",
 		"test:workbench": "node tests/unit/javascript/test-workbench-layout.mjs",

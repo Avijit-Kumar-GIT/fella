@@ -223,7 +223,7 @@
 
 	<article class="artifact" aria-label={`Saved output: ${displayTitle?.trim() || displayed.artifact.title}`} data-artifact-id={displayed.artifact.id} data-artifact-revision={displayed.revision.revision}>
 	<header class="artifact-header">
-		<div class="artifact-heading"><h2>{displayTitle?.trim() || displayed.artifact.title}</h2><span class="revision-caption">Revision {displayed.revision.revision}{displayed.revision.revision === authoritativeArtifact.current_revision ? ' · current' : ' · historical'}</span></div>
+		<div class="artifact-heading"><h2>{displayTitle?.trim() || displayed.artifact.title}</h2><span class="revision-caption">Revision {displayed.revision.revision}{onrevisionchange ? ' · pinned in this Report' : displayed.revision.revision === authoritativeArtifact.current_revision ? ' · current' : ' · historical'}</span></div>
 		<div class="artifact-actions">
 			<Select ariaLabel="Pinned artifact revision" value={String(displayed.revision.revision)} options={revisions.map(revision => ({ value: String(revision.revision), label: `Revision ${revision.revision}${revision.revision === authoritativeArtifact.current_revision ? ' · current' : ''}` }))} onValueChange={value => void chooseRevision(value)} disabled={busy} />
 			{#if baseline}<Button variant="ghost" size="sm" aria-expanded={compareOpen} onclick={() => void compare()}>{compareOpen ? 'Close comparison' : 'Compare'}</Button>{/if}
@@ -231,7 +231,7 @@
 		</div>
 	</header>
 	{#if actionError}<p class="inline-error" role="alert">{actionError}</p>{:else if notice}<p class="quiet-note" role="status">{notice}</p>{/if}
-	{#if displayed.revision.revision !== displayed.artifact.current_revision}
+	{#if onrevisionchange ? displayed.revision.revision < authoritativeArtifact.current_revision : displayed.revision.revision !== authoritativeArtifact.current_revision}
 		<div class="historical-note"><span>This placement stays on revision {displayed.revision.revision}.</span><Button variant="ghost" size="sm" disabled={busy} onclick={() => void adopt()}>{onrevisionchange ? `Update Report to revision ${authoritativeArtifact.current_revision}` : 'Use as current revision'}</Button></div>
 	{/if}
 	{#if sourceMayBeStale}

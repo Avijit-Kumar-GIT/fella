@@ -662,7 +662,8 @@ export type AskMode = 'ask' | 'inspect';
 export type ContextReference =
 	| { kind: 'source'; key: string; label: string; detail?: string }
 	| { kind: 'column'; key: string; label: string; detail?: string }
-	| { kind: 'artifact'; key: string; label: string; detail?: string };
+	| { kind: 'artifact'; key: string; label: string; detail?: string }
+	| { kind: 'report_output'; key: string; label: string; detail?: string };
 
 /** One observable step in a local question run. Kept in the conversation so
  * switching workspaces never loses the small amount of run history shown in the UI. */

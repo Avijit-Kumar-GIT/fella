@@ -1098,6 +1098,31 @@ export async function requestArtifactChange(artifact: ResolvedArtifact, instruct
 	} finally { conv.removeContext('artifact', key); session.persist(); }
 }
 
+/** Run a Report revision without moving the user away from the Report. The
+ * ordinary agent loop and artifact store still own execution and evidence. */
+export async function analyzeReportOutput(artifact: ResolvedArtifact, instruction: string): Promise<ResolvedArtifact> {
+	if (!requireEngine()) throw new Error('The analytical engine is unavailable.');
+	const workspace = artifact.artifact.workspace;
+	try { await ipc.getCatalog(workspace); }
+	catch { await ipc.openWorkspace(workspace, () => {}); }
+	const conv = new Conversation();
+	conv.workspaceScope = workspace;
+	conv.model = session.model;
+	session.conversations.push(conv);
+	const key = `${artifact.artifact.id}#${artifact.revision.revision}`;
+	conv.addContext({ kind: 'report_output', key, label: artifact.artifact.title });
+	conv.addUser(instruction);
+	try {
+		await ask(instruction, conv, undefined, undefined, undefined, { artifactId: artifact.artifact.id, baseRevision: artifact.artifact.current_revision, instruction });
+		const answer = conv.messages.findLast(item => item.role === 'assistant' && item.artifact_target);
+		if (!answer?.answer || answer.answer.clarification || ['failed', 'cancelled', 'insufficient_data'].includes(answer.answer.status ?? '')) throw new Error(answer?.text || 'The analysis did not produce a usable revision.');
+		const { ensureAnalyticalOutput } = await import('./analytical-output.svelte');
+		const candidate = await ensureAnalyticalOutput(answer, workspace);
+		if (!candidate) throw new Error('The analysis is saved, but its revised output could not be prepared. The Report is unchanged.');
+		return candidate;
+	} finally { conv.removeContext('report_output', key); session.persist(); session.historyVersion++; }
+}
+
 /** Launch a saved Investigation Question from its linked conversation. The
  * Question ID travels with the run so its source scope and actual evidence can
  * be inspected together in the canonical AnalysisTurn. */

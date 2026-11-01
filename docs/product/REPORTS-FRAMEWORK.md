@@ -188,11 +188,16 @@ end-to-end acceptance slice has been exercised in the desktop app.
 - Placements support labels and full/half widths. Layouts collapse to one
   column in narrower panes. Markdown and portable Report export retain the
   layout metadata.
-- Analyze and Design are separate Report modes. The model-assisted Design
-  endpoint receives Report structure and saved-output metadata only. It can
-  propose a bounded set of layout operations; proposals are previews and only
-  persist after the user applies them. Requests requiring analysis hand off to
-  the existing conversation analysis flow.
+- Analyze and Design are separate Report modes. Design receives the saved
+  presentation programs and result-column metadata, without source rows or
+  query access. It can change chart encodings and component arrangements as
+  well as Report composition. Validated changes apply in place and create
+  presentation revisions tied to the same analytical run and saved values.
+- When the request needs new calculations, Design identifies the affected
+  saved outputs and invokes the existing analytical agent in the background.
+  The Report remains open and pinned while the candidate runs. Its analytical
+  comparison appears in the Report; choosing the proposed revision moves only
+  that Report's pin. Ambiguous requests still ask which output to revise.
 - Saved-result presentations can declare interaction groups and linked fields.
   Chart selections, accessible table actions, and result filters share exact
   typed values across placements from the same source scope. When a result has
@@ -218,14 +223,19 @@ end-to-end acceptance slice has been exercised in the desktop app.
   back to saved rows with an explanation. Replay filters only the columns
   projected by the saved query; a structured metric/query contract is still
   needed to expose new dimensions and recompute aggregates from the full source.
-- Model-directed Design supports Report naming, output labels, placement,
-  order, and size. It does not author arbitrary new chart internals, visual
-  encodings, or unrestricted component programs.
-- Analytical changes continue through the existing conversation and artifact
-  revision system. The Report stays pinned until the user selects and saves a
-  newer artifact revision. Artifact comparison is available, but a single
+- Design uses the existing validated json-render component catalog and saved
+  result bindings. Overlaying yearly lines on a shared month axis is a visual
+  change when saved results already contain month, year, and metric values.
+  New measures or dimensions not present in those results require analysis.
+- Analytical changes use the existing conversation and artifact revision
+  system and show candidates for adoption inside the Report. A single
   Report-level dependency diff that summarizes every affected output is not
-  implemented.
+  implemented. Runs and candidate artifacts persist; the inline candidate
+  review list is currently local to the open Report component.
+- Analytical adoption updates the selected saved output as a unit. Other
+  placement pins and user-authored Report notes remain unchanged; notes that
+  describe a revised metric need review. Per-component analytical dependency
+  updates inside a larger saved output remain future work.
 - Source staleness can be compared with the catalog currently mounted in the
   app. There is no background refresh service or automatic recomputation.
 - Report history is bounded to 100 snapshots and 8 MiB per Report. Restoring a
@@ -235,11 +245,11 @@ end-to-end acceptance slice has been exercised in the desktop app.
 ### Acceptance status and remaining work
 
 The implementation covers the ownership and multi-Report foundation, saved
-result composition, bounded viewer interactions, Design previews, and Report
+result composition, bounded viewer interactions, in-place Design edits, and Report
 history. The full acceptance slice above is **not yet verified end to end**.
 In particular, interactive re-query from structured metric definitions, the
-Report-level analytical review/adoption experience, deletion-retention behavior
-across the full desktop flow, and compact-window/accessibility behavior need
+multi-output analytical dependency review, deletion-retention behavior across
+the full desktop flow, and compact-window/accessibility behavior need
 dedicated product validation.
 
 The next architectural slice should introduce a structured, Rust-owned metric

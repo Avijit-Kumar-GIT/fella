@@ -1,6 +1,10 @@
 <script lang="ts">
 	import { onDestroy, untrack } from 'svelte';
 	import { ipc } from '$lib/ipc';
+	import { applyReportDesign } from '$lib/report-design';
+	import { analyzeReportOutput } from '$lib/commands';
+	import type { ArtifactComparison } from '$lib/analytics-artifacts';
+	import AnalyticalDiff from './AnalyticalDiff.svelte';
 	import type { ArtifactRecord, ImportedReport, ReportPackagePreview, ReportPackageSummary, ResolvedArtifact, StudioCheckpoint, StudioDesignProposal, StudioDocument, StudioPlacement, StudioRevision } from '$lib/analytics-artifacts';
 	import type { FilterSelection } from '$lib/presentation/results';
 	import type { StudioPlacementWidth } from '$lib/analytics-artifacts';
@@ -64,6 +68,8 @@
 	let proposalRequest = $state('');
 	let designProposal = $state<StudioDesignProposal | null>(null);
 	let designBusy = $state(false);
+	let designActivity = $state('');
+	let analysisCandidates = $state<{ documentId: string; placementId: string; before: number; output: ResolvedArtifact; comparison: ArtifactComparison }[]>([]);
 	let designError = $state('');
 	let selectedPlacementId = $state<string | null>(null);
 	let viewerStates = $state<Record<string, Record<string, unknown>>>({});
@@ -348,6 +354,7 @@
 		const update = proposal.update;
 		if (!update) return [];
 		const summary: string[] = [];
+		for (const edit of proposal.presentation_edits ?? []) summary.push(`Update the visualization of ${placementTitle(target, target.placements.find(item => item.id === edit.placement_id)!)} using its saved results.`);
 		if (update.title !== target.title) summary.push(`Report title: ${update.title}`);
 		if (update.body !== target.body) summary.push('Report notes will change.');
 		if (update.placements.length !== target.placements.length) {
@@ -418,6 +425,7 @@
 		const request = designRequest.trim();
 		if (!target || target.locked || designBusy || !request) return;
 		designBusy = true; designError = ''; designProposal = null; proposalRequest = '';
+		designActivity = 'Updating the design…';
 		try {
 			if (!await saveDraft(target)) throw new Error(target.error || 'Save the Report before requesting a design change.');
 			const editsAtStart = target.edits;
@@ -432,6 +440,13 @@
 			if (editsAtStart !== target.edits) throw new Error('The Report changed while Fella was preparing the suggestion. Review the current Report and ask again.');
 			if (proposal.base_version !== target.document.version) throw new Error('This suggestion is for an older Report version. Refresh and ask again.');
 			designProposal = proposal; proposalRequest = request;
+			if (!proposal.requires_analysis) await applyDesignProposal();
+			else {
+				for (const id of proposal.analysis_targets ?? []) {
+					const placement = target.placements.find(item => item.id === id);
+					if (placement) await continueAnalysis(placement, request, target);
+				}
+			}
 		} catch (cause) {
 			if (!disposed && current === target) designError = message(cause);
 		} finally {
@@ -443,7 +458,7 @@
 		designProposal = null; proposalRequest = ''; designError = ''; designRequest = '';
 	}
 
-	function applyDesignProposal(): void {
+	async function applyDesignProposal(): Promise<void> {
 		const target = current;
 		const proposal = designProposal;
 		if (!target || !proposal || proposal.requires_analysis || !proposal.update || target.locked) return;
@@ -451,34 +466,44 @@
 			designError = 'The Report changed after this suggestion. Ask again to review an up-to-date proposal.';
 			return;
 		}
-		const priorViewerStates = viewerStates;
-		target.title = proposal.update.title;
-		target.body = proposal.update.body;
-		target.placements = clone(proposal.update.placements);
-		viewerStates = Object.fromEntries(target.placements.map(placement => [placement.id, clone(priorViewerStates[placement.id] ?? placement.view_state)]));
-		for (const placement of target.placements) void resolvePlacement(target.document.workspace, placement);
-		changed(target);
-		designRequest = ''; designError = ''; selectedPlacementId = null; proposalRequest = '';
-		announcement = 'Report design applied. Saving changes.';
+		target.locked = true;
+		try {
+			const saved = await applyReportDesign(clone(target.document), clone(proposal));
+			target.document = saved; target.title = saved.title; target.body = saved.body; target.placements = clone(saved.placements);
+			target.savedEdits = target.edits;
+			for (const placement of saved.placements) void resolvePlacement(saved.workspace, placement);
+			remember(saved); void refreshHistory(saved.workspace, saved.id);
+			designProposal = null; designRequest = ''; designError = ''; selectedPlacementId = null; proposalRequest = '';
+			announcement = 'Report design updated using saved results.';
+		} finally { target.locked = false; }
 	}
 
-	async function continueAnalysis(placement: StudioPlacement): Promise<void> {
-		const target = current;
-		if (!target || !designProposal?.requires_analysis || !onrequestchange) return;
+	async function continueAnalysis(placement: StudioPlacement, instruction = proposalRequest, owner = current): Promise<void> {
+		const target = owner;
+		if (!target) return;
 		const resolvedArtifact = resolved[resultKey(target.document.workspace, placement)];
 		if (!resolvedArtifact) {
 			designError = 'Open this saved output before continuing its analytical change.';
 			return;
 		}
 		designBusy = true; designError = '';
+		designActivity = `Analyzing ${placementTitle(target, placement)}…`;
 		try {
 			if (!await saveDraft(target)) throw new Error(target.error || 'Save the Report before continuing.');
-			reportMode = 'analyze';
-			await onrequestchange(resolvedArtifact, proposalRequest);
+			const output = await analyzeReportOutput(resolvedArtifact, instruction);
+			const comparison = await ipc.artifactCompare(output.artifact.workspace, output.artifact.id, placement.revision, output.revision.revision);
+			analysisCandidates = [...analysisCandidates.filter(item => item.documentId !== target.document.id || item.placementId !== placement.id), {documentId: target.document.id, placementId: placement.id, before: placement.revision, output, comparison}];
 			designProposal = null; proposalRequest = ''; designRequest = '';
-			announcement = `Analytical change sent to the conversation for ${placementTitle(target, placement)}.`;
+			announcement = `Analysis complete. Review the proposed changes to ${placementTitle(target, placement)} below.`;
 		} catch (cause) { designError = message(cause); }
-		finally { designBusy = false; }
+		finally { designBusy = false; designActivity = ''; }
+	}
+	async function adoptReportCandidate(candidate: typeof analysisCandidates[number]): Promise<void> {
+		const target = current;
+		if (!target || target.document.id !== candidate.documentId || target.placements.find(item => item.id === candidate.placementId)?.revision !== candidate.before) { designError = 'The Report output changed while analysis was running. Review its current revision before applying this result.'; return; }
+		if (!await saveDraft(target)) return;
+		pin(target, candidate.placementId, candidate.output.revision.revision);
+		if (await saveDraft(target)) analysisCandidates = analysisCandidates.filter(item => item !== candidate);
 	}
 	function pin(target: Draft, id: string, revision: number): void {
 		if (target.locked) return;
@@ -756,13 +781,13 @@
 				{#if activeReportFilters.length}<div class="report-filter-bar" aria-label="Active report filters"><span>Filtered by</span>{#each activeReportFilters as item (`${item.scope}:${item.key}`)}<button class="report-filter-chip" aria-label={`Remove filter ${item.filter.field}: ${item.filter.value}`} onclick={() => removeSharedFilter(item.scope, item.key)}>{item.filter.field}<strong>{item.filter.value}</strong><Icon name="x" size={12} /></button>{/each}<button class="report-filter-clear" onclick={() => { for (const scope of new Set(activeReportFilters.map(item => item.scope))) removeSharedFilter(scope); }}>Reset</button></div>{/if}
 				{#if reportMode === 'design'}
 					<section class="design-assistant" aria-label="Describe a Report design change">
-						<div class="design-assistant-heading"><div><h2>Describe a change</h2><p>Fella will suggest a layout using saved results. Analysis changes go to Analyze.</p></div>{#if selectedPlacementId}<button class="design-target-clear" onclick={() => setDesignTarget(selectedPlacementId!)}>Clear target</button>{/if}</div>
+						<div class="design-assistant-heading"><div><h2>Describe a change</h2><p>Fella updates the design using saved results, and runs analysis when new calculations are needed.</p></div>{#if selectedPlacementId}<button class="design-target-clear" onclick={() => setDesignTarget(selectedPlacementId!)}>Clear target</button>{/if}</div>
 						{#if selectedPlacementId && target.placements.some(item => item.id === selectedPlacementId)}
 							<p class="design-target-note">Targeting <strong>{placementTitle(target, target.placements.find(item => item.id === selectedPlacementId)!)}</strong>. Fella will keep other outputs unchanged.</p>
 						{/if}
 						<form class="design-prompt" onsubmit={event => { event.preventDefault(); void proposeDesign(); }}>
 							<textarea aria-label="Describe a Report design change" rows="2" maxlength="2000" bind:value={designRequest} disabled={designBusy || target.locked} placeholder="For example, put the revenue trend beside the regional breakdown and give both clear titles."></textarea>
-							<Button size="sm" type="submit" disabled={!designRequest.trim() || designBusy || target.locked}>{designBusy ? 'Thinking…' : 'Suggest changes'}</Button>
+							<Button size="sm" type="submit" disabled={!designRequest.trim() || designBusy || target.locked}>{designBusy ? designActivity || 'Working…' : 'Make change'}</Button>
 						</form>
 						{#if designError}<p class="design-error" role="alert">{designError}</p>{/if}
 						{#if designProposal}
@@ -770,17 +795,20 @@
 								<strong>{designProposal.requires_analysis ? 'This request changes the analysis' : 'Review suggested changes'}</strong>
 								<p>{designProposal.message}</p>
 								{#if designProposal.requires_analysis}
-									<p class="design-proposal-note">Choose the saved output to revise. The current Report remains pinned until you adopt the new analytical revision.</p>
+									<p class="design-proposal-note">Choose which output to revise. Fella will compute a candidate here so you can compare it before updating the Report.</p>
 									{#if !target.placements.length}<p class="design-proposal-note">Add a saved output before requesting an analytical revision.</p>{/if}
-									<ul class="analysis-handoff-list">{#each target.placements as placement (placement.id)}{@const artifact = resolved[resultKey(target.document.workspace, placement)]}<li><button disabled={!onrequestchange || !artifact || designBusy} onclick={() => void continueAnalysis(placement)}><span>{placementTitle(target, placement)}</span><Icon name="arrow-up-right" size={13} /></button></li>{/each}</ul>
+									<ul class="analysis-handoff-list">{#each target.placements as placement (placement.id)}{@const artifact = resolved[resultKey(target.document.workspace, placement)]}<li><button disabled={!artifact || designBusy} onclick={() => void continueAnalysis(placement)}><span>{placementTitle(target, placement)}</span><Icon name="arrow-up-right" size={13} /></button></li>{/each}</ul>
 								{:else}
 									<ul>{#each proposalSummary(target, designProposal) as item, index (`${item}:${index}`)}<li>{item}</li>{/each}</ul>
-									<div class="design-proposal-actions"><Button size="sm" variant="ghost" onclick={discardDesignProposal}>Discard</Button><Button size="sm" disabled={!proposalHasChanges(target, designProposal) || target.locked} onclick={applyDesignProposal}>Apply layout</Button></div>
+									<div class="design-proposal-actions"><Button size="sm" variant="ghost" onclick={discardDesignProposal}>Discard</Button><Button size="sm" disabled={!proposalHasChanges(target, designProposal) || target.locked} onclick={() => void applyDesignProposal()}>Apply layout</Button></div>
 								{/if}
 							</div>
 						{/if}
 					</section>
 				{/if}
+				{#each analysisCandidates.filter(item => item.documentId === target.document.id) as candidate (candidate.placementId)}
+                    <AnalyticalDiff comparison={candidate.comparison} busy={target.saving} onadopt={() => void adoptReportCandidate(candidate)} onkeep={() => analysisCandidates = analysisCandidates.filter(item => item !== candidate)} />
+                {/each}
 				<section class="document-notes" class:document-notes-empty={reportMode !== 'design' && !target.body.trim()} aria-label="Report notes">
 					{#if reportMode === 'design'}
 						<label class="notes-label">Notes <textarea class="notes-input" aria-label="Report notes" rows="6" value={target.body} disabled={target.locked} oninput={event => { target.body = event.currentTarget.value; changed(target); }} placeholder="Add context or a narrative. Markdown is supported."></textarea></label>
