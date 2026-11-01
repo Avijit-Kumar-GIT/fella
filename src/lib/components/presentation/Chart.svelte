@@ -4,13 +4,13 @@
 	import { renderBoundChart, type ChartView } from '../../presentation/vega-runtime';
 	import { usePresentation } from './context';
 	import ResultTable from './ResultTable.svelte';
-	let { props }: BaseComponentProps<{ resultId: string; spec: Record<string, unknown>; title?: string; interactionGroup?: string; linkBy?: string[] }> = $props();
+	let { props }: BaseComponentProps<{ resultId: string; spec: Record<string, unknown>; title?: string; interactionGroup?: string; linkBy?: string[]; filters?: {stateKey:string;field:string}[] }> = $props();
 	const context = usePresentation();
 	let result = $derived(requireResult(context.results, props.resultId));
 	let replayed = $derived(context.replayedResultIds.has(result.id));
 	let chartData = $derived(result);
 	let linkBy = $derived(props.linkBy ?? []);
-	let indices = $derived(filteredRows(result, context.state, props.interactionGroup, linkBy, context.interactionScope));
+	let indices = $derived(filteredRows(result, context.state, props.interactionGroup, linkBy, context.interactionScope, props.filters ?? []));
 	let incompatibleFilters = $derived(incompatibleInteractionFilters(result, context.state, props.interactionGroup, linkBy, context.interactionScope));
 	let container: HTMLDivElement;
 	let status = $state('Loading visualization…');

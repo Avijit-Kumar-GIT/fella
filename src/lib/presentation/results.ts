@@ -1,30 +1,11 @@
+import { acceptContract } from './contract';
+import type { DisplayFilter } from './interactions';
 import type { BoundResult, PresentationState } from './types';
 import { PRESENTATION_LIMITS as limits } from './types';
 
 export function validateResults(results: BoundResult[]): void {
-	if (!Array.isArray(results) || results.length > limits.results) throw new Error('Too many bound results.');
-	const ids = new Set<string>();
-	let cells = 0;
-	let characters = 0;
-	for (const result of results) {
-		if (!result || typeof result.id !== 'string' || !result.id || ids.has(result.id)) throw new Error('Result IDs must be present and unique.');
-		ids.add(result.id);
-		if (!Array.isArray(result.columns) || !result.columns.length || result.columns.length > 100 || result.columns.some((v) => typeof v !== 'string' || !v || v.length > 240) || new Set(result.columns).size !== result.columns.length) throw new Error(`Invalid columns in ${result.id}.`);
-		if (!Array.isArray(result.rows) || result.rows.length > limits.rowsPerResult || !Number.isSafeInteger(result.row_count) || result.row_count < result.rows.length || typeof result.complete !== 'boolean' || (result.complete && result.row_count !== result.rows.length)) throw new Error(`Invalid result extent in ${result.id}.`);
-		if (!Array.isArray(result.exact_rows) || result.exact_rows.length !== result.rows.length) throw new Error(`Exact values are missing for ${result.id}.`);
-		for (let row = 0; row < result.rows.length; row++) {
-			if (!Array.isArray(result.rows[row]) || result.rows[row].length !== result.columns.length || !Array.isArray(result.exact_rows[row]) || result.exact_rows[row].length !== result.columns.length) throw new Error(`Invalid row width in ${result.id}.`);
-			for (let col = 0; col < result.columns.length; col++) {
-				const value = result.rows[row][col];
-				if (value !== null && typeof value !== 'string' && typeof value !== 'boolean' && (typeof value !== 'number' || !Number.isFinite(value))) throw new Error(`Non-scalar value in ${result.id}.`);
-				if (typeof result.exact_rows[row][col] !== 'string' || result.exact_rows[row][col].length > limits.text) throw new Error(`Invalid exact value in ${result.id}.`);
-				characters += result.exact_rows[row][col].length + (typeof value === 'string' ? value.length : 0);
-				if (characters > limits.resultCharacters) throw new Error('Bound result text exceeds the presentation size budget.');
-			}
-		}
-		cells += result.rows.length * result.columns.length;
-		if (cells > limits.cells) throw new Error('Bound results exceed the presentation cell budget.');
-	}
+ const checked=acceptContract({root:'doc',elements:{doc:{type:'Document',props:{},children:[]}}},results);
+ if(!checked.valid)throw new Error(checked.issues.map(issue=>issue.message).join('; '));
 }
 
 export function requireResult(results: BoundResult[], id: string): BoundResult {
@@ -74,9 +55,12 @@ export function exactRowFilterValuesFromRow(result: BoundResult, row: number, fi
 	});
 }
 
-export function filteredRows(result: BoundResult, state: PresentationState, interactionGroup?: string, linkedFields: string[] = [], interactionScope?: string): number[] {
+export function filteredRows(result: BoundResult, state: PresentationState, interactionGroup?: string, linkedFields: string[] = [], interactionScope?: string, bindings: DisplayFilter[] = []): number[] {
 	const filters = Object.entries(state).filter(([key]) => key.startsWith('filter:')).map(([key, value]) => ({ key, filter: value as FilterSelection }));
-	return result.rows.flatMap((_, row) => filters.every(({ key, filter }) => {
+	return result.rows.flatMap((_, row) => bindings.every(binding => {
+		const value=state[`control:${binding.stateKey}`];
+		return value===undefined || value==='$all' || exactValue(result,row,binding.field)===value;
+	}) && filters.every(({ key, filter }) => {
 		if (!filter || filter.value === null) return true;
 		const selection = key.startsWith('filter:selection:');
 		const sameResult = !selection && filter.resultId === result.id;
@@ -152,6 +136,13 @@ export function sanitizeState(state: PresentationState = {}): PresentationState 
 export function resolvePresentationState(spec: { root: string; elements: Record<string, { type: string; props: Record<string, unknown> }> }, state: PresentationState, results: BoundResult[], interactionScope?: string): PresentationState {
 	const clean = sanitizeState(state);
 	const resolved: PresentationState = Object.create(null);
+    const contract=(spec.elements[spec.root].props as any).contract;
+    if(contract?.state)for(const [key,definition] of Object.entries(contract.state) as [string,any][]) {
+        const value=clean[`control:${key}`];
+        const valid=definition.type==='boolean'?typeof value==='boolean':definition.options.some((option:any)=>option.value===value);
+        resolved[`control:${key}`]=valid?value:definition.default;
+    }
+
 	for (const [key, raw] of Object.entries(clean)) {
 		if (!key.startsWith('filter:selection:') || !raw || typeof raw !== 'object') continue;
 		const filter = raw as FilterSelection;

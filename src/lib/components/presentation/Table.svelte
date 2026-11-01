@@ -4,11 +4,11 @@
 	import type { PresentationFormatOptions } from '../../presentation/format';
 	import { usePresentation } from './context';
 	import ResultTable from './ResultTable.svelte';
-	let { props }: BaseComponentProps<{ resultId: string; fields?: string[]; title?: string; columnFormats?: Record<string, PresentationFormatOptions>; interactionGroup?: string; linkBy?: string[] }> = $props();
+	let { props }: BaseComponentProps<{ resultId: string; fields?: string[]; title?: string; columnFormats?: Record<string, PresentationFormatOptions>; interactionGroup?: string; linkBy?: string[]; filters?: {stateKey:string;field:string}[] }> = $props();
 	const context = usePresentation();
 	let result = $derived(requireResult(context.results, props.resultId));
 	let linkBy = $derived(props.linkBy ?? []);
-	let indices = $derived(filteredRows(result, context.state, props.interactionGroup, linkBy, context.interactionScope));
+	let indices = $derived(filteredRows(result, context.state, props.interactionGroup, linkBy, context.interactionScope, props.filters ?? []));
 	let incompatibleFilters = $derived(incompatibleInteractionFilters(result, context.state, props.interactionGroup, linkBy, context.interactionScope));
 </script>
 {#if props.title}<h3 class="presentation-table-title">{props.title}</h3>{/if}

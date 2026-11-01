@@ -1,0 +1,448 @@
+{
+  "fixture_version": "intelligent-ui-v1",
+  "status": "frozen expectations; no candidate results recorded",
+  "author_version": "fella-ui-1",
+  "results": [
+    {
+      "id": "sales",
+      "columns": ["month", "region", "revenue"],
+      "rows": [
+        ["2026-01-01", "North", 100],
+        ["2026-01-01", "South", 80],
+        ["2026-02-01", "North", 120],
+        ["2026-02-01", "South", 90]
+      ],
+      "exact_rows": [
+        ["2026-01-01", "North", "100"],
+        ["2026-01-01", "South", "80"],
+        ["2026-02-01", "North", "120"],
+        ["2026-02-01", "South", "90"]
+      ],
+      "row_count": 4,
+      "complete": true
+    }
+  ],
+  "acceptance": {
+    "targets": ["native", "wasm"],
+    "same_validity_and_semantic_canonical_output": true,
+    "canonical_form": "flat root/elements; root Document.props.contract contains version, capabilities, state, and intent when supplied",
+    "valid_output_revalidates_and_survives_save_reopen": true,
+    "invalid_output_has_no_accepted_spec": true,
+    "invalid_output_reports_offending_field_or_node": true,
+    "exact_error_prose_is_graded": false,
+    "generated_ids": "deterministic for identical structural paths; explicit IDs preserve revision identity; collisions rejected",
+    "display_interactions": {
+      "query_calls": 0,
+      "model_calls": 0,
+      "network_calls": 0,
+      "saved_results_unchanged": true,
+      "source_scope_unchanged": true,
+      "verification_unchanged": true,
+      "evidence_unchanged": true
+    },
+    "rejection_fallback": "canonical answer and evidence remain accessible with a presentation limitation",
+    "row_indices": "zero-based indices in the original shared sales result",
+    "unmentioned_interactions": "no automatic follow-up on mount, state restore, selector change, or tab change"
+  },
+  "cases": [
+    {
+      "id": "simple_lookup_metric",
+      "input": {
+        "version": "fella-ui-1",
+        "intent": "lookup",
+        "capabilities": ["display"],
+        "state": {},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {"type": "Metric", "id": "lookup", "props": {"resultId": "sales", "field": "revenue", "row": 0, "title": "North revenue · January 2026"}}
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "explicit_ids": ["doc", "lookup"],
+        "metric": {"node": "lookup", "resultId": "sales", "row": 0, "field": "revenue", "exact_value": "100"},
+        "metadata": {"version": "fella-ui-1", "intent": "lookup", "capabilities": ["display"], "state": {}}
+      }
+    },
+    {
+      "id": "time_trend_chart",
+      "input": {
+        "version": "fella-ui-1",
+        "intent": "trend",
+        "capabilities": ["display"],
+        "state": {},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {
+              "type": "Chart", "id": "trend",
+              "props": {
+                "resultId": "sales", "title": "Monthly revenue by region",
+                "spec": {
+                  "mark": "line",
+                  "encoding": {
+                    "x": {"field": "month", "type": "temporal", "title": "Month"},
+                    "y": {"field": "revenue", "type": "quantitative", "title": "Revenue"},
+                    "color": {"field": "region", "type": "nominal"},
+                    "tooltip": [{"field": "month", "type": "temporal"}, {"field": "region", "type": "nominal"}, {"field": "revenue", "type": "quantitative"}]
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "chart": {"node": "trend", "resultId": "sales", "row_indices": [0, 1, 2, 3], "mark": "line", "series": {"North": [100, 120], "South": [80, 90]}, "months": ["2026-01-01", "2026-02-01"]},
+        "authored_data": false
+      }
+    },
+    {
+      "id": "category_bar_chart",
+      "input": {
+        "version": "fella-ui-1",
+        "intent": "comparison",
+        "capabilities": ["display"],
+        "state": {},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {
+              "type": "Chart", "id": "categories",
+              "props": {
+                "resultId": "sales", "title": "Regional revenue within each month",
+                "spec": {
+                  "mark": "bar",
+                  "encoding": {
+                    "x": {"field": "region", "type": "nominal"},
+                    "xOffset": {"field": "month", "type": "nominal"},
+                    "y": {"field": "revenue", "type": "quantitative"},
+                    "color": {"field": "month", "type": "nominal"}
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "chart": {"node": "categories", "resultId": "sales", "row_indices": [0, 1, 2, 3], "mark": "bar", "category_field": "region", "group_field": "month", "bar_values": [100, 80, 120, 90]},
+        "invented_totals": false
+      }
+    },
+    {
+      "id": "select_filters_table",
+      "input": {
+        "version": "fella-ui-1",
+        "intent": "exploration",
+        "capabilities": ["display"],
+        "state": {
+          "region": {"type": "enum", "options": [{"value": "North", "label": "North"}, {"value": "South", "label": "South"}], "default": "North", "persistence": "viewer"}
+        },
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {"type": "Select", "id": "region_picker", "props": {"name": "Region"}, "bind": {"state": "region"}},
+            {"type": "Table", "id": "sales_table", "props": {"resultId": "sales", "fields": ["month", "region", "revenue"]}, "filters": [{"state": "region", "field": "region"}]}
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "derived": {"region_picker": {"stateKey": "region", "options_from": "state.region.options", "defaultValue": "North"}},
+        "initial": {"state": {"region": "North"}, "table": {"node": "sales_table", "row_indices": [0, 2], "exact_revenue": ["100", "120"]}},
+        "interactions": [
+          {"action": "select", "node": "region_picker", "value": "South", "expect": {"state": {"region": "South"}, "table": {"node": "sales_table", "row_indices": [1, 3], "exact_revenue": ["80", "90"]}}},
+          {"action": "reopen", "expect": {"state": {"region": "South"}, "table": {"node": "sales_table", "row_indices": [1, 3]}}},
+          {"action": "restore_viewer_state", "value": {"region": "West"}, "expect": {"state": {"region": "North"}, "table": {"node": "sales_table", "row_indices": [0, 2]}}}
+        ]
+      }
+    },
+    {
+      "id": "tabs_derive_mechanics",
+      "input": {
+        "version": "fella-ui-1",
+        "capabilities": ["display"],
+        "state": {},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {
+              "type": "Tabs", "id": "views",
+              "children": [
+                {"type": "TabPanel", "id": "summary_panel", "props": {"label": "Summary"}, "children": [{"type": "Metric", "id": "summary_value", "props": {"resultId": "sales", "field": "revenue", "row": 0, "title": "North · January"}}]},
+                {"type": "TabPanel", "id": "detail_panel", "props": {"label": "Details"}, "children": [{"type": "Table", "id": "detail_table", "props": {"resultId": "sales"}}]}
+              ]
+            }
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "intent_absent": true,
+        "derived": {"views": {"labels": ["Summary", "Details"], "name_from": "Tabs stable identity"}, "summary_panel": {"name_matches": "views", "index": 0}, "detail_panel": {"name_matches": "views", "index": 1}},
+        "initial": {"selected_index": 0, "visible_nodes": ["summary_panel", "summary_value"], "hidden_nodes": ["detail_panel", "detail_table"]},
+        "interactions": [
+          {"action": "click_tab", "node": "views", "index": 1, "expect": {"selected_index": 1, "visible_nodes": ["detail_panel", "detail_table"], "hidden_nodes": ["summary_panel", "summary_value"], "table": {"node": "detail_table", "row_indices": [0, 1, 2, 3]}}},
+          {"action": "press_key", "node": "views", "key": "ArrowRight", "expect": {"selected_index": 0, "focused_tab_index": 0}},
+          {"action": "press_key", "node": "views", "key": "End", "expect": {"selected_index": 1, "focused_tab_index": 1}},
+          {"action": "press_key", "node": "views", "key": "Home", "expect": {"selected_index": 0, "focused_tab_index": 0}}
+        ]
+      }
+    },
+    {
+      "id": "segmented_control_visible_consumer",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"],
+        "state": {"view": {"type": "enum", "options": [{"value": "summary", "label": "Summary"}, {"value": "detail", "label": "Details"}], "default": "summary", "persistence": "viewer"}},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {"type": "SegmentedControl", "id": "view_picker", "props": {"name": "View"}, "bind": {"state": "view"}},
+            {"type": "Metric", "id": "summary", "props": {"resultId": "sales", "field": "revenue", "row": 0, "title": "North · January"}, "when": {"state": "view", "equals": "summary"}},
+            {"type": "Table", "id": "detail", "props": {"resultId": "sales"}, "when": {"state": "view", "equals": "detail"}}
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "derived": {"view_picker": {"stateKey": "view", "options_from": "state.view.options", "defaultValue": "summary"}},
+        "initial": {"visible_nodes": ["summary"], "hidden_nodes": ["detail"]},
+        "interactions": [{"action": "select", "node": "view_picker", "value": "detail", "expect": {"visible_nodes": ["detail"], "hidden_nodes": ["summary"], "table": {"node": "detail", "row_indices": [0, 1, 2, 3]}}}]
+      }
+    },
+    {
+      "id": "checkbox_visible_consumer",
+      "input": {
+        "version": "fella-ui-1", "intent": "explanation", "capabilities": ["display"],
+        "state": {"show_detail": {"type": "boolean", "default": false, "persistence": "viewer"}},
+        "root": {
+          "type": "Document", "id": "doc",
+          "children": [
+            {"type": "Checkbox", "id": "detail_toggle", "props": {"label": "Show saved rows"}, "bind": {"state": "show_detail"}},
+            {"type": "Table", "id": "detail", "props": {"resultId": "sales"}, "when": {"state": "show_detail", "equals": true}}
+          ]
+        }
+      },
+      "expected": {
+        "valid": true,
+        "derived": {"detail_toggle": {"stateKey": "show_detail", "defaultChecked": false}},
+        "initial": {"state": {"show_detail": false}, "hidden_nodes": ["detail"]},
+        "interactions": [
+          {"action": "set_checked", "node": "detail_toggle", "value": true, "expect": {"visible_nodes": ["detail"], "table": {"node": "detail", "row_indices": [0, 1, 2, 3]}}},
+          {"action": "set_checked", "node": "detail_toggle", "value": false, "expect": {"hidden_nodes": ["detail"]}}
+        ]
+      }
+    },
+    {
+      "id": "safe_chart_layer",
+      "input": {
+        "version": "fella-ui-1", "intent": "trend", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "layered", "props": {"resultId": "sales", "spec": {
+          "encoding": {"x": {"field": "month", "type": "temporal"}, "y": {"field": "revenue", "type": "quantitative"}, "color": {"field": "region", "type": "nominal"}},
+          "layer": [{"mark": "line"}, {"mark": "point"}]
+        }}}]}
+      },
+      "expected": {"valid": true, "chart": {"node": "layered", "composition": "layer", "child_views": 2, "row_indices": [0, 1, 2, 3]}, "generated_ids_repeatably_stable": true}
+    },
+    {
+      "id": "safe_chart_facet",
+      "input": {
+        "version": "fella-ui-1", "intent": "trend", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "faceted", "props": {"resultId": "sales", "spec": {
+          "facet": {"field": "region", "type": "nominal"},
+          "spec": {"mark": "line", "encoding": {"x": {"field": "month", "type": "temporal"}, "y": {"field": "revenue", "type": "quantitative"}}}
+        }}}]}
+      },
+      "expected": {"valid": true, "chart": {"node": "faceted", "composition": "facet", "panels": {"North": [0, 2], "South": [1, 3]}}}
+    },
+    {
+      "id": "safe_chart_concat",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "composed", "props": {"resultId": "sales", "spec": {
+          "concat": [
+            {"mark": "line", "encoding": {"x": {"field": "month", "type": "temporal"}, "y": {"field": "revenue", "type": "quantitative"}, "color": {"field": "region", "type": "nominal"}}},
+            {"mark": "point", "encoding": {"x": {"field": "month", "type": "temporal"}, "y": {"field": "revenue", "type": "quantitative"}, "color": {"field": "region", "type": "nominal"}}}
+          ]
+        }}}]}
+      },
+      "expected": {"valid": true, "chart": {"node": "composed", "composition": "concat", "child_views": 2, "row_indices": [0, 1, 2, 3]}}
+    },
+    {
+      "id": "follow_up_requires_explicit_click",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display", "follow_up"], "state": {},
+        "root": {"type": "Document", "id": "doc", "children": [{"type": "FollowUp", "id": "ask", "props": {"label": "Explain the regional difference", "message": "Explain the regional revenue difference in the saved sales result."}}]}
+      },
+      "expected": {
+        "valid": true,
+        "initial": {"follow_up_events": 0},
+        "interactions": [
+          {"action": "reopen", "expect": {"follow_up_events": 0}},
+          {"action": "click", "node": "ask", "expect": {"follow_up_events_delta": 1, "message": "Explain the regional revenue difference in the saved sales result."}}
+        ],
+        "effect": "request only; any subsequent analytical turn remains host-owned"
+      }
+    },
+    {
+      "id": "legacy_flat_v1_orphan_control_accepted",
+      "input": {
+        "root": "doc",
+        "elements": {
+          "doc": {"type": "Document", "props": {}, "children": ["picker", "table"]},
+          "picker": {"type": "Select", "props": {"name": "Region", "stateKey": "region", "options": [{"value": "North", "label": "North"}, {"value": "South", "label": "South"}], "defaultValue": "North"}, "children": []},
+          "table": {"type": "Table", "props": {"resultId": "sales"}, "children": []}
+        }
+      },
+      "expected": {"valid": true, "mode": "legacy fella-json-render-v1", "strict_state_contract_applied": false, "table": {"node": "table", "row_indices": [0, 1, 2, 3]}}
+    },
+    {
+      "id": "malformed_missing_saved_field",
+      "input": {
+        "version": "fella-ui-1", "intent": "lookup", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Metric", "id": "bad_metric", "props": {"resultId": "sales", "field": "profit", "row": 0, "title": "Profit"}}]}
+      },
+      "expected": {"valid": false, "reason": "Metric field profit is absent from saved result sales", "offender": "bad_metric.props.field"}
+    },
+    {
+      "id": "malformed_missing_required_field",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Metric", "id": "bad_metric", "props": {"resultId": "sales", "row": 0, "title": "North revenue"}}]}
+      },
+      "expected": {"valid": false, "reason": "Metric requires a field reference; the compiler must not guess one", "offender": "bad_metric.props.field"}
+    },
+    {
+      "id": "orphan_control",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"],
+        "state": {"region": {"type": "enum", "options": [{"value": "North", "label": "North"}, {"value": "South", "label": "South"}], "default": "North", "persistence": "viewer"}},
+        "root": {"type": "Document", "children": [
+          {"type": "Select", "id": "orphan", "props": {"name": "Region"}, "bind": {"state": "region"}},
+          {"type": "Table", "id": "unchanged_table", "props": {"resultId": "sales"}}
+        ]}
+      },
+      "expected": {"valid": false, "reason": "Bound display control has no visible or filter consumer", "offender": "orphan"}
+    },
+    {
+      "id": "invalid_enum_default",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"],
+        "state": {"region": {"type": "enum", "options": [{"value": "North", "label": "North"}, {"value": "South", "label": "South"}], "default": "West", "persistence": "viewer"}},
+        "root": {"type": "Document", "children": [
+          {"type": "Select", "id": "picker", "props": {"name": "Region"}, "bind": {"state": "region"}},
+          {"type": "Table", "id": "table", "props": {"resultId": "sales"}, "filters": [{"state": "region", "field": "region"}]}
+        ]}
+      },
+      "expected": {"valid": false, "reason": "Enum default West is not in the declared option values", "offender": "state.region.default"}
+    },
+    {
+      "id": "boolean_default_wrong_type",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"],
+        "state": {"show_detail": {"type": "boolean", "default": "false", "persistence": "viewer"}},
+        "root": {"type": "Document", "children": [
+          {"type": "Checkbox", "id": "toggle", "props": {"label": "Show saved rows"}, "bind": {"state": "show_detail"}},
+          {"type": "Table", "id": "table", "props": {"resultId": "sales"}, "when": {"state": "show_detail", "equals": true}}
+        ]}
+      },
+      "expected": {"valid": false, "reason": "Boolean default must be a boolean; string false must not be coerced", "offender": "state.show_detail.default"}
+    },
+    {
+      "id": "control_state_type_mismatch",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"],
+        "state": {"region": {"type": "enum", "options": [{"value": "North", "label": "North"}, {"value": "South", "label": "South"}], "default": "North", "persistence": "viewer"}},
+        "root": {"type": "Document", "children": [
+          {"type": "Checkbox", "id": "wrong_control", "props": {"label": "Region"}, "bind": {"state": "region"}},
+          {"type": "Table", "id": "table", "props": {"resultId": "sales"}, "filters": [{"state": "region", "field": "region"}]}
+        ]}
+      },
+      "expected": {"valid": false, "reason": "Checkbox must bind boolean state, not enum state", "offender": "wrong_control.bind.state"}
+    },
+    {
+      "id": "dangling_state",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Table", "id": "table", "props": {"resultId": "sales"}, "when": {"state": "missing", "equals": true}}]}
+      },
+      "expected": {"valid": false, "reason": "Visibility condition references undeclared state missing", "offender": "table.when.state"}
+    },
+    {
+      "id": "denied_capability_scenario",
+      "input": {"version": "fella-ui-1", "capabilities": ["display", "scenario"], "state": {}, "root": {"type": "Document"}},
+      "expected": {"valid": false, "reason": "scenario capability is not part of fella-ui-1", "offender": "capabilities"}
+    },
+    {
+      "id": "denied_capability_query",
+      "input": {"version": "fella-ui-1", "capabilities": ["display", "query"], "state": {}, "root": {"type": "Document"}},
+      "expected": {"valid": false, "reason": "query capability is not part of fella-ui-1", "offender": "capabilities"}
+    },
+    {
+      "id": "denied_capability_code",
+      "input": {"version": "fella-ui-1", "capabilities": ["display", "code"], "state": {}, "root": {"type": "Document"}},
+      "expected": {"valid": false, "reason": "code capability is not part of fella-ui-1", "offender": "capabilities"}
+    },
+    {
+      "id": "denied_capability_network",
+      "input": {"version": "fella-ui-1", "capabilities": ["display", "network"], "state": {}, "root": {"type": "Document"}},
+      "expected": {"valid": false, "reason": "network capability is not part of fella-ui-1", "offender": "capabilities"}
+    },
+    {
+      "id": "follow_up_without_capability",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "FollowUp", "id": "ask", "props": {"label": "Explain", "message": "Explain the saved result."}}]}
+      },
+      "expected": {"valid": false, "reason": "FollowUp requires explicit follow_up capability", "offender": "ask"}
+    },
+    {
+      "id": "unsafe_chart_transform",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "bad_chart", "props": {"resultId": "sales", "spec": {
+          "transform": [{"calculate": "datum.revenue * 2", "as": "doubled"}],
+          "mark": "bar", "encoding": {"x": {"field": "region", "type": "nominal"}, "y": {"field": "revenue", "type": "quantitative"}}
+        }}}]}
+      },
+      "expected": {"valid": false, "reason": "Authored chart transforms are forbidden even when encodings use saved fields", "offender": "bad_chart.props.spec.transform"}
+    },
+    {
+      "id": "unsafe_chart_data",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "bad_chart", "props": {"resultId": "sales", "spec": {
+          "data": {"values": [{"month": "2026-01-01", "region": "North", "revenue": 999}]},
+          "mark": "bar", "encoding": {"x": {"field": "region", "type": "nominal"}, "y": {"field": "revenue", "type": "quantitative"}}
+        }}}]}
+      },
+      "expected": {"valid": false, "reason": "Chart data must be injected from the saved result by the host", "offender": "bad_chart.props.spec.data"}
+    },
+    {
+      "id": "unsafe_chart_nested_expr",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "children": [{"type": "Chart", "id": "bad_chart", "props": {"resultId": "sales", "spec": {
+          "layer": [{"mark": {"type": "bar", "opacity": {"expr": "datum.revenue > 90 ? 1 : 0"}}, "encoding": {"x": {"field": "region", "type": "nominal"}, "y": {"field": "revenue", "type": "quantitative"}}}]
+        }}}]}
+      },
+      "expected": {"valid": false, "reason": "Authored expressions are forbidden at every chart depth", "offender": "bad_chart.props.spec.layer[0].mark.opacity.expr"}
+    },
+    {
+      "id": "duplicate_id",
+      "input": {
+        "version": "fella-ui-1", "capabilities": ["display"], "state": {},
+        "root": {"type": "Document", "id": "doc", "children": [
+          {"type": "Text", "id": "same", "props": {"content": "January and February sales are saved."}},
+          {"type": "Table", "id": "same", "props": {"resultId": "sales"}}
+        ]}
+      },
+      "expected": {"valid": false, "reason": "Explicit ID same occurs twice; do not silently rename either node", "offender": "same"}
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-import { schema } from '@json-render/svelte/schema';
 import { defineRegistry } from '@json-render/svelte';
-import { componentDefinitions } from './schemas';
+import { presentationCatalog } from './catalog';
+export { presentationCatalog } from './catalog';
 import Document from '../components/presentation/Document.svelte';
 import Section from '../components/presentation/Section.svelte';
 import Columns from '../components/presentation/Columns.svelte';
@@ -33,13 +33,5 @@ export const presentationComponents = {
 	ResultFilter: Filter, FollowUp: Action
 };
 
-const catalogComponents = Object.fromEntries(Object.entries(componentDefinitions).map(([name, definition]) => [name, {
-	props: definition.props,
-	slots: [...definition.slots],
-	description: definition.description
-}]));
-
-/** The catalog is also the source for model output validation and schema generation. */
-export const presentationCatalog = schema.createCatalog({ components: catalogComponents, actions: {} });
 const registryResult = defineRegistry(presentationCatalog, { components: presentationComponents as never });
 export const presentationRegistry = registryResult.registry;

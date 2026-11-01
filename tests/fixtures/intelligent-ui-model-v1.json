@@ -1,0 +1,91 @@
+{
+  "fixture_version": "intelligent-ui-model-v1",
+  "status": "frozen before any live candidate; change tasks or rubric only under a new fixture version",
+  "results_fixture": "tests/fixtures/intelligent-ui-v1.json",
+  "results_version": "intelligent-ui-v1",
+  "providers": [
+    {"id": "ollama-cloud", "model": "gemma4:31b", "endpoint": "https://ollama.com/api/chat", "credential": "apikey:ollama-cloud"},
+    {"id": "openai", "model": "gpt-5.6-luna", "endpoint": "https://api.openai.com/v1/chat/completions", "credential": "apikey:openai"}
+  ],
+  "protocol": {
+    "composition": "One real structured response, then at most one real JSON-mode retry on JSON/native acceptance failure or provider failure. Suitability failures never trigger a retry.",
+    "repair": "The frozen damaged assistant candidate is an explicitly injected repair challenge, not a simulated model response. Validate it first and send its exact content and acceptance errors in one real JSON-mode repair request. No further retry.",
+    "response": "Object with presentation_spec: current manifest authorSchema or null; recursively rebase local $ref to #/properties/presentation_spec/anyOf/0.",
+    "provider_failure": "Every failed provider call is a task failure even if the single compatibility retry succeeds. No hidden transport retries or model substitutions.",
+    "timeout_ms": 180000,
+    "output_tokens": 8192,
+    "temperature": 0.2,
+    "max_retries": 1,
+    "report_directory": "/tmp",
+    "canonical_answer": "Supplied authority is preserved outside the composition; this evaluation does not establish narrative accuracy."
+  },
+  "rubric": {
+    "structural_acceptance": "Record first and final JSON/native acceptance independently of view suitability. Null is structurally accepted by the agent parser. Non-null output must pass native contract_accept against unchanged frozen saved results and produce canonical flat output with the current manifest hash.",
+    "view_suitability": "Deterministic conservative heuristics, not human judgment, narrative verification, rendered pixels, or proof of runtime interaction. Every listed criterion must pass; no partial credit or post-hoc expectation changes.",
+    "criteria": {
+      "author_envelope": "Exactly one envelope property presentation_spec; non-null author uses version fella-ui-1 and a nested Document root. Native compatibility acceptance alone does not establish author-format compliance.",
+      "concise_lookup": "Null is suitable. Otherwise at most 6 canonical nodes and 320 prose characters; only Document, Metric, Text, Caption, Title, Section or Card. Every Metric binds sales.revenue row 0. Prose content is not fact checked.",
+      "bound_lookup_metric": "Non-null presentation contains a visible Metric bound to sales.revenue row 0, whose frozen exact value is 100. No other Metric bindings. Narrative labels are not graded.",
+      "temporal_trend": "Initially visible result-bound line/area chart leaves use month as a temporal position and revenue as a quantitative position, retain distinct months, and separate North/South by series or facet. Union of qualifying saved rows is all four sales rows. No aggregation or binning of these observations.",
+      "within_month_bars": "Initially visible sales-bound bars encode quantitative revenue and distinguish both region and month by positions, offsets or facets (or a saved-row filter reducing that dimension to one value). Union covers all four rows. No aggregation, binning, normalized/centered stacking, nonzero baseline, or color-only stacked total across months/regions.",
+      "region_filter_consumer": "A visible Select or SegmentedControl binds a viewer-persisted enum with exactly North/South (optional $all), a valid default, and a Chart/Table consumer using that state to filter the saved region field. For North and South the consumer is reachable and resolves exactly rows [0,2] and [1,3], with month and revenue exposed. Reference row resolution is a heuristic, not browser event verification.",
+      "bounded_repair": "Injected candidate must fail the expected JSON-syntax or saved-field check before repair. Exactly one real JSON-mode call must yield accepted non-null output and a bound North January revenue Metric. No second retry."
+    },
+    "limits": {"lookup_max_nodes": 6, "lookup_max_prose_characters": 320},
+    "limitations": [
+      "Structural acceptance does not establish analytical suitability or narrative accuracy; prose and labels require independent review.",
+      "Chart inspection covers unit, inherited layer, facet and concat forms. Repeat charts are conservatively unsuitable under this v1 heuristic, even if structurally accepted.",
+      "Suitability checks the initial visible view, plus the two explicit enum assignments. No browser mount, Vega rendering, visual quality, keyboard behavior, persistence events, or side-effect isolation is tested.",
+      "Four complete saved rows and six tasks do not establish broader model reliability or incomplete-result coverage.",
+      "Provider failures and setup failures remain failures; unattempted checks are reported, never counted as passing. No task exclusions or post-hoc corrections."
+    ]
+  },
+  "tasks": [
+    {
+      "id": "lookup_north_january",
+      "kind": "composition",
+      "question": "What was North revenue in January 2026? Keep it concise; a plain answer without a separate presentation is fine.",
+      "answer": "North revenue in January 2026 was 100.",
+      "criteria": ["author_envelope", "concise_lookup"]
+    },
+    {
+      "id": "monthly_trend_north_south",
+      "kind": "composition",
+      "question": "Show how monthly revenue changed between January and February 2026 for North and South, using a result-bound temporal chart so I can compare their trends.",
+      "answer": "North revenue rose from 100 in January to 120 in February 2026. South rose from 80 to 90 over the same months. These are the two observed months in the complete saved result.",
+      "criteria": ["author_envelope", "temporal_trend"]
+    },
+    {
+      "id": "within_month_region_comparison",
+      "kind": "composition",
+      "question": "Compare North and South revenue within each month in January and February 2026. Use meaningful bars that keep the monthly observations distinct; do not invent a total or combine the months into regional totals.",
+      "answer": "In January 2026, North revenue was 100 and South was 80. In February, North was 120 and South was 90. The comparison is within each month; no cross-month total is supplied.",
+      "criteria": ["author_envelope", "within_month_bars"]
+    },
+    {
+      "id": "region_enum_saved_rows",
+      "kind": "composition",
+      "question": "Let me switch between North and South with a Select or SegmentedControl to filter a chart or table of the saved monthly revenue rows. Declare viewer enum state, bind the control, and connect an actual saved-row filter consumer. This changes only the local view.",
+      "answer": "The saved North rows are January 2026 revenue 100 and February revenue 120. The South rows are January revenue 80 and February revenue 90. A region selection displays only that region's saved rows.",
+      "criteria": ["author_envelope", "region_filter_consumer"]
+    },
+    {
+      "id": "repair_malformed_syntax",
+      "kind": "repair",
+      "question": "Display one result-bound Metric for North revenue in January 2026. Repair the damaged presentation without changing the answer.",
+      "answer": "North revenue in January 2026 was 100.",
+      "seed_error": "syntax",
+      "failed_candidate": "{\"presentation_spec\":{\"version\":\"fella-ui-1\",\"root\":{\"type\":\"Document\",\"children\":[{\"type\":\"Metric\",\"props\":{\"resultId\":\"sales\",\"field\":\"revenue\",\"row\":0,\"title\":\"North revenue · January 2026\"}}]}}",
+      "criteria": ["author_envelope", "bound_lookup_metric", "bounded_repair"]
+    },
+    {
+      "id": "repair_missing_saved_field",
+      "kind": "repair",
+      "question": "Display one result-bound Metric for North revenue in January 2026. Repair the unsupported saved field without changing the answer.",
+      "answer": "North revenue in January 2026 was 100.",
+      "seed_error": "saved_field",
+      "failed_candidate": "{\"presentation_spec\":{\"version\":\"fella-ui-1\",\"intent\":\"lookup\",\"capabilities\":[\"display\"],\"state\":{},\"root\":{\"type\":\"Document\",\"children\":[{\"type\":\"Metric\",\"id\":\"bad_metric\",\"props\":{\"resultId\":\"sales\",\"field\":\"profit\",\"row\":0,\"title\":\"Profit\"}}]}}}",
+      "criteria": ["author_envelope", "bound_lookup_metric", "bounded_repair"]
+    }
+  ]
+}

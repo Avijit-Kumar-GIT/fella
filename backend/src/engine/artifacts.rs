@@ -31,8 +31,9 @@ const NORTHSTAR_SAMPLE_ARTIFACT_PREFIX: &str = "artifact_northstar_sample_revenu
 const NORTHSTAR_SAMPLE_REPORT_SEED_VERSION: &str = "northstar-saved-analysis-v2";
 const NORTHSTAR_SAMPLE_REPORT_LEGACY_BODY: &str = "**Status: In progress**\n\n## Objective\nExplain how Northstar Outfitters’ net merchandise revenue changed between Q3 and Q4 2025.\n\n## Work plan\n- Confirm the current finance metric policy, source coverage, and date basis.\n- Compare revenue, order volume, and average order value across both quarters.\n- Identify the product, refund, or source-quality factors that explain the change.\n\n## Evidence to add\nNo findings are attached yet. Add verified analysis from Chat as the investigation progresses. Check `docs/metric_policy_current.md` before accepting a revenue definition; archived exports may use older rules.";
 const MAX_RECORD_BYTES: usize = 4 * 1024 * 1024;
-const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
+#[cfg(test)]
 const MAX_SPEC_BYTES: usize = 256 * 1024;
+const MAX_RUN_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_BODY_BYTES: usize = 512 * 1024;
 const MAX_REVISIONS: usize = 256;
 const MAX_PLACEMENTS: usize = 256;
@@ -249,290 +250,24 @@ fn validate_title(title: &str) -> EngineResult<String> {
     Ok(title.to_owned())
 }
 
-fn schema_type_matches(value: &Json, kind: &str) -> bool {
-    match kind {
-        "object" => value.is_object(),
-        "array" => value.is_array(),
-        "string" => value.is_string(),
-        "integer" => {
-            value.as_i64().is_some()
-                || value.as_u64().is_some()
-                || value.as_f64().is_some_and(|n| n.fract() == 0.0)
-        }
-        "number" => value.is_number(),
-        "boolean" => value.is_boolean(),
-        "null" => value.is_null(),
-        _ => true,
-    }
-}
-
-/// Validate the catalog's generated JSON Schema subset. The schemas come from
-/// the same Zod component definitions as the Svelte renderer and use only
-/// standard structural keywords; keep Rust from persisting a tree the UI will
-/// reject on reopen.
-fn validate_component_schema(value: &Json, schema: &Json, path: &str) -> EngineResult<()> {
-    if let Some(expected) = schema.get("type") {
-        let matches = if let Some(kind) = expected.as_str() {
-            schema_type_matches(value, kind)
-        } else {
-            expected.as_array().is_some_and(|kinds| {
-                kinds
-                    .iter()
-                    .filter_map(Json::as_str)
-                    .any(|kind| schema_type_matches(value, kind))
-            })
-        };
-        if !matches {
-            return Err(EngineError::msg(format!("{path} has the wrong JSON type")));
-        }
-    }
-    if let Some(values) = schema.get("enum").and_then(Json::as_array) {
-        if !values.contains(value) {
-            return Err(EngineError::msg(format!("{path} has an unsupported value")));
-        }
-    }
-    if schema
-        .get("const")
-        .is_some_and(|expected| expected != value)
-    {
-        return Err(EngineError::msg(format!("{path} has an unsupported value")));
-    }
-    if let Some(choices) = schema.get("oneOf").and_then(Json::as_array) {
-        let matches = choices
-            .iter()
-            .filter(|choice| validate_component_schema(value, choice, path).is_ok())
-            .count();
-        if matches != 1 {
-            return Err(EngineError::msg(format!(
-                "{path} must match exactly one supported form"
-            )));
-        }
-    }
-    if let Some(choices) = schema.get("anyOf").and_then(Json::as_array) {
-        if !choices
-            .iter()
-            .any(|choice| validate_component_schema(value, choice, path).is_ok())
-        {
-            return Err(EngineError::msg(format!(
-                "{path} does not match a supported form"
-            )));
-        }
-    }
-    if let Some(string) = value.as_str() {
-        let length = string.chars().count();
-        if schema
-            .get("minLength")
-            .and_then(Json::as_u64)
-            .is_some_and(|min| length < min as usize)
-            || schema
-                .get("maxLength")
-                .and_then(Json::as_u64)
-                .is_some_and(|max| length > max as usize)
-        {
-            return Err(EngineError::msg(format!(
-                "{path} exceeds its text length limits"
-            )));
-        }
-    }
-    if let Some(array) = value.as_array() {
-        if schema
-            .get("minItems")
-            .and_then(Json::as_u64)
-            .is_some_and(|min| array.len() < min as usize)
-            || schema
-                .get("maxItems")
-                .and_then(Json::as_u64)
-                .is_some_and(|max| array.len() > max as usize)
-        {
-            return Err(EngineError::msg(format!(
-                "{path} exceeds its item count limits"
-            )));
-        }
-        if let Some(items) = schema.get("items") {
-            for (index, item) in array.iter().enumerate() {
-                validate_component_schema(item, items, &format!("{path}[{index}]"))?;
-            }
-        }
-    }
-    if let Some(number) = value.as_f64() {
-        if schema
-            .get("minimum")
-            .and_then(Json::as_f64)
-            .is_some_and(|min| number < min)
-            || schema
-                .get("maximum")
-                .and_then(Json::as_f64)
-                .is_some_and(|max| number > max)
-            || schema
-                .get("exclusiveMinimum")
-                .and_then(Json::as_f64)
-                .is_some_and(|min| number <= min)
-        {
-            return Err(EngineError::msg(format!(
-                "{path} is outside its numeric limits"
-            )));
-        }
-    }
-    if let Some(object) = value.as_object() {
-        if let Some(required) = schema.get("required").and_then(Json::as_array) {
-            if required
-                .iter()
-                .filter_map(Json::as_str)
-                .any(|key| !object.contains_key(key))
-            {
-                return Err(EngineError::msg(format!(
-                    "{path} is missing a required property"
-                )));
-            }
-        }
-        let properties = schema.get("properties").and_then(Json::as_object);
-        if let Some(name_schema) = schema.get("propertyNames") {
-            for key in object.keys() {
-                validate_component_schema(
-                    &Json::String(key.clone()),
-                    name_schema,
-                    &format!("{path} property name"),
-                )?;
-            }
-        }
-        for (key, child) in object {
-            if let Some(child_schema) = properties.and_then(|properties| properties.get(key)) {
-                validate_component_schema(child, child_schema, &format!("{path}.{key}"))?;
-                continue;
-            }
-            match schema.get("additionalProperties") {
-                Some(Json::Bool(false)) => {
-                    return Err(EngineError::msg(format!(
-                        "{path}.{key} is not a supported property"
-                    )))
-                }
-                Some(additional) if additional.is_object() => {
-                    validate_component_schema(child, additional, &format!("{path}.{key}"))?
-                }
-                _ => {}
-            }
-        }
-    }
-    Ok(())
-}
-
+/// The same acceptance code is compiled into the frontend WebAssembly module.
 pub fn validate_spec(spec: &Json) -> EngineResult<()> {
-    let object = spec
-        .as_object()
-        .ok_or_else(|| EngineError::msg("presentation spec must be a JSON object"))?;
-    if object.len() != 2 || !object.contains_key("root") || !object.contains_key("elements") {
+    if spec.get("version").is_some() {
         return Err(EngineError::msg(
-            "presentation spec must contain only root and elements",
+            "Saved presentation programs must be compiled to root/elements first",
         ));
     }
-    if serde_json::to_vec(spec).map_or(true, |bytes| bytes.len() > MAX_SPEC_BYTES) {
-        return Err(EngineError::msg(
-            "presentation spec exceeds its storage limit",
-        ));
-    }
-    let root = spec["root"]
-        .as_str()
-        .filter(|root| !root.is_empty())
-        .ok_or_else(|| EngineError::msg("presentation root is missing"))?;
-    let elements = spec["elements"]
-        .as_object()
-        .filter(|elements| !elements.is_empty() && elements.len() <= 240)
-        .ok_or_else(|| {
-            EngineError::msg("presentation elements are missing or exceed their limit")
-        })?;
-    if elements
-        .get(root)
-        .and_then(|element| element.get("type"))
-        .and_then(Json::as_str)
-        != Some("Document")
-    {
-        return Err(EngineError::msg("presentation root must be Document"));
-    }
-    let catalog: Json =
-        serde_json::from_str(include_str!("../../resources/presentation-catalog.json"))?;
-    let components = catalog["componentNames"]
-        .as_array()
-        .ok_or_else(|| EngineError::msg("presentation component catalog is unavailable"))?;
-    let mut parents = HashSet::new();
-    for (key, element) in elements {
-        if key.len() > 80
-            || !key.chars().enumerate().all(|(index, ch)| {
-                ch.is_ascii_alphanumeric() || ch == '_' || ch == '-' && index > 0
-            })
-            || !key
-                .chars()
-                .next()
-                .is_some_and(|ch| ch.is_ascii_alphabetic())
-        {
-            return Err(EngineError::msg(
-                "presentation contains an invalid element key",
-            ));
-        }
-        let kind = element
-            .get("type")
-            .and_then(Json::as_str)
-            .ok_or_else(|| EngineError::msg("presentation element is missing a type"))?;
-        if !components.iter().any(|name| name.as_str() == Some(kind))
-            || !element.get("props").is_some_and(Json::is_object)
-        {
-            return Err(EngineError::msg(
-                "presentation uses an unknown component or invalid props",
-            ));
-        }
-        let prop_schema = catalog["componentSchemas"][kind]
-            .as_object()
-            .map(|_| &catalog["componentSchemas"][kind])
-            .ok_or_else(|| EngineError::msg("presentation component schemas are unavailable"))?;
-        validate_component_schema(
-            &element["props"],
-            prop_schema,
-            &format!("elements.{key}.props"),
-        )?;
-        let children = element
-            .get("children")
-            .and_then(Json::as_array)
-            .ok_or_else(|| EngineError::msg("presentation children must be an array"))?;
-        for child in children {
-            let child = child
-                .as_str()
-                .ok_or_else(|| EngineError::msg("presentation child references must be strings"))?;
-            if !elements.contains_key(child) || !parents.insert(child.to_owned()) {
-                return Err(EngineError::msg(
-                    "presentation contains a missing or multiply attached child",
-                ));
-            }
-        }
-        if element
-            .get("repeat")
-            .is_some_and(|repeat| !repeat.is_null())
-        {
-            return Err(EngineError::msg("presentation repetition is not enabled"));
-        }
-    }
-    if parents.contains(root) {
-        return Err(EngineError::msg("presentation root cannot have a parent"));
-    }
-    let mut visited = HashSet::new();
-    let mut pending = vec![root.to_owned()];
-    while let Some(key) = pending.pop() {
-        if !visited.insert(key.clone()) {
-            return Err(EngineError::msg("presentation contains a cycle"));
-        }
-        pending.extend(
-            elements[&key]["children"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(Json::as_str)
-                .map(str::to_owned),
-        );
-    }
-    if visited.len() != elements.len() {
-        return Err(EngineError::msg(
-            "every presentation element must be reachable from the root",
-        ));
-    }
-    Ok(())
+    fella_presentation_contract::structure(spec)
+        .map(|_| ())
+        .map_err(EngineError::msg)
+}
+
+fn validate_saved_presentation(spec: &Json, run: &AnalysisTurn) -> EngineResult<()> {
+    let results = eligible_results(run)?;
+    let results = serde_json::to_value(results)?;
+    fella_presentation_contract::accept(spec, results.as_array().unwrap(), true)
+        .map(|_| ())
+        .map_err(EngineError::msg)
 }
 
 fn store_unlocked(data_dir: &Path) -> EngineResult<Connection> {
@@ -922,10 +657,11 @@ pub fn create_from_run(
 ) -> EngineResult<ArtifactRecord> {
     validate_workspace(workspace)?;
     let title = validate_title(title)?;
-    validate_spec(spec)?;
+    let spec = fella_presentation_contract::structure(spec).map_err(EngineError::msg)?;
+    validate_spec(&spec)?;
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
     let run = load_run(data_dir, workspace, run_id)?;
-    eligible_results(&run)?;
+    validate_saved_presentation(&spec, &run)?;
     let db = store_unlocked(data_dir)?;
     let now = now_ms();
     let artifact = ArtifactRecord {
@@ -1024,6 +760,7 @@ fn resolve_record_unlocked(
 ) -> EngineResult<ResolvedArtifact> {
     let revision = revision(&artifact, number.unwrap_or(artifact.current_revision))?.clone();
     let run = load_run(data_dir, &artifact.workspace, &revision.run_id)?;
+    validate_saved_presentation(&revision.spec, &run)?;
     let results = eligible_results(&run)?;
     Ok(ResolvedArtifact {
         artifact,
@@ -1349,8 +1086,9 @@ pub fn revise(
     let base = revision(&record, base_revision)?;
     let run_id = run_id.unwrap_or(&base.run_id);
     let spec = spec.unwrap_or_else(|| base.spec.clone());
+    let spec = fella_presentation_contract::structure(&spec).map_err(EngineError::msg)?;
     validate_spec(&spec)?;
-    eligible_results(&load_run(data_dir, workspace, run_id)?)?;
+    validate_saved_presentation(&spec, &load_run(data_dir, workspace, run_id)?)?;
     let next = record
         .revisions
         .last()
@@ -1743,7 +1481,7 @@ pub fn studio_seed_northstar_sample_report(
         .as_ref()
         .ok_or_else(|| EngineError::msg("Northstar sample analysis has no Report layout"))?;
     validate_spec(spec)?;
-    eligible_results(run)?;
+    validate_saved_presentation(spec, run)?;
 
     let _guard = analysis_store::lifecycle_lock(data_dir)?;
     let mut db = store_unlocked(data_dir)?;

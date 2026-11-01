@@ -1,5 +1,6 @@
 import type { PresentationSpec, BoundResult, PresentationExport, PresentationState } from './types';
 import { exactValue, filteredRows, requireResult, resolvePresentationState, validateResults } from './results';
+import { isPresentationVisible, type DisplayFilter } from './interactions';
 import { validatePresentation } from './validate';
 import { formatPresentationValue, presentationColumnLabel, type PresentationFormatOptions } from './format';
 
@@ -64,9 +65,11 @@ export function exportPresentation(spec: PresentationSpec, results: BoundResult[
 		return { markdown: `The saved presentation could not be validated. Exact saved results are included below.\n\n${fallback}`, warnings: validation.issues.map((issue) => issue.message), resultIds: [] };
 	}
 	const state = resolvePresentationState(validation.spec, options.state ?? {}, results, options.interactionScope);
-	const elements = validation.spec.elements as Record<string, { type: string; props: Record<string, unknown>; children: string[] }>;
+	const elements = validation.spec.elements as Record<string, { type: string; props: Record<string, unknown>; children: string[]; visible?: unknown }>;
 	function render(key: string): string {
-		const node = elements[key]; const { type, props, children } = node;
+		const node = elements[key];
+		if(!isPresentationVisible(node,state))return '';
+		const { type, props, children } = node;
 		const childText = () => children.map(render).filter(Boolean).join('\n\n');
 		if (type === 'Document') return childText();
 		if (type === 'Title') return `${'#'.repeat(Math.min(4, Number(props.level ?? 2) + 1))} ${escape(props.content)}`;
@@ -92,14 +95,14 @@ export function exportPresentation(spec: PresentationSpec, results: BoundResult[
 		}
 		if (type === 'Table') {
 			const result = requireResult(results, String(props.resultId)); referenced.add(result.id);
-			const indices = filteredRows(result, state);
+			const indices = filteredRows(result, state, typeof props.interactionGroup==='string'?props.interactionGroup:undefined, props.linkBy as string[]|undefined, options.interactionScope, props.filters as DisplayFilter[]|undefined);
 			const fields = (props.fields as string[] | undefined) ?? result.columns;
 			const formats = (props.columnFormats as Record<string, PresentationFormatOptions> | undefined) ?? {};
 			return `${props.title ? `#### ${escape(props.title)}\n\n` : ''}${scope(result)}\n\n${resultRows(result, indices, fields, formats)}`;
 		}
 		if (type === 'Chart') {
 			const result = requireResult(results, String(props.resultId)); referenced.add(result.id);
-			const indices = filteredRows(result, state);
+			const indices = filteredRows(result, state, typeof props.interactionGroup==='string'?props.interactionGroup:undefined, props.linkBy as string[]|undefined, options.interactionScope, props.filters as DisplayFilter[]|undefined);
 			const snapshot = options.chartSnapshots?.[key];
 			const chart = textFigure(props.spec as Record<string, unknown>, result, indices);
 			if (snapshot && /^(?:[A-Za-z0-9_-]+\/)*[A-Za-z0-9_.-]+\.(?:png|svg)$/i.test(snapshot) && !snapshot.split('/').includes('..')) return `${props.title ? `#### ${escape(props.title)}\n\n` : ''}![${escape(props.title ?? 'Chart')}](${`./${snapshot}`})\n\n${scope(result)}`;

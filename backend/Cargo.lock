@@ -680,6 +680,7 @@ dependencies = [
  "calamine",
  "csv",
  "duckdb",
+ "fella-presentation-contract",
  "futures-util",
  "getrandom 0.4.3",
  "log",
@@ -695,6 +696,14 @@ dependencies = [
  "tokio",
  "walkdir",
  "wasmi",
+]
+
+[[package]]
+name = "fella-presentation-contract"
+version = "0.1.0"
+dependencies = [
+ "regex",
+ "serde_json",
 ]
 
 [[package]]

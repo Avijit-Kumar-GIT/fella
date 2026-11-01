@@ -1,4 +1,6 @@
 import { z } from 'zod/v4';
+import { contractMetadataSchema } from './authoring';
+import { chartSchema } from './chart-schema';
 import { PRESENTATION_LIMITS as limits } from './types';
 
 const label = z.string().min(1).max(240);
@@ -7,6 +9,7 @@ const interactionGroup = z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,79}$/);
 const content = z.string().min(1).max(limits.text);
 const selectOptions = z.array(z.object({ value: z.string().max(240), label: z.string().max(240) }).strict()).min(1).max(200);
 const columnFormat = z.object({ label: label.optional(), format: z.enum(['number', 'currency', 'percent', 'compact']).optional(), unit: z.string().max(40).optional(), decimals: z.number().int().min(0).max(8).optional() }).strict();
+const filters = z.array(z.object({ stateKey: label, field: label }).strict()).max(32);
 
 export type CardTone = 'plain' | 'quiet' | 'accent';
 export const CARD_TONE_ALIASES: Readonly<Record<string, CardTone>> = Object.freeze({
@@ -25,7 +28,7 @@ export function normalizeCardTone(value: unknown): CardTone {
 export const componentDefinitions = {
 	Document: {
 		description: 'The root analytical answer. Organize it into a useful reading order.',
-		props: z.object({}).strict(), slots: ['default'] as const
+		props: z.object({ contract: contractMetadataSchema.optional() }).strict(), slots: ['default'] as const
 	},
 	Card: {
 		description: 'A restrained surface grouping related information. Use sparingly, not around every element.',
@@ -100,13 +103,13 @@ export const componentDefinitions = {
 	},
 	Table: {
 		description: 'A result-bound table for exact records, lookups, and detailed comparisons. For linked filtering, use the same interactionGroup on compatible components and include only visible raw fields in linkBy. Do not choose a table by default when a chart better explains a pattern.',
-		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional(), title: label.optional(), columnFormats: z.record(label, columnFormat).optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional() }).strict().superRefine((props, context) => {
+		props: z.object({ resultId, fields: z.array(label).min(1).max(100).optional(), title: label.optional(), columnFormats: z.record(label, columnFormat).optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional(), filters: filters.optional() }).strict().superRefine((props, context) => {
 			if (props.linkBy && !props.interactionGroup) context.addIssue({ code: 'custom', message: 'Table linkBy requires an interactionGroup.' });
 		}), slots: [] as const
 	},
 	Chart: {
-		description: 'A flexible, responsive result-bound Vega-Lite visualization. Select a useful form for the task (for example, line or area for a time trend, bar for category comparisons, arc for a small part-to-whole view, or points for relationships), and compose, facet, layer, or add a legend and result-bound tooltip when they clarify the answer. Keep axes, labels, units, and number of series readable. For chart-click filtering, list the displayed categorical fields in linkBy; use the same interactionGroup on semantically compatible charts, tables, and filters. Fella may replay an eligible saved SQL query for exact selected values inside Rust; the presentation cannot query or supply data, change source scope, or define executable transforms.',
-		props: z.object({ resultId, spec: z.record(z.string(), z.unknown()), title: label.optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional() }).strict().superRefine((props, context) => {
+		description: 'A responsive result-bound Vega-Lite visualization with a typed declarative grammar: a unit mark with field encodings, nested layers with inherited parent encodings, a facet with a unit/layer spec, repeat with a child spec, or concat/hconcat/vconcat with child specs. Choose line or area for time trends, bars for comparisons, arcs for a small part-to-whole view, or points for relationships. Use static mark styles, axes, time units, scales, legends, and saved-field tooltips to clarify the answer. Keep labels, units, series and composed views readable. Data, loaders, expressions, transforms, params, and arbitrary config are forbidden. Author top-level filters bind declared local state to saved fields. For chart-click filtering, list displayed categorical fields in linkBy and use the same interactionGroup on compatible components. Authored display controls use saved rows only and do not replay queries.',
+		props: z.object({ resultId, spec: chartSchema, title: label.optional(), interactionGroup: interactionGroup.optional(), linkBy: z.array(label).min(1).max(8).optional(), filters: filters.optional() }).strict().superRefine((props, context) => {
 			if (props.linkBy && !props.interactionGroup) context.addIssue({ code: 'custom', message: 'Chart linkBy requires an interactionGroup.' });
 		}), slots: [] as const
 	},
@@ -115,15 +118,15 @@ export const componentDefinitions = {
 		props: z.object({ resultId, field: label, row: z.number().int().min(0), title: label, maximum: z.number().positive().optional(), detail: z.string().max(1000).optional() }).strict(), slots: [] as const
 	},
 	Tabs: {
-		description: 'A local presentation tab set. Supply one TabPanel child per label in the same order.',
+		description: 'A local presentation tab set. Supply TabPanel children; the host derives its name and labels.',
 		props: z.object({ name: label, labels: z.array(label).min(1).max(12) }).strict(), slots: ['default'] as const
 	},
 	TabPanel: {
-		description: 'One child panel of a Tabs component. index must match its zero-based position.',
+		description: 'One child panel of Tabs. Author props.label; the host derives the panel name and index.',
 		props: z.object({ name: label, index: z.number().int().min(0).max(11) }).strict(), slots: ['default'] as const
 	},
 	ResultFilter: {
-		description: 'An exact-value selector sourced from rows in a saved result. Give it an interactionGroup to link it to compatible components that expose the same field. Fella may replay an eligible read-only SQL result in Rust against the same source revision; unsupported results remain limited to their saved rows. This control never asks the model to query or changes source scope.',
+		description: 'An exact-value selector sourced from rows in a saved result. Give it an interactionGroup to link it to compatible components that expose the same field. Authored display controls are limited to saved rows; no query is replayed. This control never asks the model to query or changes source scope.',
 		props: z.object({ resultId, field: label, name: label, title: label.optional(), interactionGroup: interactionGroup.optional() }).strict(), slots: [] as const
 	},
 	FollowUp: {

@@ -1,24 +1,26 @@
 import { z } from 'zod/v4';
-import { presentationCatalog } from './library';
+import { presentationCatalog } from './catalog';
 import { componentDefinitions } from './schemas';
-import { PRESENTATION_VERSION, type BoundResult } from './types';
+import { authoringSchema } from './authoring';
+import { PRESENTATION_LIMITS, PRESENTATION_VERSION, type BoundResult } from './types';
 
-export const PRESENTATION_DESIGN_GUIDANCE = `Choose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.
+export const PRESENTATION_DESIGN_GUIDANCE = `Choose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Do not use a table merely because analysis returned rows. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.
 
 Choose chart forms by the analytical task, not by a default template: when the user asks for a trend or change across three or more ordered time periods and the result has a numeric measure, make a chart the primary view unless that would mislead; line charts make observed values easy to compare, while area charts emphasize continuous volume or accumulated magnitude. Bars compare categories or rank values (use horizontal bars for long labels); pie or donut charts show a small, meaningful part-to-whole breakdown, not time trends or long rankings; points show relationships or distributions. Group, stack, facet, or layer only when it clarifies a real comparison and the scales remain interpretable. Other safe Vega-Lite compositions are welcome when they better fit the result. Use a tooltip for useful exact values, a legend only when it helps decode multiple series, and axis titles or captions for units and scope. Keep labels readable and avoid unnecessary precision. Do not imitate unsupported chart forms with custom executable expressions.
 
 Use Fella's registered components and design. Prefer a clear reading order, consistent spacing and type hierarchy, restrained surfaces, accessible labels, the Fella chart-color palette, and responsive layouts. Avoid cramped equal-weight cards, horizontal overflow, decorative controls, and repeated content. Keep caveats near affected values. Never imply completeness when a supplied result is incomplete.`;
 
 export const PRESENTATION_RULES = [
-	'Output one JSON object matching the supplied schema: {"root":"element-key","elements":{"element-key":{"type":"Component","props":{},"children":[]}}}. The root element must be Document. Children are references to other element keys, never nested objects. Every referenced key must exist, every key must be reachable from root, and keys must be unique.',
-	'Compose an answer for this question; the component catalog is a vocabulary, not a template. Select a presentation based on the actual question and results. Do not use a table merely because analysis returned rows. Use charts when they reveal a meaningful pattern, change, ranking, distribution, or relationship.',
-	'Analytical numbers must remain bound to the supplied saved result. Metric and Progress require exact resultId, field, and zero-based row references. Table and Chart require a supplied resultId. Never invent result IDs or fields, author replacement datasets, or use copied numeric values as analytical facts in Metric, Progress, chart data, or labels.',
-	'Chart.spec is a flexible Vega-Lite presentation of the bound result. Bind every encoding—including tooltip fields—to columns in that result. Choose an appropriate chart form and composition for the question; do not default to a table or repeat one chart form. Do not include data, datasets, URL loaders, JavaScript, signal expressions, or executable transforms.',
-	'Table fields must exist in the bound result. Numeric formats change display only; exact saved values and source evidence remain authoritative. For incomplete results, keep the limitation visible and never imply full-dataset coverage.',
-	'Controls are presentation-only. Give each control a stable stateKey; changing it may only alter the visible presentation. ResultFilter choices come from its declared saved result. To enable chart or table cross-filtering, give compatible components the same interactionGroup and declare their raw, visible result fields in linkBy. Fella may replay an eligible saved read-only SQL query for an exact selected value, but only the Rust host can do so, only against the same mounted source revision and source-selection boundary, and never through the model. Unsupported results keep using their saved rows with a visible limitation. FollowUp and Button follow_up actions are explicit user-clicked requests; they cannot run tools, queries, code, IPC, or external navigation.',
-	'Use only registered component names and documented props. Do not add arbitrary styles, HTML, scripts, URLs, unknown fields, or hidden behavior. Each element must include type, props, and children; leaves use children: [].',
-	'Use Tabs with one TabPanel child per label, in the same order, with matching zero-based indices. Keep labels concise. Avoid unnecessary tabs, dividers, spacers, cards, and duplicate representations.',
-	PRESENTATION_DESIGN_GUIDANCE
+ 'Author a nested tree: {"version":"fella-ui-1","intent":"trend","capabilities":["display"],"state":{},"root":{"type":"Document","children":[{"type":"Title","props":{"content":"Answer"}}]}}. The host generates element IDs, child references and empty leaf children. Use optional explicit id only to preserve identity across revisions.',
+ 'Intent describes the user goal (lookup, comparison, trend, distribution, relationship, exploration, explanation), not a layout template. Choose components that clarify this question. A plain canonical answer without a presentation is valid; never add decorative interactivity.',
+ 'Every analytical value binds to a supplied saved resultId and field. Metric and Progress also use a zero-based row. Chart encodings and Table fields reference only saved columns. No datasets, queries, code, network access, executable expressions or arbitrary chart transforms. Chart.spec must match its full typed schema, including supported layer, facet, repeat and concat forms.',
+ 'For local controls declare state: {"view":{"type":"enum","options":[{"value":"chart","label":"Chart"},{"value":"table","label":"Exact values"}],"default":"chart","persistence":"viewer"}}. Boolean state uses type:boolean, default:boolean, persistence:viewer. Bind Select, SegmentedControl or Checkbox using bind:{state:"view"}; the host derives stateKey, options and defaults.',
+ 'Every state must have a producer and a visible or filtering consumer. Conditional nodes use when:{state:"view",equals:"chart"}. Chart/Table filtering uses filters:[{state:"region",field:"region"}]. Filter enum values must match exact saved column values; the explicit $all choice means all saved rows. Filters are local saved-row display operations, not SQL or a model call. Defaults must be valid, modest, visible and reversible. Selections are viewer state; saved defaults and export snapshots retain explicit state.',
+ 'Tabs need only TabPanel children with props.label and nested children; an explicit Tabs id preserves selection identity. Do not author labels arrays, panel names or indices; the host derives them. Keep tabs useful and accessible.',
+ 'The display capability permits presentation and local state only. Declare follow_up as well only when including FollowUp or Button follow_up. Those actions require an explicit user click and remain subject to host policy. Scenario, query, code and network capabilities are not implemented; do not request them or imitate hypothetical values as observed evidence.',
+ 'Use only registered components, props, bindings and typed chart settings. Host defaults provide Fella styling, spacing, sizing and routine formatting. Preserve coverage limitations and source caveats. Existing flat root/elements presentations are an internal compatibility format, not the preferred authoring language.',
+ `Shared resource limits: ${JSON.stringify(PRESENTATION_LIMITS)}. Chart strings cannot contain URL/resource schemes, url(...), or script/svg/iframe markup. Numeric format strings allow at most four consecutive digits to bound label allocations. Facet/repeat panels, composed pixels and row/view work are cumulative conservative budgets. Linked chart fields must be encoded as raw unaggregated values. Saved-row options must exist in their bound result. These semantic constraints are checked before acceptance.`,
+ PRESENTATION_DESIGN_GUIDANCE
 ];
 
 export function presentationSchema(): object {
@@ -31,8 +33,9 @@ export function presentationComponentSchemas(): Record<string, object> {
 
 export function presentationPrompt(results: Pick<BoundResult, 'id' | 'columns' | 'row_count' | 'complete'>[] = []): string {
 	const componentSchemas = presentationComponentSchemas();
+	const author = authoringSchema(componentSchemas, Object.fromEntries(Object.entries(componentDefinitions).map(([name, definition]) => [name, definition.slots]))) as any;
 	const components = Object.entries(componentDefinitions).map(([name, definition]) => {
-		return `${name}: ${definition.description}\nProps schema: ${JSON.stringify(componentSchemas[name])}`;
+		return `${name}: ${definition.description}\nAuthor props: ${Object.keys(author.$defs[`props_${name}`].properties ?? {}).join(', ') || '(none)'}. Full types are in the supplied authoring schema.`;
 	});
 	return [
 		`Fella analytical answer output format: json-render spec ${PRESENTATION_VERSION}.`,
@@ -48,6 +51,10 @@ export function presentationManifest() {
 	return {
 		version: PRESENTATION_VERSION,
 		componentNames: Object.keys(componentDefinitions),
+		authorSchema: authoringSchema(presentationComponentSchemas(), Object.fromEntries(Object.entries(componentDefinitions).map(([name,def])=>[name,def.slots]))),
+		slots: Object.fromEntries(Object.entries(componentDefinitions).map(([name, definition]) => [name, definition.slots])),
+		limits: PRESENTATION_LIMITS,
+		capabilities: { display: true, follow_up: true, scenario: false, query: false, code: false, network: false },
 		schema,
 		componentSchemas: presentationComponentSchemas(),
 		prompt: presentationPrompt(),

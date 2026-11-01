@@ -513,9 +513,8 @@ pub fn validate_context(context: &Json) -> EngineResult<()> {
     Ok(())
 }
 
-#[cfg(test)]
 // Contract v1.1: user-approved Title fixture correction (text -> content).
-
+#[cfg(test)]
 mod tests {
     use super::super::artifacts::ArtifactRevision;
     use super::*;

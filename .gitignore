@@ -60,3 +60,6 @@ vite.config.ts.timestamp-*
 /.claude
 /CLAUDE.md
 /skills-lock.json
+
+# Built from the shared native/WebAssembly UI contract during dev/build/check.
+/src/lib/presentation/generated/*.wasm

@@ -40,6 +40,11 @@ export const PRESENTATION_LIMITS = {
 	resultCharacters: 8_000_000,
 	chartNodes: 6_000,
 	chartLayers: 24,
+	chartPixels: 8_000_000,
+	chartWork: 500_000,
+	numericFormatDigits: 4,
+	jsonNodes: 20_000,
+	jsonDepth: 128,
 	facets: 60,
 	text: 16_000
 } as const;

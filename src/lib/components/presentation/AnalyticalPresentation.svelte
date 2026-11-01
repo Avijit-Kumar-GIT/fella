@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { CatalogRenderer } from '@json-render/svelte';
+	import { controlValueAllowed, displayPresentation } from '../../presentation/interactions';
 	import { validatePresentation } from '../../presentation/validate';
 	import { evaluatePresentationAction } from '../../presentation/runtime';
 	import { resolvePresentationState, sanitizeState, validateResults, type FilterSelection, type RowFilterValue } from '../../presentation/results';
@@ -42,6 +43,9 @@
 
 	function queryFilters(resultId: string): ReportFilterValue[] {
 		if (!onrequery || !interactionScope) return [];
+		// Authored display capability is strictly a view over saved rows. Keep
+		// the older host-controlled report replay path isolated to legacy specs.
+		if (validation.spec?.elements[validation.spec.root].props.contract) return [];
 		const result = safeResults.find(item => item.id === resultId);
 		if (!result) return [];
 		const linked = new Map<string, Set<string>>();
@@ -83,7 +87,7 @@
 		if (next !== previousSpec) {
 			previousSpec = next;
 			presentationState = incoming;
-		} else if (JSON.stringify(incoming) !== JSON.stringify(presentationState)) presentationState = incoming;
+		} else if (untrack(() => JSON.stringify(incoming) !== JSON.stringify(presentationState))) presentationState = incoming;
 	});
 
 	$effect(() => {
@@ -127,6 +131,7 @@
 	}
 
 	function update(key: string, value: unknown): void {
+		if(key.startsWith('control:') && !controlValueAllowed(spec,key.slice(8),value)){ actionError='This value is not permitted by the display control.'; return; }
 		commit({ ...effectiveState, [key]: value });
 	}
 
@@ -163,8 +168,8 @@
 			onaction?.({ type: 'continue', message: safe.message, state: effectiveState });
 			return;
 		}
-		const canSet = Object.values(spec.elements).some((element) => ['Select', 'SegmentedControl', 'Checkbox'].includes(element.type) && element.props.stateKey === safe.stateKey);
-		if (!canSet) { actionError = 'This action can only update a control in this presentation.'; return; }
+		const canSet = Boolean((spec.elements[spec.root].props as any).contract?.state?.[safe.stateKey]) || Object.values(spec.elements).some((element) => ['Select', 'SegmentedControl', 'Checkbox'].includes(element.type) && element.props.stateKey === safe.stateKey);
+		if (!canSet || !controlValueAllowed(spec,safe.stateKey,safe.value)) { actionError = 'This action can only update a control in this presentation.'; return; }
 		commit({ ...effectiveState, [`control:${safe.stateKey}`]: safe.value });
 	}
 
@@ -188,7 +193,7 @@
 <div class="analytical-presentation" data-presentation-version="fella-json-render-v1">
 	{#if validation.valid && validation.spec}
 		{#if showActiveFilters && activeFilters.length}<div class="active-filter-bar" aria-label="Active report filters"><span class="filter-summary">Filtered by</span>{#each activeFilters as item (item.key)}<button class="filter-chip" aria-label={`Remove filter ${item.filter.field}: ${item.filter.value}`} onclick={() => removeFilter(item.key)}>{item.filter.field}<strong>{item.filter.value}</strong><Icon name="x" size={12} /></button>{/each}<button class="filter-reset" onclick={clearFilters}>Reset</button></div>{/if}
-		<CatalogRenderer spec={validation.spec} registry={presentationRegistry} state={effectiveState} />
+		<CatalogRenderer spec={displayPresentation(validation.spec,effectiveState)} registry={presentationRegistry} state={effectiveState} />
 		{#if actionError}<p class="action-error" role="status">{actionError}</p>{/if}
 		{#if requeryStatus}<p class="requery-status" role="status">{requeryStatus}</p>{/if}
 	{:else}
