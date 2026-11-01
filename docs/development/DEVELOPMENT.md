@@ -25,15 +25,28 @@ pnpm install
 pnpm electron:dev
 ```
 
-This builds the Svelte frontend and Rust sidecar, starts Vite, then launches
-Electron. It is a single-terminal workflow on Windows, macOS, and Linux. For a
-renderer-only development server, run `pnpm dev` and launch Electron in a
-second terminal with `FELLA_ELECTRON_URL=http://127.0.0.1:1420` set.
+This prepares the shared presentation contract, incrementally builds the Rust
+development engine, starts Vite, then launches Electron. It does not build the
+production frontend or run release LTO. It is a single-terminal workflow on
+Windows, macOS, and Linux. For a renderer-only development server, run `pnpm dev`;
+the Electron launcher can reuse it with `FELLA_ELECTRON_URL=http://127.0.0.1:1420`.
 
-The Electron launcher starts Vite directly after that build, avoiding a second
+The Electron launcher starts Vite directly after preparation, avoiding a second
 contract-generation/build hook. It allows up to two minutes for cold dependency
 optimization and reports progress every ten seconds while waiting. An early
 Vite exit or a server belonging to another checkout still fails explicitly.
+
+`pnpm electron:prepare:dev` runs only development preparation, useful for timing
+or rebuilding the engine. The launcher explicitly selects the resulting debug
+binary; it does not accidentally run an older copied release engine. Set
+`FELLA_ENGINE_PATH` to intentionally use a different existing engine. Development
+builds retain line-level debug information and optimized bundled SQLite. Use
+`pnpm electron:run` or `pnpm electron:package` for release performance and
+packaging; these retain the production frontend and optimized release engine.
+
+Catalog generation checks source and output content hashes before loading Vite.
+Unchanged inputs reuse a local ignored cache; missing or altered resources force
+normal generation and validation. `node scripts/generate-presentation-catalog.mjs --force` bypasses the cache. The Wasm build still uses Cargo's dependency checks.
 
 The Rust backend can be tested without opening the UI:
 

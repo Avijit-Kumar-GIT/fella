@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { prepareDev } from './prepare-dev.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const rootKey = createHash('sha256')
@@ -129,9 +130,12 @@ async function waitForVite(url, timeoutMs = 120000) {
 
 async function main() {
 	try {
+		const enginePath = await prepareDev();
+		if (stopping) return;
 		const endpoint = await selectDevEndpoint();
 		const env = {
 			...process.env,
+			FELLA_ENGINE_PATH: enginePath,
 			FELLA_ELECTRON_URL: endpoint.url,
 			FELLA_DEV_ROOT_KEY: rootKey,
 			FELLA_VITE_PORT: String(endpoint.port)

@@ -63,3 +63,4 @@ vite.config.ts.timestamp-*
 
 # Built from the shared native/WebAssembly UI contract during dev/build/check.
 /src/lib/presentation/generated/*.wasm
+/src/lib/presentation/generated/catalog-cache.json
