@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { onDestroy, untrack } from 'svelte';
 	import { requestArtifactChange } from '$lib/commands';
 	import { session } from '$lib/session.svelte';
 	import type { Message } from '$lib/types';
@@ -9,7 +9,6 @@
 	import Icon from './Icon.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalPresentation from './presentation/AnalyticalPresentation.svelte';
-	import ArtifactView from './ArtifactView.svelte';
 	import { ensureAnalyticalOutput, outputJobs, saveOutputToStudio } from '$lib/analytical-output.svelte';
 	import { transcriptPresentation } from '$lib/presentation/snapshot';
 	let { message, onopeninvestigationrun }: { message: Message; onopeninvestigationrun?: (turnId: string) => void } = $props();
@@ -18,6 +17,11 @@
 	let loading = $state(false);
 	let saving = $state(false);
 	let reviewing = $state(false);
+	let ReviewView = $state<typeof import('./ArtifactView.svelte').default | null>(null);
+	let reviewError = $state('');
+	let inspectSequence = 0;
+	let destroyed = false;
+	onDestroy(() => { destroyed = true; inspectSequence++; });
 	let copied = $state(false);
 	async function copyAnswer(): Promise<void> {
 		try { await navigator.clipboard.writeText(message.answer?.text ?? message.text); copied = true; }
@@ -25,13 +29,32 @@
 	}
 	async function inspect(review = false): Promise<void> {
 		if (!workspace || workspace !== session.catalog.workspace) return;
+		const request = ++inspectSequence;
+		if (review && reviewing) { reviewing = false; reviewError = ''; return; }
+		if (!review) reviewing = false;
+		const source = message;
+		const owner = workspace;
+		const turn = turnId;
+		const current = () => !destroyed && request === inspectSequence && message === source
+			&& workspace === owner && turnId === turn
+			&& session.catalog.workspace === owner;
+		if (review) { reviewing = true; reviewError = ''; }
 		try {
-			const output = resolved?.run.id === turnId ? resolved : await ensureAnalyticalOutput(message, workspace);
-			if (!output) { error = 'Could not open the saved result.'; return; }
+			const output = resolved?.run.id === turn ? resolved : await ensureAnalyticalOutput(source, owner);
+			if (!current()) return;
+			if (!output) throw new Error('Could not open the saved result.');
 			resolved = output;
-			if (review) reviewing = !reviewing;
+			if (review) {
+				const component = ReviewView ?? (await import('./ArtifactView.svelte')).default;
+				if (current()) ReviewView = component;
+			}
 			else { session.setContentLayout('notebook'); session.openResultTool(output.artifact.id, output.revision.revision, output.artifact.title); }
-		} catch (cause) { error = cause instanceof Error ? cause.message : String(cause); }
+		} catch (cause) {
+			if (!current()) return;
+			const detail = cause instanceof Error ? cause.message : String(cause);
+			if (review) { reviewing = false; reviewError = `Review could not be opened: ${detail}`; }
+			else error = detail;
+		}
 	}
 	let sequence = 0;
 	let retry = $state(0);
@@ -39,6 +62,13 @@
 	let turnId = $derived(message.answer?.turn_id);
 	let snapshot = $derived(transcriptPresentation(message));
 	let display = $derived(snapshot ?? (resolved && resolved.run.id === turnId ? { spec: resolved.revision.spec, results: resolved.results } : null));
+	$effect(() => {
+		// A replacement answer invalidates pending review work, even in a reused component.
+		// Resolving an uncached answer may assign its artifact revision itself;
+		// that bookkeeping must not cancel the review the user just requested.
+		void message; void workspace; void turnId; void session.catalog.workspace;
+		return () => { inspectSequence++; reviewing = false; reviewError = ''; };
+	});
 
 	$effect(() => {
 		const id = message.artifact_id;
@@ -124,7 +154,11 @@
 			</DropdownMenu.Portal>
 		</DropdownMenu.Root>
 	</div>
-	{#if reviewing && resolved}<ArtifactView {resolved} reviewOnly autoCompare onrequestchange={requestArtifactChange} onadopted={output => { resolved = output; reviewing = false; }} />{/if}
+	{#if reviewError}<p class="view-note" role="status">{reviewError}</p>{/if}
+	{#if reviewing}
+		{#if ReviewView && resolved}<ReviewView {resolved} reviewOnly autoCompare onrequestchange={requestArtifactChange} onadopted={output => { resolved = output; reviewing = false; }} />
+		{:else}<p class="view-note" role="status">Opening review…</p>{/if}
+	{/if}
 </section>
 
 <style>

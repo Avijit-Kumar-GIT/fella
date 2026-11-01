@@ -1,15 +1,12 @@
 <script lang="ts">
 	import { onMount, untrack } from 'svelte';
-	import CommandPalette from '$lib/components/CommandPalette.svelte';
 	import CompanionPane from '$lib/components/CompanionPane.svelte';
 	import Composer from '$lib/components/Composer.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import Logo from '$lib/components/Logo.svelte';
 	import Sidebar from '$lib/components/Sidebar.svelte';
-	import SettingsView from '$lib/components/SettingsView.svelte';
 	import Titlebar from '$lib/components/Titlebar.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
-	import WorkspaceView from '$lib/components/WorkspaceView.svelte';
 	import WorkspaceFilesList from '$lib/components/WorkspaceFilesList.svelte';
 	import WorkspaceSourceView from '$lib/components/WorkspaceSourceView.svelte';
 	import StudioDetailsView from '$lib/components/StudioDetailsView.svelte';
@@ -422,7 +419,15 @@
 			<main>
 				<div class="main-row">
 					{#if activeView === 'settings'}
-						<div class="settings-workspace"><SettingsView /></div>
+						<div class="settings-workspace">
+							{#await import('$lib/components/SettingsView.svelte')}
+								<p role="status">Opening settings…</p>
+							{:then module}
+								<module.default />
+							{:catch}
+								<p role="alert">Settings could not be opened.</p>
+							{/await}
+						</div>
 					{:else}
 						<WorkspacePanelLayout
 							open={showRightPane}
@@ -444,13 +449,17 @@
 								{#if session.workspaceSection === 'files'}
 									<WorkspaceFilesList folder={selectedFolder} selected={selectedSource} onselect={(source) => { selectedSource = source; fileInspectorOpen = true; }} />
 								{:else if session.workspaceSection === 'reports'}
-									<WorkspaceView hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
+									{#await import('$lib/components/WorkspaceView.svelte') then module}
+										<module.default hideToolBar expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} />
+									{:catch}<p role="alert">Reports could not be opened.</p>{/await}
 								{/if}
 								</div>
 							{/snippet}
 							{#snippet tools()}
 								{#if session.workspaceSection === 'chat' && scopedWorkspaceActive}
-									<WorkspaceView expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
+									{#await import('$lib/components/WorkspaceView.svelte') then module}
+										<module.default expanded={toolsExpanded} onexpand={() => (toolsExpanded = !toolsExpanded)} onasksource={askAboutSource} defaultInspector />
+									{:catch}<p role="alert">The Investigation pane could not be opened.</p>{/await}
 								{:else if session.workspaceSection === 'files' && session.catalog.workspace}
 									<WorkspaceSourceView source={selectedSource} workspacePath={session.catalog.workspace} revision={session.catalog.revision ?? null} onclose={() => (fileInspectorOpen = false)} onask={askAboutSource} />
 								{:else if session.workspaceSection === 'reports'}
@@ -478,7 +487,13 @@
 	</div>
 {/if}
 
-<CommandPalette bind:open={paletteOpen} onpick={pickCommand} />
+{#if paletteOpen}
+	{#await import('$lib/components/CommandPalette.svelte') then module}
+		<module.default bind:open={paletteOpen} onpick={pickCommand} />
+	{:catch}
+		<p role="alert">Search could not be opened.</p>
+	{/await}
+{/if}
 
 <style>
 	.navigation-backdrop { position: absolute; inset: 0; z-index: 39; border: 0; background: rgb(0 0 0 / .25); }
