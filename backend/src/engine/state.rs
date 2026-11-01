@@ -2120,7 +2120,7 @@ impl EngineState {
             return Err(EngineError::msg("too many selected context references"));
         }
         references.iter().map(|reference| {
-            if reference.kind != "artifact" { return Ok(reference.clone()); }
+            if !matches!(reference.kind.as_str(), "artifact" | "report_output") { return Ok(reference.clone()); }
             let workspace = catalog.workspace.as_deref().ok_or(EngineError::NoWorkspace)?;
             let (id, revision) = reference.key.rsplit_once('#').ok_or_else(|| EngineError::msg("select an artifact with an exact revision"))?;
             let revision = revision.parse::<u64>().map_err(|_| EngineError::msg("invalid artifact revision"))?;
@@ -2133,6 +2133,7 @@ impl EngineState {
             }
             let detail = serde_json::json!({
                 "original_question": resolved.run.question,
+                "saved_presentation": if reference.kind == "report_output" { Some(&resolved.revision.spec) } else { None },
                 "source_revision": resolved.run.workspace_revision,
                 "same_source_revision": resolved.run.workspace_revision == catalog.revision,
                 "interpretation": resolved.run.contract,
@@ -2140,7 +2141,7 @@ impl EngineState {
                 "instruction": "User explicitly selected this saved analysis as the target of the current request. Preserve its question and stated meaning except for the requested change. These references explain prior work; inspect current sources and execute a new analysis when changing the calculation. Historical answer prose is not new evidence."
             }).to_string();
             if detail.len() > 24 * 1024 { return Err(EngineError::msg("selected artifact context exceeds its budget")); }
-            Ok(ContextReference { kind: "artifact".into(), key: reference.key.clone(), label: resolved.artifact.title, detail: Some(detail) })
+            Ok(ContextReference { kind: reference.kind.clone(), key: reference.key.clone(), label: resolved.artifact.title, detail: Some(detail) })
         }).collect()
     }
 
@@ -3492,7 +3493,11 @@ impl EngineState {
                 "analysis turn {} was not persisted: {error}",
                 answer.turn_id
             );
-        } else if let Some(context) = investigation_context {
+        } else if let Some(context) = investigation_context.filter(|_| {
+            !context_refs
+                .iter()
+                .any(|reference| reference.kind == "report_output")
+        }) {
             let _guard = self
                 .question_state_lock
                 .lock()
@@ -5284,7 +5289,42 @@ exactly, character for character, from the list below.";
             .map(|resolved| self.analysis_turn_load(&resolved.turn_id))
             .transpose()?
             .and_then(|turn| turn.investigation_context);
+        let report_targets: Vec<_> = context_refs
+            .iter()
+            .filter(|reference| reference.kind == "report_output")
+            .collect();
+        if report_targets.len() > 1 {
+            return Err(EngineError::msg(
+                "Revise one Report output per analytical run",
+            ));
+        }
+        let report_context = if let Some(reference) = report_targets.first() {
+            let workspace = turn_catalog
+                .workspace
+                .as_deref()
+                .ok_or(EngineError::NoWorkspace)?;
+            let (id, revision) = reference
+                .key
+                .rsplit_once('#')
+                .ok_or_else(|| EngineError::msg("Select an exact Report output revision"))?;
+            let revision = revision
+                .parse::<u64>()
+                .map_err(|_| EngineError::msg("Invalid Report output revision"))?;
+            let saved =
+                crate::engine::artifacts::resolve(&self.data_dir, workspace, id, Some(revision))?;
+            saved.run.investigation_context.map(|mut snapshot| {
+                // Keep the exact saved source boundaries and definitions, but
+                // this run is not an answer to the old Investigation Question.
+                snapshot.question_id = None;
+                snapshot.question_text = None;
+                snapshot
+            })
+        } else {
+            None
+        };
         let investigation_context = if let Some(snapshot) = saved_investigation_context {
+            Some(snapshot)
+        } else if let Some(snapshot) = report_context {
             Some(snapshot)
         } else if let Some(snapshot) = prior_context {
             Some(snapshot)
@@ -6189,13 +6229,36 @@ exactly, character for character, from the list below.";
             ));
         }
         let available = crate::engine::artifacts::list_for_reports(self.analytical_data_dir())?;
-        let user = crate::engine::report_design::user_prompt(
+        let mut user = crate::engine::report_design::user_prompt(
             &document,
             &available,
             target_placement_id,
             request,
         )?;
-        let messages = [
+        let mut presentations = Vec::new();
+        for placement in &document.placements {
+            if target_placement_id.is_some_and(|id| id != placement.id) {
+                continue;
+            }
+            let saved = crate::engine::artifacts::resolve_saved(
+                self.analytical_data_dir(),
+                &placement.artifact_id,
+                Some(placement.revision),
+            )?;
+            presentations.push(serde_json::json!({
+                "placement_id": placement.id,
+                "spec": saved.revision.spec,
+                "results": saved.results.iter().map(|result| serde_json::json!({"id": result.id, "columns": result.columns})).collect::<Vec<_>>(),
+            }));
+        }
+        let presentations = serde_json::json!({"saved_presentations": presentations});
+        crate::engine::report_design::validate_context(&presentations)?;
+        let catalog: serde_json::Value =
+            serde_json::from_str(include_str!("../../resources/presentation-catalog.json"))?;
+        // Only component schemas belong here. The answer-generation prompt in
+        // the catalog specifies a different response envelope.
+        user.push_str(&format!("\nSaved presentations and result schemas (no source rows):\n{presentations}\nComponent prop schemas:\n{}", catalog["componentSchemas"]));
+        let mut messages = vec![
             crate::engine::llm::ChatMessage::System(
                 crate::engine::report_design::system_prompt().to_string(),
             ),
@@ -6203,13 +6266,31 @@ exactly, character for character, from the list below.";
         ];
         let noop = |_: &str| {};
         let response = self.llm().chat_json(&messages, &noop, &noop).await?;
-        crate::engine::report_design::propose(
+        let checked = crate::engine::report_design::propose(
             &document,
             &available,
             target_placement_id,
             request,
             &response.content,
-        )
+        );
+        match checked {
+            Ok(proposal) => Ok(proposal),
+            Err(error) => {
+                messages.push(crate::engine::llm::ChatMessage::Assistant {
+                    content: response.content,
+                    tool_calls: Vec::new(),
+                });
+                messages.push(crate::engine::llm::ChatMessage::User(format!("Your Report design proposal failed validation: {error}. Correct it and return only the required proposal object with requires_analysis, message, analysis_targets, and operations. Use set_component to change an existing chart's props. Do not return a presentation document as the top-level response.")));
+                let response = self.llm().chat_json(&messages, &noop, &noop).await?;
+                crate::engine::report_design::propose(
+                    &document,
+                    &available,
+                    target_placement_id,
+                    request,
+                    &response.content,
+                )
+            }
+        }
     }
 
     /// Recompute one saved SQL output with exact, source-scoped Report filters.
