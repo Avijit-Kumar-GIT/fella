@@ -5,6 +5,19 @@
 	import Icon from '../Icon.svelte';
 	let { result, fields = result.columns, indices = result.rows.map((_, row) => row), columnFormats = {}, exactValueLabel = 'Exact saved value', caption = `Exact values from saved result ${result.id}`, filterFields = fields, rowSourceLabel = 'saved', onrowfilter }: { result: BoundResult; fields?: string[]; indices?: number[]; columnFormats?: Record<string, PresentationFormatOptions>; exactValueLabel?: string; caption?: string; filterFields?: string[]; rowSourceLabel?: string; onrowfilter?: (row: number) => void } = $props();
 	let numericFields = $derived(new Set(result.columns.filter((field, column) => result.rows.some(row => typeof row[column] === 'number') && result.rows.every(row => row[column] === null || typeof row[column] === 'number'))));
+	const defaultNumberFormat: PresentationFormatOptions = { format: 'number', decimals: 6 };
+	const decimalSeparator = new Intl.NumberFormat().formatToParts(1.1).find(part => part.type === 'decimal')!.value;
+	const zeroDigit = new Intl.NumberFormat().format(0);
+	function formatTableValue(value: string | null, field: string) {
+		const useDefault = columnFormats[field] === undefined && numericFields.has(field);
+		const formatted = formatPresentationValue(value, useDefault ? defaultNumberFormat : columnFormats[field]);
+		// Host precision is a maximum; explicit model precision remains fixed.
+		if (useDefault && formatted.formatted && formatted.display.includes(decimalSeparator)) {
+			while (formatted.display.endsWith(zeroDigit)) formatted.display = formatted.display.slice(0, -zeroDigit.length);
+			if (formatted.display.endsWith(decimalSeparator)) formatted.display = formatted.display.slice(0, -decimalSeparator.length);
+		}
+		return formatted;
+	}
 	let page = $state(0);
 	const pageSize = 50;
 	let pages = $derived(Math.max(1, Math.ceil(indices.length / pageSize)));
@@ -25,7 +38,7 @@
 							{@const exact = exactValue(result, row, field)}
 							{@const column = result.columns.indexOf(field)}
 							{@const sourceValue = result.rows[row][column] === null ? null : exact}
-							{@const formatted = formatPresentationValue(sourceValue, columnFormats[field])}
+							{@const formatted = formatTableValue(sourceValue, field)}
 							<td class:numeric={numericFields.has(field)} data-label={presentationColumnLabel(field, columnFormats[field])} title={formatted.formatted ? `${exactValueLabel}: ${formatted.exact}` : undefined}>
 								{formatted.display}
 								{#if formatted.formatted && formatted.exact !== formatted.display}<span class="sr-only">{exactValueLabel}: {formatted.exact}</span>{/if}

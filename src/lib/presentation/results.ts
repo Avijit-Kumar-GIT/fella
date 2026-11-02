@@ -1,6 +1,6 @@
 import { acceptContract } from './contract';
 import type { DisplayFilter } from './interactions';
-import type { BoundResult, PresentationState } from './types';
+import type { BoundResult, PresentationState, PresentationSpec } from './types';
 import { PRESENTATION_LIMITS as limits } from './types';
 
 export function validateResults(results: BoundResult[]): void {
@@ -130,6 +130,30 @@ export function sanitizeState(state: PresentationState = {}): PresentationState 
 		}
 	}
 	return clean;
+}
+
+/** Carry a viewer's selections through layout edits. Only an explicitly changed
+ * default replaces that selection; adding a view switch must not reset region. */
+export function rebasePresentationState(previous: PresentationSpec | undefined, next: PresentationSpec, state: PresentationState, results: BoundResult[]): PresentationState {
+	const carried = { ...sanitizeState(state) };
+	const defaults = (spec: PresentationSpec | undefined): Record<string, unknown> => {
+		if (!spec) return {};
+		const contract = spec.elements[spec.root]?.props.contract as { state?: Record<string, { default: unknown }> } | undefined;
+		const values = Object.fromEntries(Object.entries(contract?.state ?? {}).map(([key, declaration]) => [key, declaration.default]));
+		for (const element of Object.values(spec.elements)) {
+			if (['Select', 'SegmentedControl', 'Checkbox'].includes(element.type)) {
+				const props = element.props;
+				values[String(props.stateKey)] = element.type === 'Checkbox' ? Boolean(props.defaultChecked ?? false)
+					: props.defaultValue ?? (props.options as Array<{ value: string }>)[0]?.value;
+			}
+		}
+		return values;
+	};
+	const before = defaults(previous);
+	for (const [key, value] of Object.entries(defaults(next))) {
+		if (Object.hasOwn(before, key) && before[key] !== value) delete carried[`control:${key}`];
+	}
+	return resolvePresentationState(next, carried, results);
 }
 
 /** Rehydrate only controls declared in this spec; stale state never leaks across revisions. */

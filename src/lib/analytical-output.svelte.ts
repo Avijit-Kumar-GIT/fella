@@ -4,7 +4,8 @@ import type { ArtifactRecord, ResolvedArtifact } from './analytics-artifacts';
 import { APP_WORKSPACE_ID } from './analytics-artifacts';
 import type { Message } from './types';
 import type { PresentationSpec } from './presentation/types';
-import { cachePresentation } from './presentation/snapshot';
+import { cachePresentation, transcriptPresentation } from './presentation/snapshot';
+import { rebasePresentationState } from './presentation/results';
 
 /** Ephemeral artifact-link state. The validated presentation is part of the saved answer. */
 export const outputJobs = $state<Record<string, { busy: boolean; error: string; attempted: boolean }>>({});
@@ -15,6 +16,17 @@ export interface OutputTarget {
 	artifactId: string;
 	baseRevision: number;
 	instruction: string;
+}
+
+/** Apply a layout revision to this answer's display cache only. The canonical
+ * analytical turn, evidence, and other conversations' pinned views stay intact. */
+export function updateMessagePresentation(message: Message, output: ResolvedArtifact): void {
+	if (message.answer?.turn_id !== output.run.id || message.answer.workspace?.path !== output.artifact.workspace) return;
+	const prior = transcriptPresentation(message)?.spec;
+	message.presentation_state = rebasePresentationState(prior, output.revision.spec, message.presentation_state ?? {}, output.results);
+	message.artifact_id = output.artifact.id;
+	message.artifact_revision = output.revision.revision;
+	cachePresentation(message, output.revision.spec, output.results);
 }
 
 /** Validate and persist the json-render spec already returned with the analysis. */

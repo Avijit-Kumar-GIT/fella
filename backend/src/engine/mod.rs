@@ -19,6 +19,7 @@ pub mod investigation;
 pub mod llm;
 pub mod memory;
 pub mod planner;
+pub mod presentation_edit;
 pub mod provider;
 pub mod report_design;
 pub mod risk;

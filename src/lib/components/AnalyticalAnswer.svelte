@@ -9,19 +9,53 @@
 	import Icon from './Icon.svelte';
 	import MarkdownContent from './MarkdownContent.svelte';
 	import AnalyticalPresentation from './presentation/AnalyticalPresentation.svelte';
-	import { ensureAnalyticalOutput, outputJobs, saveOutputToStudio } from '$lib/analytical-output.svelte';
+	import { ensureAnalyticalOutput, outputJobs, saveOutputToStudio, updateMessagePresentation } from '$lib/analytical-output.svelte';
 	import { transcriptPresentation } from '$lib/presentation/snapshot';
 	let { message, onopeninvestigationrun }: { message: Message; onopeninvestigationrun?: (turnId: string) => void } = $props();
 	let resolved = $state<ResolvedArtifact | null>(null);
+	function resolvedMatchesMessage(output: ResolvedArtifact | null): output is ResolvedArtifact {
+		return Boolean(output && output.run.id === message.answer?.turn_id
+			&& (!message.artifact_id || output.artifact.id === message.artifact_id)
+			&& (!message.artifact_revision || output.revision.revision === message.artifact_revision));
+	}
 	let error = $state('');
 	let loading = $state(false);
 	let saving = $state(false);
 	let reviewing = $state(false);
 	let ReviewView = $state<typeof import('./ArtifactView.svelte').default | null>(null);
 	let reviewError = $state('');
+	let SourceView = $state<typeof import('./PresentationSource.svelte').default | null>(null);
+	let sourceOpen = $state(false);
+	let sourceLoading = $state(false);
+	let sourceError = $state('');
+	let sourceSequence = 0;
+	let sourceMessage: Message | null = null;
+	let sourceWorkspace: string | undefined;
+	let sourceTurn: string | undefined;
+	function sourceCurrent() {
+		return !destroyed && message === sourceMessage && workspace === sourceWorkspace
+			&& turnId === sourceTurn && session.catalog.workspace === sourceWorkspace;
+	}
+	async function viewSource() {
+		if (sourceLoading || !display) return;
+		if (!workspace || workspace !== session.catalog.workspace) { sourceError = 'Open this answer’s workspace to view its JSON.'; return; }
+		const request = ++sourceSequence;
+		sourceMessage = message; sourceWorkspace = workspace; sourceTurn = turnId;
+		sourceLoading = true; sourceError = '';
+		try {
+			const output = await ensureAnalyticalOutput(message, workspace);
+			if (request !== sourceSequence || !sourceCurrent()) return;
+			if (!output) throw new Error(outputJobs[turnId!]?.error || 'Could not open the saved presentation.');
+			const component = SourceView ?? (await import('./PresentationSource.svelte')).default;
+			if (request !== sourceSequence || !sourceCurrent()) return;
+			resolved = output; SourceView = component; sourceOpen = true;
+		} catch (cause) {
+			if (request === sourceSequence && sourceCurrent()) sourceError = cause instanceof Error ? cause.message : String(cause);
+		} finally { if (request === sourceSequence) sourceLoading = false; }
+	}
 	let inspectSequence = 0;
 	let destroyed = false;
-	onDestroy(() => { destroyed = true; inspectSequence++; });
+	onDestroy(() => { destroyed = true; inspectSequence++; sourceSequence++; });
 	let copied = $state(false);
 	async function copyAnswer(): Promise<void> {
 		try { await navigator.clipboard.writeText(message.answer?.text ?? message.text); copied = true; }
@@ -40,7 +74,7 @@
 			&& session.catalog.workspace === owner;
 		if (review) { reviewing = true; reviewError = ''; }
 		try {
-			const output = resolved?.run.id === turn ? resolved : await ensureAnalyticalOutput(source, owner);
+			const output = resolvedMatchesMessage(resolved) ? resolved : await ensureAnalyticalOutput(source, owner);
 			if (!current()) return;
 			if (!output) throw new Error('Could not open the saved result.');
 			resolved = output;
@@ -61,13 +95,13 @@
 	let workspace = $derived(message.answer?.workspace?.path);
 	let turnId = $derived(message.answer?.turn_id);
 	let snapshot = $derived(transcriptPresentation(message));
-	let display = $derived(snapshot ?? (resolved && resolved.run.id === turnId ? { spec: resolved.revision.spec, results: resolved.results } : null));
+	let display = $derived(snapshot ?? (resolvedMatchesMessage(resolved) ? { spec: resolved.revision.spec, results: resolved.results } : null));
 	$effect(() => {
 		// A replacement answer invalidates pending review work, even in a reused component.
 		// Resolving an uncached answer may assign its artifact revision itself;
 		// that bookkeeping must not cancel the review the user just requested.
 		void message; void workspace; void turnId; void session.catalog.workspace;
-		return () => { inspectSequence++; reviewing = false; reviewError = ''; };
+		return () => { inspectSequence++; reviewing = false; reviewError = ''; sourceSequence++; sourceOpen = false; sourceLoading = false; sourceError = ''; };
 	});
 
 	$effect(() => {
@@ -109,7 +143,7 @@
 		saving = true;
 		error = '';
 		try {
-			const output = resolved?.run.id === turnId ? resolved : await ensureAnalyticalOutput(message, workspace);
+			const output = resolvedMatchesMessage(resolved) ? resolved : await ensureAnalyticalOutput(message, workspace);
 			if (output) { resolved = output; await saveOutputToStudio(output); }
 			else error = 'This output could not be saved. Your analysis is still available.';
 		}
@@ -127,7 +161,7 @@
 			}} onaction={(action) => {
 				if (session.catalog.workspace !== workspace || !workspace) return;
 				void (async () => {
-					const target = resolved?.run.id === turnId ? resolved : await ensureAnalyticalOutput(message, workspace!);
+					const target = resolvedMatchesMessage(resolved) ? resolved : await ensureAnalyticalOutput(message, workspace!);
 					if (target) await requestArtifactChange(target, action.message);
 				})().catch(cause => error = cause instanceof Error ? cause.message : String(cause));
 			}} />
@@ -144,6 +178,7 @@
 			<DropdownMenu.Portal>
 				<DropdownMenu.Content class="fella-ui-menu-content" align="end" sideOffset={4}>
 					<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void inspect()}>Open result</DropdownMenu.Item>
+					{#if display}<DropdownMenu.Item class="fella-ui-menu-item" disabled={sourceLoading} onSelect={() => void viewSource()}>{sourceLoading ? 'Opening JSON…' : 'View JSON'}</DropdownMenu.Item>{/if}
 					{#if (message.artifact_revision ?? 1) > 1}
 						<DropdownMenu.Item class="fella-ui-menu-item" onSelect={() => void inspect(true)}>{reviewing ? 'Close review' : `Review changes · revision ${message.artifact_revision}`}</DropdownMenu.Item>
 					{/if}
@@ -154,6 +189,15 @@
 			</DropdownMenu.Portal>
 		</DropdownMenu.Root>
 	</div>
+	{#if sourceError}<p class="view-note" role="alert">{sourceError}</p>{/if}
+	{#if sourceOpen && SourceView && resolved}
+		<SourceView bind:open={sourceOpen} artifact={resolved} iscurrent={sourceCurrent} onupdated={output => {
+			if (!sourceCurrent()) return;
+			updateMessagePresentation(message, output);
+			resolved = output;
+			session.persist();
+		}} />
+	{/if}
 	{#if reviewError}<p class="view-note" role="status">{reviewError}</p>{/if}
 	{#if reviewing}
 		{#if ReviewView && resolved}<ReviewView {resolved} reviewOnly autoCompare onrequestchange={requestArtifactChange} onadopted={output => { resolved = output; reviewing = false; }} />

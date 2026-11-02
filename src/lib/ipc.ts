@@ -91,6 +91,10 @@ function workspaceArgs(workspaceId?: string | null): Record<string, unknown> {
 }
 
 export const ipc = {
+	artifactPresentationEdit: (workspaceId: string, artifactId: string, baseRevision: number, instruction: string, model?: string, routeFirst = false, sourceRevision?: number) =>
+		invoke<{requires_analysis: boolean; message: string; artifact?: ResolvedArtifact}>('artifact_presentation_edit', {workspaceId, artifactId, baseRevision, instruction, model, routeFirst, sourceRevision}),
+	analysisPresentationEdit: (workspaceId: string, turnId: string, instruction: string, model?: string) =>
+		invoke<{requires_analysis: boolean; message: string; artifact?: ResolvedArtifact}>('analysis_presentation_edit', {workspaceId, turnId, instruction, model}),
 	artifactCreate: (workspaceId: string, turnId: string, title: string, spec: unknown) =>
 		invoke<ArtifactRecord>('artifact_create', { workspaceId, turnId, title, spec }),
 	artifactList: (workspaceId: string) => invoke<ArtifactRecord[]>('artifact_list', { workspaceId }),

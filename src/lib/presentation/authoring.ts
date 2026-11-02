@@ -24,7 +24,10 @@ const derivedProps: Record<string, string[]> = {
 /** Derive author props from the renderer catalog; omit mechanical bookkeeping. */
 export function authoringSchema(components: Record<string, object>, slots: Record<string, readonly string[]>): object {
 	const defs: Schema = {};
-	const variants = Object.entries(components).map(([name, original]) => {
+	// New authoring has one state/binding system. Keep ResultFilter in the
+	// canonical registry for saved layouts, rather than advertise its separate
+	// legacy filter state alongside declared controls.
+	const variants = Object.entries(components).filter(([name]) => name !== 'ResultFilter').map(([name, original]) => {
 		const props = structuredClone(original) as Schema;
 		const derived = derivedProps[name] ?? [];
 		for (const field of derived) delete props.properties?.[field];

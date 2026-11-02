@@ -1102,10 +1102,39 @@ struct TurnDigest {
     turn_id: Option<String>,
     question: String,
     headline: String,
+    unfinished_objective: Option<String>,
     workspace: TurnWorkspace,
     source_selection: Option<InvestigationSourceSelection>,
     frame: Option<String>,
     queries: Vec<String>,
+}
+
+fn unfinished_objective(checks: &[VerificationCheck]) -> Option<String> {
+    checks
+        .iter()
+        .find(|check| !check.ok && check.label == agent::UNFINISHED_OBJECTIVE_CHECK)
+        .and_then(|check| check.finding.as_ref()?.guidance.as_deref())
+        .map(|objective| cap_chars(objective, 800))
+}
+
+fn turn_continuation_context(
+    turn: &TurnDigest,
+    catalog: &Catalog,
+    source_selection: Option<&InvestigationSourceSelection>,
+) -> Option<String> {
+    if source_selection.is_some_and(|selection| turn.source_selection.as_ref() != Some(selection)) {
+        return None;
+    }
+    let mut context = format!(
+        "Previous request: {}\nPrevious analysis turn: {}\nSource scope: {}. Prior claims are not evidence; retrieve execution evidence only after the existing conversation, source-selection and revision checks, otherwise inspect and recompute.",
+        turn.question,
+        turn.turn_id.as_deref().unwrap_or("unavailable"),
+        if turn_context_matches(&turn.workspace, catalog) { "same workspace context" } else { "different or unknown workspace revision" },
+    );
+    if let Some(objective) = &turn.unfinished_objective {
+        context.push_str(&format!("\nUnfinished analytical objective: {objective}"));
+    }
+    Some(context)
 }
 
 fn turn_context_matches(workspace: &TurnWorkspace, catalog: &Catalog) -> bool {
@@ -1319,6 +1348,12 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
             .and_then(|selection| {
                 serde_json::from_value::<InvestigationSourceSelection>(selection.clone()).ok()
             });
+        let unfinished_objective = answer
+            .and_then(|answer| answer.get("verification"))
+            .and_then(|checks| {
+                serde_json::from_value::<Vec<VerificationCheck>>(checks.clone()).ok()
+            })
+            .and_then(|checks| unfinished_objective(&checks));
         turns.push(TurnDigest {
             turn_id,
             question: message
@@ -1327,6 +1362,7 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
                 .map(|text| cap_chars(text, 200))
                 .unwrap_or_default(),
             headline,
+            unfinished_objective,
             workspace: archived_turn_workspace(answer, transcript_workspace),
             source_selection,
             frame,
@@ -1343,6 +1379,70 @@ fn archived_turns(value: &serde_json::Value) -> Vec<TurnDigest> {
 mod conversation_context_tests {
     use super::*;
     use crate::engine::investigation::InvestigationSourceSelectionMode;
+
+    fn unfinished_archive(objective: &str) -> serde_json::Value {
+        serde_json::json!({"messages":[
+            {"role":"user","text":"Do the calculation"},
+            {"role":"assistant","text":"The definition is known.","answer":{
+                "turn_id":"turn-pending",
+                "workspace":{"path":"/workspace","revision":"r1"},
+                "verification":[{
+                    "label":agent::UNFINISHED_OBJECTIVE_CHECK,"ok":false,"outcome":"flagged",
+                    "detail":"The requested aggregation is missing.",
+                    "finding":{"code":"advisory","effect":"informational","target":"answer","guidance":objective}
+                }]
+            }}
+        ]})
+    }
+
+    #[test]
+    fn completion_objective_survives_archive_and_is_bounded_separately_from_headline() {
+        let objective = format!(
+            "Compute monthly totals with the original scope. {}",
+            "x".repeat(1200)
+        );
+        let turns = archived_turns(&unfinished_archive(&objective));
+        assert_eq!(turns.len(), 1);
+        let turn = &turns[0];
+        assert_eq!(turn.headline, "The definition is known.");
+        let pending = turn.unfinished_objective.as_deref().unwrap();
+        assert!(pending.starts_with("Compute monthly totals"));
+        assert_eq!(pending.chars().count(), 800);
+        let context = turn_continuation_context(turn, &Catalog::default(), None).unwrap();
+        assert!(context.contains(pending));
+        assert!(context.contains("turn-pending"));
+        assert!(context.contains("different or unknown workspace revision"));
+        assert!(context.contains("Prior claims are not evidence"));
+    }
+
+    #[test]
+    fn completion_context_respects_selected_sources_and_revision() {
+        let mut turns = archived_turns(&unfinished_archive("Compute monthly totals."));
+        let turn = &mut turns[0];
+        let selected = InvestigationSourceSelection {
+            mode: InvestigationSourceSelectionMode::SelectedSources,
+            included_paths: vec!["sales.csv".into()],
+        };
+        assert!(turn_continuation_context(turn, &Catalog::default(), Some(&selected)).is_none());
+        turn.source_selection = Some(selected.clone());
+        let catalog = Catalog {
+            workspace: Some("/workspace".into()),
+            revision: Some("r1".into()),
+            ..Catalog::default()
+        };
+        let context = turn_continuation_context(turn, &catalog, Some(&selected)).unwrap();
+        assert!(context.contains("same workspace context"));
+        assert!(context.contains("source-selection and revision checks"));
+        assert!(context.contains("Unfinished analytical objective: Compute monthly totals."));
+    }
+
+    #[test]
+    fn completion_context_does_not_invent_pending_work_for_legacy_discovery() {
+        let mut archive = unfinished_archive("Compute monthly totals.");
+        archive["messages"][1]["answer"]["verification"] = serde_json::json!([]);
+        let turns = archived_turns(&archive);
+        assert!(turns[0].unfinished_objective.is_none());
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         let nonce = std::time::SystemTime::now()
@@ -1370,6 +1470,7 @@ mod conversation_context_tests {
                     turn_id: None,
                     question: "What does variance mean?".into(),
                     headline: "Variance measures spread around a mean.".into(),
+                    unfinished_objective: None,
                     workspace: TurnWorkspace::NoWorkspace,
                     source_selection: None,
                     frame: None,
@@ -1393,6 +1494,7 @@ mod conversation_context_tests {
                 turn_id: Some("turn-first-mount".into()),
                 question: "What was the total in this folder?".into(),
                 headline: "The total was 10.".into(),
+                unfinished_objective: None,
                 workspace: TurnWorkspace::Snapshot {
                     path: first_workspace.display().to_string(),
                     revision: first_revision,
@@ -1580,6 +1682,7 @@ mod conversation_context_tests {
                         turn_id: Some("turn-sales".into()),
                         question: "What are the sales?".into(),
                         headline: "Sales total 30.".into(),
+                        unfinished_objective: None,
                         workspace: TurnWorkspace::NoWorkspace,
                         source_selection: Some(sales_scope.clone()),
                         frame: None,
@@ -1589,6 +1692,7 @@ mod conversation_context_tests {
                         turn_id: Some("turn-costs".into()),
                         question: "What are the costs?".into(),
                         headline: "Costs total 7.".into(),
+                        unfinished_objective: None,
                         workspace: TurnWorkspace::NoWorkspace,
                         source_selection: Some(costs_scope),
                         frame: None,
@@ -1598,6 +1702,7 @@ mod conversation_context_tests {
                         turn_id: Some("turn-general".into()),
                         question: "What is a median?".into(),
                         headline: "The median is the middle value.".into(),
+                        unfinished_objective: None,
                         workspace: TurnWorkspace::NoWorkspace,
                         source_selection: None,
                         frame: None,
@@ -3864,6 +3969,11 @@ impl EngineState {
                 "- [{scope}]{analysis_ref} Q: \"{}\"  A: \"{}\"\n",
                 t.question, t.headline,
             ));
+            if let Some(objective) = &t.unfinished_objective {
+                p.push_str(&format!(
+                    "  unfinished objective (reference only, not evidence): {objective}\n"
+                ));
+            }
             if current_context {
                 if let Some(frame) = &t.frame {
                     p.push_str(&format!("  prior interpretation (re-check): {frame}\n"));
@@ -3876,6 +3986,17 @@ impl EngineState {
             }
         }
         Some(p)
+    }
+
+    fn continuation_context_for_source_selection(
+        &self,
+        conversation_id: &str,
+        source_selection: Option<&InvestigationSourceSelection>,
+    ) -> Option<String> {
+        let catalog = self.catalog();
+        let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        let turn = inner.sessions.get(conversation_id)?.turns.last()?;
+        turn_continuation_context(turn, &catalog, source_selection)
     }
 
     fn session_has_reusable_analysis(&self, conversation_id: &str, catalog: &Catalog) -> bool {
@@ -5455,6 +5576,11 @@ exactly, character for character, from the list below.";
         });
         let has_reusable_analysis =
             self.session_has_reusable_analysis(conversation_id, &turn_catalog);
+        let continuation_context = if clarification.is_none() {
+            self.continuation_context_for_source_selection(conversation_id, source_selection)
+        } else {
+            None
+        };
         let registry = if inspect {
             Registry::inspect_with_history(settings.capabilities, has_reusable_analysis)
         } else {
@@ -5469,6 +5595,7 @@ exactly, character for character, from the list below.";
             turn_id: &turn_id,
             question: &analysis_question,
             context: &context,
+            continuation_context: continuation_context.as_deref(),
             clarification: clarification.as_ref(),
             inspect,
             context_refs,
@@ -5655,6 +5782,7 @@ exactly, character for character, from the list below.";
                         turn_id: Some(answer.turn_id.clone()),
                         question: analysis_question.chars().take(200).collect(),
                         headline,
+                        unfinished_objective: unfinished_objective(&answer.verification),
                         workspace: answer
                             .workspace
                             .as_ref()
@@ -6200,6 +6328,96 @@ exactly, character for character, from the list below.";
             },
         };
         crate::engine::artifacts::studio_seed_northstar_sample_report(data_dir, &run)
+    }
+
+    /// Edit a saved output using only its immutable saved rows and presentation.
+    /// Resolving ownership never mounts or switches the source workspace.
+    pub async fn artifact_presentation_edit(
+        &self,
+        workspace: &str,
+        artifact_id: &str,
+        base_revision: u64,
+        instruction: &str,
+        options: crate::engine::presentation_edit::EditOptions<'_>,
+    ) -> EngineResult<crate::engine::presentation_edit::PresentationEditResponse> {
+        use crate::engine::presentation_edit;
+        let saved = crate::engine::artifacts::resolve(
+            self.analytical_data_dir(),
+            workspace,
+            artifact_id,
+            options.source_revision,
+        )?;
+        presentation_edit::check_base(&saved, base_revision)?;
+        let llm = self.llm_with_model(options.model.unwrap_or(""));
+        if options.route_first {
+            let decision = presentation_edit::route(
+                &llm,
+                &saved.run,
+                &saved.results,
+                Some(&saved.revision.spec),
+                instruction,
+            )
+            .await?;
+            if decision.requires_analysis {
+                return Ok(presentation_edit::analysis(decision.message));
+            }
+        }
+        let user = presentation_edit::user_prompt(&saved, instruction)?;
+        let charts = self.settings().capabilities.charts_enabled();
+        let (message, spec) = presentation_edit::draft(
+            &llm,
+            &saved.revision.spec,
+            &saved.results,
+            user,
+            charts,
+            self.analytical_data_dir(),
+        )
+        .await?;
+        presentation_edit::persist(self.analytical_data_dir(), workspace, &saved, message, spec)
+    }
+
+    /// Compose a display edit from a saved plain answer without running analysis.
+    /// Only the model's accepted display decision creates an artifact.
+    pub async fn analysis_presentation_edit(
+        &self,
+        workspace: &str,
+        turn_id: &str,
+        instruction: &str,
+        model: Option<&str>,
+    ) -> EngineResult<crate::engine::presentation_edit::PresentationEditResponse> {
+        use crate::engine::presentation_edit;
+        let run = self.analysis_turn_load(turn_id)?;
+        let results = presentation_edit::turn_results(&run, workspace, turn_id)?;
+        if results.is_empty() {
+            return Ok(presentation_edit::analysis(
+                "This answer has no saved result rows to present; run analysis first.",
+            ));
+        }
+        let llm = self.llm_with_model(model.unwrap_or(""));
+        let decision = presentation_edit::route(
+            &llm,
+            &run,
+            &results,
+            run.result.presentation_spec.as_ref(),
+            instruction,
+        )
+        .await?;
+        if decision.requires_analysis {
+            return Ok(presentation_edit::analysis(decision.message));
+        }
+        let charts = self.settings().capabilities.charts_enabled();
+        let seed = presentation_edit::turn_seed(&run, &results, charts)?;
+        let user = presentation_edit::turn_prompt(&run, &seed, &results, instruction)?;
+        let (message, spec) = presentation_edit::draft(
+            &llm,
+            &seed,
+            &results,
+            user,
+            charts,
+            self.analytical_data_dir(),
+        )
+        .await?;
+        presentation_edit::persist_turn(self.analytical_data_dir(), workspace, &run, message, spec)
     }
 
     /// Ask the metadata-only Report Design runtime for a preview. The response

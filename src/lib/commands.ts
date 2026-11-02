@@ -14,6 +14,9 @@ import type {
 } from './types';
 import type { ResolvedArtifact } from './analytics-artifacts';
 import type { OutputTarget } from './analytical-output.svelte';
+import { updateMessagePresentation } from './analytical-output.svelte';
+
+const viewRequests = new WeakMap<Conversation, { cancelled: boolean }>();
 
 const HELP = `Ask a question in plain language and Fella answers from your files,
 showing the exact steps it took. You never need these commands, but here they are:
@@ -372,6 +375,8 @@ export async function openContext(): Promise<void> {
  *  normally (a "Stopped." answer) and clears that conversation's busy state. */
 export async function stop(conv: Conversation | null = session.activeChat): Promise<void> {
 	if (!conv || !conv.busy || !isDesktop()) return;
+	const viewRequest = viewRequests.get(conv);
+	if (viewRequest) viewRequest.cancelled = true;
 	conv.activity = 'stopping…';
 	try {
 		await ipc.cancel(conv.id, conv.workspaceScope);
@@ -965,6 +970,44 @@ async function runCommand(text: string): Promise<void> {
 
 /** Run one question in its owning conversation, so it keeps streaming there
  *  after the user focuses a different workspace. */
+async function adoptPresentation(output: ResolvedArtifact): Promise<ResolvedArtifact> {
+	if (output.artifact.current_revision === output.revision.revision) return output;
+	return ipc.artifactAdopt(output.artifact.workspace, output.artifact.id, output.artifact.current_revision, output.revision.revision);
+}
+
+/** The model routes a continuation against saved data before tools are offered.
+ * A failed display edit remains a display failure, never an implicit rerun. */
+async function tryPresentationFollowup(question: string, conv: Conversation): Promise<boolean> {
+	const workspace = conv.workspaceScope;
+	const source = [...conv.messages].reverse().find(message => message.role === 'assistant' && !message.pending && message.answer?.turn_id && message.answer.workspace?.path === workspace);
+	if (!workspace || !source?.answer?.turn_id) return false;
+	const request = {cancelled:false};
+	viewRequests.set(conv, request);
+	conv.busy = true; conv.activity = 'checking the saved view…';
+	try {
+		let proposal;
+		if (source.artifact_id && source.artifact_revision) {
+			const selected = await ipc.artifactResolve(workspace, source.artifact_id, source.artifact_revision);
+			if (request.cancelled || viewRequests.get(conv) !== request) return true;
+			proposal = await ipc.artifactPresentationEdit(workspace, source.artifact_id, selected.artifact.current_revision, question, conv.model || undefined, true, source.artifact_revision);
+		} else proposal = await ipc.analysisPresentationEdit(workspace, source.answer.turn_id, question, conv.model || undefined);
+		if (request.cancelled || viewRequests.get(conv) !== request) return true;
+		if (proposal.requires_analysis) return false;
+		if (!proposal.artifact) throw new Error('The view change did not return a saved revision.');
+		const output = await adoptPresentation(proposal.artifact);
+		if (request.cancelled) return true;
+		updateMessagePresentation(source, output);
+		conv.addAssistant('Updated the saved view.').pending = false;
+		session.persist();
+		return true;
+	} catch (cause) {
+		if (!request.cancelled) conv.addSystem(`The saved view could not be updated: ${errMsg(cause)}`);
+		return true;
+	} finally {
+		if (viewRequests.get(conv) === request) { viewRequests.delete(conv); conv.busy = false; conv.activity = ''; }
+	}
+}
+
 async function ask(
 	question: string,
 	conv: Conversation,
@@ -974,6 +1017,7 @@ async function ask(
 	outputTarget?: OutputTarget
 ): Promise<void> {
 	if (!requireEngine()) return;
+	if (!clarificationTurnId && !questionRef && !outputTarget && await tryPresentationFollowup(question, conv)) return;
 	conv.busy = true;
 	conv.activity = 'preparing the analysis…';
 	// Ordinary chat stays an Ask conversation. Only explicit Investigation
@@ -1082,20 +1126,46 @@ async function ask(
 /** Explicit artifact targets survive tab switches; source scope remains the
  * receiving conversation's boundary and Rust validates the selected reference. */
 export async function requestArtifactChange(artifact: ResolvedArtifact, instruction: string): Promise<void> {
+	await changeArtifactPresentation(artifact, instruction);
+}
+
+export async function changeArtifactPresentation(artifact: ResolvedArtifact, instruction: string): Promise<ResolvedArtifact | null> {
 	const text = instruction.trim();
 	const workspace = artifact.artifact.workspace;
-	if (!text || !requireEngine()) return;
+	if (!text || !requireEngine()) return null;
 	if (session.catalog.workspace !== workspace) throw new Error('Open this analysis’s workspace before requesting a change.');
 	const conv = session.ensureChat();
 	if (conv.busy) throw new Error('Finish the current analysis before requesting this change.');
 	conv.bindWorkspaceScope(workspace);
 	if (conv.workspaceScope !== workspace) throw new Error('The conversation belongs to another workspace.');
-	const key = `${artifact.artifact.id}#${artifact.revision.revision}`;
-	conv.addContext({ kind: 'artifact', key, label: artifact.artifact.title });
 	conv.addUser(text);
+	const request = {cancelled:false};
+	viewRequests.set(conv, request); conv.busy = true; conv.activity = 'updating the saved view…';
+	let needsAnalysis = false;
 	try {
-		await ask(text, conv, undefined, undefined, undefined, { artifactId: artifact.artifact.id, baseRevision: artifact.artifact.current_revision, instruction: text });
-	} finally { conv.removeContext('artifact', key); session.persist(); }
+		const proposal = await ipc.artifactPresentationEdit(workspace, artifact.artifact.id, artifact.artifact.current_revision, text, conv.model || undefined, false, artifact.revision.revision);
+		if (request.cancelled) return null;
+		needsAnalysis = proposal.requires_analysis;
+		if (!needsAnalysis) {
+			if (!proposal.artifact) throw new Error('The view change did not return a saved revision.');
+			const output = await adoptPresentation(proposal.artifact);
+			if (request.cancelled) return null;
+			const source = [...conv.messages].reverse().find(message => message.artifact_id === artifact.artifact.id || message.answer?.turn_id === artifact.run.id);
+			if (source) updateMessagePresentation(source, output);
+			conv.addAssistant('Updated the saved view.').pending = false;
+			return output;
+		}
+	} finally {
+		if (viewRequests.get(conv) === request) { viewRequests.delete(conv); conv.busy = false; conv.activity = ''; }
+		session.persist();
+	}
+	if (needsAnalysis) {
+		const key = `${artifact.artifact.id}#${artifact.revision.revision}`;
+		conv.addContext({ kind:'artifact',key,label:artifact.artifact.title });
+		try { await ask(text, conv, undefined, undefined, undefined, { artifactId:artifact.artifact.id,baseRevision:artifact.artifact.current_revision,instruction:text }); }
+		finally { conv.removeContext('artifact',key); session.persist(); }
+	}
+	return null;
 }
 
 /** Run a Report revision without moving the user away from the Report. The

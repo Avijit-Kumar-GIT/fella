@@ -302,6 +302,8 @@ async fn dispatch(
                 | "analysis_turn_rerun"
                 | "artifact_compare"
                 | "artifact_filter_result"
+                | "artifact_presentation_edit"
+                | "analysis_presentation_edit"
                 | "studio_export_package"
                 | "ask"
         );
@@ -517,6 +519,50 @@ async fn dispatch(
                     &result_id,
                     &filters,
                 ))
+            }
+            "analysis_presentation_edit" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let turn_id: String = required(&request.params, "turnId")?;
+                let instruction: String = required(&request.params, "instruction")?;
+                let model = request.params.get("model").and_then(Value::as_str);
+                value_result(
+                    workspace_engine
+                        .analysis_presentation_edit(&workspace, &turn_id, &instruction, model)
+                        .await,
+                )
+            }
+            "artifact_presentation_edit" => {
+                let workspace: String = required(&request.params, "workspaceId")?;
+                let artifact_id: String = required(&request.params, "artifactId")?;
+                let base: u64 = required(&request.params, "baseRevision")?;
+                let instruction: String = required(&request.params, "instruction")?;
+                let model = request.params.get("model").and_then(Value::as_str);
+                let route_first = request
+                    .params
+                    .get("routeFirst")
+                    .map(|value| serde_json::from_value::<bool>(value.clone()))
+                    .transpose()?
+                    .unwrap_or(false);
+                let source_revision = request
+                    .params
+                    .get("sourceRevision")
+                    .map(|value| serde_json::from_value::<u64>(value.clone()))
+                    .transpose()?;
+                value_result(
+                    workspace_engine
+                        .artifact_presentation_edit(
+                            &workspace,
+                            &artifact_id,
+                            base,
+                            &instruction,
+                            crate::engine::presentation_edit::EditOptions {
+                                model,
+                                route_first,
+                                source_revision,
+                            },
+                        )
+                        .await,
+                )
             }
             "artifact_revise" => {
                 let workspace: String = required(&request.params, "workspaceId")?;
