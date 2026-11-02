@@ -275,6 +275,15 @@ pub enum ChatMessage {
     },
 }
 
+// OpenAI requires an explicit JSON instruction in the messages when using
+// json_object mode, independently of the requested response format.
+fn json_mode_messages(messages: &[ChatMessage]) -> Vec<ChatMessage> {
+    let mut result = Vec::with_capacity(messages.len() + 1);
+    result.push(ChatMessage::System("Return a valid JSON object.".into()));
+    result.extend_from_slice(messages);
+    result
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub id: String,
@@ -379,7 +388,8 @@ impl LlmClient {
     ) -> EngineResult<ChatResponse> {
         if self.is_openai() {
             let json_object = json!({ "type": "json_object" });
-            self.chat_openai(messages, &[], Some(&json_object), on_retry, on_delta)
+            let json_messages = json_mode_messages(messages);
+            self.chat_openai(&json_messages, &[], Some(&json_object), on_retry, on_delta)
                 .await
         } else {
             let json_format = json!("json");
@@ -1158,6 +1168,26 @@ mod tests {
     use super::*;
     use std::io::{BufRead, Write};
     use std::net::TcpListener;
+
+    // JSON-mode routing must meet the provider's message requirement while
+    // preserving the caller's classification request and its untrusted context.
+    #[test]
+    fn openai_json_mode_includes_instruction_and_preserves_messages() {
+        let original = vec![
+            ChatMessage::System("Classify the request.".into()),
+            ChatMessage::User("Show the saved view.".into()),
+        ];
+        let messages = json_mode_messages(&original);
+        let wire: Vec<_> = messages.iter().map(openai_message).collect();
+        assert_eq!(wire.len(), 3);
+        assert!(wire[0]["content"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("json"));
+        assert_eq!(wire[1], openai_message(&original[0]));
+        assert_eq!(wire[2], openai_message(&original[1]));
+    }
 
     fn settings(provider: &str, base_url: &str) -> Settings {
         Settings {

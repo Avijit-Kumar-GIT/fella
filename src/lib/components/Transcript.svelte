@@ -306,7 +306,7 @@
 	   cue. Centred in the scroller. */
 	.stream {
 		width:100%;
-		max-width:520px;
+		max-width:880px;
 		margin-inline:auto;
 		font-size:13px;
 		line-height:21px;
