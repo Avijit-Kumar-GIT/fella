@@ -322,3 +322,145 @@ reports under `/tmp/fella-intelligent-ui-model-v1-I9s8z5` and
 are under `/tmp/fella-intelligent-ui-contract-results`. These are local evidence,
 not bundled or committed user data. Only the scoped checks above ran; unrelated
 app suites were not used as a completion gate.
+
+## Saved-view editing and field validation — 2026-11-01
+
+The sample-workspace feedback exposed actual harness problems, rather than just
+inconsistent visual preferences. Fresh authoring advertised both declared
+Select/state/filter bindings and the older ResultFilter state mechanism. A model
+could combine them into an orphan state. The author prompt also listed prop
+names without their enum/type constraints. New authoring now advertises one
+binding system and compact typed props. The canonical registry still reads
+existing json-render ResultFilter documents; this does not retain an OpenUI path.
+JSON-mode fences and bare nested authoring trees pass through the same acceptance
+checks as wrapped responses, without accepting arbitrary JSON as a presentation.
+
+Ordinary chat follow-ups first classify the request using bounded saved-result
+metadata. Display edits operate on the saved JSON and exact result rows without
+analytical tools. An analytical decision enters the existing analytical runtime;
+a failed display edit does not implicitly rerun a query. A plain saved answer with
+usable results can acquire a presentation through the same path. Missing result
+rows require analysis. Model selection follows the receiving conversation.
+
+The tool-free editor proposes at most 32 add/remove/replace JSON operations.
+Only presentation paths are writable; saved result data, analytical runs and
+capabilities are immutable. Logical `/root/props/...` paths resolve the generated
+root identity. The editor compiles declared state into repeated canonical control
+options/defaults before shared validation. The model does not need to update
+both copies. Invalid candidates receive their actual errors and one repair
+opportunity. Local, bounded attempt records retain candidates, errors, usage and
+time under `analysis/presentation-edits/` (64 files / 16 MiB). No input prompts or
+separate source-row packets are logged; candidates may themselves contain
+model-authored data, so these records remain local. Provider failures retain safe
+error categories.
+
+Artifact edits distinguish the optimistic current revision from the selected
+source revision. Editing a pinned historical JSON view must use that view's
+original run and rows, not silently edit a newer analysis. Candidates are adopted
+only by the host after cancellation/ownership checks. Existing Report pins stay
+pinned. Viewer selections survive layout revisions when their defaults remain
+unchanged; an explicitly changed default takes effect. Removed or invalid state
+is discarded. Opening or saving a cached answer checks both artifact identity
+and revision, rather than only the analytical run ID.
+
+**View JSON** in answer actions opens the actual accepted renderer spec on demand.
+It supports copying, manual validated revisions and model-proposed view changes.
+The canonical answer and evidence are separate. The source editor uses the
+existing dialog, textarea and button components, loads lazily, and fits narrow
+windows. Reports retain their existing artifact presentation-source editor.
+Unformatted numeric columns receive restrained numeric display defaults while
+exact saved text remains available. Field names do not imply currency or percent.
+
+For observation-only premature endings, one bounded semantic completion review
+can return the model to the analytical loop. Unfinished objectives persist as
+reference context for continuations such as “Do the calculation”; previous prose
+never becomes evidence. This is not a universal completeness or correctness
+proof: a partially completed computation can still omit requested comparisons.
+Generic grain/reconciliation guidance explicitly distinguishes a distinct-key
+count from deduplicating the rows feeding a sum.
+
+### Additional evaluation and limitations
+
+Expected behavior was fixed before candidates in the new scoped checks and
+`tests/model/sample-intelligent-ui-v2.*`. These are native real-Gemma agent runs
+on the full sample folder, not composition over four invented rows. They retain
+separate execution, presentation, correctness and unresolved policy grades.
+The earlier six-case composer scores above do not establish end-to-end quality.
+
+Deterministic validation for this change includes the 28-case native/WASM parity
+suite, 10 browser contract cases, focused agent/context/editor unit tests, numeric
+display defaults and revision-state preservation. The JSON source smoke covers
+lazy loading, exact JSON, revisions, retained region values across chart/table
+views, zero analytical calls, malformed input, narrow fit and pending-work
+invalidation. Version 1.2 passes all six browser cases after two explicitly
+user-approved grader corrections: accessible combobox lookup and comparison of
+individual cell values instead of whitespace-dependent row concatenation.
+Original failures remain recorded. A genuine cleared-success-notice defect was
+fixed in implementation; its assertion was preserved.
+
+Real Gemma results remain mixed, and must not be summarized as “all passing”:
+
+- Initial regional exploration produced a working declared selector and consumer;
+  saved-view visual edits preserved analytical run bytes and exact results.
+- The initial exact-values edit left the table hidden. A subsequent edit failed
+  because it changed only the authoritative state default, leaving redundant
+  control metadata inconsistent. These failures drove the edit compiler fix.
+- A post-compiler probe on a copied real-model saved artifact adopts its source
+  revision before editing. It shows the exact Table, preserves the regional
+  declaration and all saved rows/run bytes, creates no analytical run/tool events,
+  and passes. This is a saved-view integration check, not a fresh-agent accuracy
+  score or a replacement for the earlier failed cases.
+- Fresh regional generation passed in three of four recorded runs; one produced
+  a canonical answer but no accepted view, blocking its dependent edit cases.
+  The final diagnostic run passed with attempt logging enabled. No retries were
+  hidden or excluded from that record. Regional coverage checks do not prove
+  correct refund allocation or numerical regional totals.
+- The first monthly run inflated September through a repeated order-header join
+  despite COUNT(DISTINCT order_id). After explicit grain guidance, all 12 monthly
+  values matched independently reconciled source totals, including September
+  $16,045.95. The answer still omitted requested quarterly totals and AOV.
+  Those remain real completeness failures. The frozen presentation grader also
+  requires a Table in the initial visible state; a working conditional exact-values
+  view is not credited by that criterion. Its failing grade is preserved.
+- The native v2 edit runner does not adopt each returned candidate before its
+  next edit. It therefore does not by itself establish successive editing of the
+  current view. The separate post-compiler probe performs the actual host adoption
+  lifecycle. No frozen v2 expectation or score was changed to correct this limit.
+
+The source audit identifies duplicate order headers, conflicting product keys,
+order-level refund allocation ambiguity and an unmatched posted refund. UI
+acceptance does not certify those semantics. Further quality work needs broader
+completeness and grain verification, not more decorative components.
+
+Local evidence: `/tmp/fella-sample-intelligent-ui-v2-{g1dpQv,24pw2K,PW6C5F,Vq3exT}`,
+`/tmp/fella-saved-edit-compiler-v1-wB0BY5`, and
+`/tmp/fella-presentation-source-v1.2-AU9eMG` (temporary evidence is not shipped as
+user data). A separate real-Gemma two-turn reference test passes under
+`/tmp/fella-context-followup-v1-kYpHAq`: source/metric identification without
+calculation, then “Do the calculation” computes 12 monthly results in the same
+conversation. That check establishes continuation behavior, not numerical accuracy.
+Initial native/WASM parity failed against a stale native binary and passed after
+rebuilding it. An attempted build used the nonexistent bin name `fella-engine`;
+the actual target is `fella`. Browser sandbox listen failures were infrastructure
+failures, then rerun outside the sandbox. No unrelated app suite was required.
+
+Final checks: 53 focused agent tests, 11 conversation-context tests, 15 saved-view
+editor tests, 9 table-default cases, revision-state checks, 28 native/WASM cases,
+10 browser contract cases and 6 JSON-source browser cases pass. Type checking
+reports zero errors/warnings; production build and all-target strict Rust Clippy
+with `eval` pass. A fresh Vite/Electron session restores the sample folder and
+opens its seeded Report with three visible nonzero chart canvases and no page,
+renderer, Vite or no-workspace errors. This is Linux evidence, not a claim of a
+Windows/macOS test run.
+
+One additional real-Electron chat edit probe failed its unscoped confirmation
+locator: both the sidebar preview and the actual chat contained “Updated the
+saved view.” Its failure is retained at
+`/tmp/fella-chat-json-edit-v1-CvY8ng/report.json`, without another grader change.
+Distinct read-only inspection of the persisted conversation establishes that
+the edited JSON revision was saved, West remained selected, the view selection
+became table and the canonical analytical run bytes stayed unchanged. This does
+not turn that failed browser probe into a passing end-to-end score. Its initial
+run-count baseline also preceded automatic sample Report seeding; that setup
+limitation remains recorded rather than silently excluding the seed from its
+frozen assertion.

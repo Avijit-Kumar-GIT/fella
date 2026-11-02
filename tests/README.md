@@ -9,6 +9,7 @@ Test code and test-only fixtures live here, grouped by the way they run.
 | [`unit/javascript/`](./unit/javascript/) | Deterministic JavaScript and renderer contract checks |
 | [`unit/python/`](./unit/python/) | Tests for benchmark reporting utilities in `bench/` |
 | [`evals/`](./evals/) | Provider-backed analysis runners and model-facing evaluation entry points |
+| [`model/`](./model/) | Frozen full sample-workspace model tasks, criteria and native-agent evaluation |
 | [`scripts/`](./scripts/) | Repository checks used by contributors and CI |
 
 Rust unit tests that need private implementation details stay beside their
