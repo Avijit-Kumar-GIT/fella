@@ -2014,6 +2014,11 @@
                     "minimum": 0,
                     "maximum": 1600
                   },
+                  "cornerRadiusEnd": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1600
+                  },
                   "cornerRadiusTopLeft": {
                     "type": "number",
                     "minimum": 0,
@@ -2295,6 +2300,11 @@
                 "type": "boolean"
               },
               "cornerRadius": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1600
+              },
+              "cornerRadiusEnd": {
                 "type": "number",
                 "minimum": 0,
                 "maximum": 1600
@@ -9061,6 +9071,11 @@
                   "minimum": 0,
                   "maximum": 1600
                 },
+                "cornerRadiusEnd": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1600
+                },
                 "cornerRadiusTopLeft": {
                   "type": "number",
                   "minimum": 0,
@@ -9342,6 +9357,11 @@
               "type": "boolean"
             },
             "cornerRadius": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1600
+            },
+            "cornerRadiusEnd": {
               "type": "number",
               "minimum": 0,
               "maximum": 1600
@@ -12624,5 +12644,5 @@
     "Choose an answer-specific visual presentation from the question, verified answer, and supplied result shape. The model chooses the composition: concise prose, exact metrics, tables, charts, comparisons, or a useful combination. Do not repeat one layout for every question. Do not use a table merely because analysis returned rows. Use a visualization when it makes a trend, ranking, distribution, relationship, or comparison easier to understand; a table is best for exact records, lookups, and detail. Keep the answer readable, responsive, and free of redundant decoration.\n\nChoose chart forms by the analytical task, not by a default template: when the user asks for a trend or change across three or more ordered time periods and the result has a numeric measure, make a chart the primary view unless that would mislead; line charts make observed values easy to compare, while area charts emphasize continuous volume or accumulated magnitude. Bars compare categories or rank values (use horizontal bars for long labels); pie or donut charts show a small, meaningful part-to-whole breakdown, not time trends or long rankings; points show relationships or distributions. Group, stack, facet, or layer only when it clarifies a real comparison and the scales remain interpretable. Other safe Vega-Lite compositions are welcome when they better fit the result. Use a tooltip for useful exact values, a legend only when it helps decode multiple series, and axis titles or captions for units and scope. Keep labels readable and avoid unnecessary precision. Do not imitate unsupported chart forms with custom executable expressions.\n\nUse Fella's registered components and design. Prefer a clear reading order, consistent spacing and type hierarchy, restrained surfaces, accessible labels, the Fella chart-color palette, and responsive layouts. Avoid cramped equal-weight cards, horizontal overflow, decorative controls, and repeated content. Keep caveats near affected values. Never imply completeness when a supplied result is incomplete."
   ],
   "implementationHash": "7847fd609a05119c20e067a3958a5061c8ce9932da93aff901dc9633ae5c2b56",
-  "hash": "d2765ef87106a7dd03c08039f9abed951f53512b679581bc1d8bc599510db1b3"
+  "hash": "66994f3f64ee12395565693c2dbd57e17528ea59c280ab95be1a0901d5c8d7d4"
 }

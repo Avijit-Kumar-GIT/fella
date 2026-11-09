@@ -135,7 +135,7 @@ const markStyle = {
 	orient: z.enum(['horizontal', 'vertical']).optional(),
 	interpolate: z.enum(['linear', 'linear-closed', 'step', 'step-before', 'step-after', 'basis', 'basis-open', 'basis-closed', 'cardinal', 'cardinal-open', 'cardinal-closed', 'bundle', 'monotone']).optional(),
 	tension: fraction.optional(), clip: z.boolean().optional(), filled: z.boolean().optional(),
-	cornerRadius: pixels.optional(), cornerRadiusTopLeft: pixels.optional(), cornerRadiusTopRight: pixels.optional(),
+	cornerRadius: pixels.optional(), cornerRadiusEnd: pixels.optional(), cornerRadiusTopLeft: pixels.optional(), cornerRadiusTopRight: pixels.optional(),
 	cornerRadiusBottomLeft: pixels.optional(), cornerRadiusBottomRight: pixels.optional(), thickness: pixels.optional(),
 	binSpacing: pixels.optional(), continuousBandSize: pixels.optional(), discreteBandSize: pixels.optional(),
 	strokeCap: z.enum(['butt', 'round', 'square']).optional(), strokeJoin: z.enum(['miter', 'round', 'bevel']).optional(),
